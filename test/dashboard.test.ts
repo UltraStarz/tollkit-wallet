@@ -1,0 +1,75 @@
+/** Dashboard server: access control, state, approvals end-to-end, password-gated changes. Local only; fake quotes. */
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { request } from "node:http";
+import { createKeystore } from "../src/keystore.js";
+import { TollkitWallet } from "../src/wallet.js";
+import { startDashboard } from "../src/dashboard.js";
+import { dashboardOpen, pending } from "../src/approvals.js";
+import { ALLOWANCE_HOLDER } from "../src/chains.js";
+
+let pass = 0, fail = 0;
+const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
+const PW = "correct horse battery";
+const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", WETH = "0x4200000000000000000000000000000000000006";
+const dir = mkdtempSync(path.join(os.tmpdir(), "twd-"));
+await createKeystore(PW, { dir, scrypt: { N: 1 << 10, r: 8, p: 1 } });
+const quotes = (async (u: string) => { const url = new URL(u); const sell = url.searchParams.get("sellAmount")!;
+  return Response.json({ sellAmount: sell, buyAmount: "1", minBuyAmount: "1", fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: "0x1", value: "0" } }); }) as unknown as typeof fetch;
+const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.example", execute: async () => "0xswap" });
+(w.sanctions as any).isSanctioned = async () => false; // the fake fetch only serves quotes
+const d = await startDashboard(w, PW, { port: 17420, watch: false });
+const tok = new URL(d.url).searchParams.get("t")!;
+
+function raw(p: string, o: { method?: string; host?: string; token?: string | null; body?: unknown; origin?: string } = {}): Promise<{ status: number; body: string }> {
+  return new Promise((res, rej) => {
+    const headers: Record<string, string> = { host: o.host ?? `127.0.0.1:${d.port}`, "content-type": "application/json" };
+    if (o.token !== null) headers["x-tw-token"] = o.token ?? tok;
+    if (o.origin) headers.origin = o.origin;
+    const r = request({ host: "127.0.0.1", port: d.port, path: p, method: o.method ?? "GET", headers }, (s) => { let b = ""; s.on("data", (c) => (b += c)); s.on("end", () => res({ status: s.statusCode!, body: b })); });
+    r.on("error", rej); if (o.body) r.write(JSON.stringify(o.body)); r.end();
+  });
+}
+const j = async (p: string, o?: any) => { const r = await raw(p, o); return { status: r.status, ...JSON.parse(r.body || "{}") }; };
+
+check((await raw(`/?t=${tok}`)).body.includes("<title>Tollkit Wallet</title>"), "page served with the link's token");
+check((await raw("/?t=wrong")).status === 401, "page refused without the token");
+check((await raw("/api/state", { token: null })).status === 401, "API refused without the token");
+check((await raw("/api/state", { host: "evil.example:17420" })).status === 403, "other Host header refused (DNS rebinding)");
+check((await raw("/api/approve", { method: "POST", origin: "https://evil.example", body: {} })).status === 403, "cross-site POST refused");
+const st = await j("/api/state");
+check(st.status === 200 && st.addresses.evm && Array.isArray(st.pending) && st.approvals === "dashboard", "state: addresses, pending list, dashboard counts as an approval channel", st.approvals);
+check(dashboardOpen(dir), "heartbeat written while open");
+
+// A $30 trade (over the $25 line) waits for the dashboard.
+const trade = w.swap({ chain: "base", sell_token: USDC, buy_token: WETH, sell_amount: "30000000", slippage_bps: 50 });
+let p: any[] = []; for (let i = 0; i < 40 && !p.length; i++) { await new Promise((r) => setTimeout(r, 100)); p = pending(dir); }
+check(p.length === 1 && /Swap \$30\.00/.test(p[0].text), "trade shows up as pending in the dashboard", p);
+const seen = await j("/api/state");
+check(seen.pending.length === 1, "state lists it");
+check((await j("/api/approve", { method: "POST", body: { id: "nothex", decision: "approved" } })).status === 409, "unknown id rejected");
+check((await j("/api/approve", { method: "POST", body: { id: p[0].id, decision: "approved" } })).ok === true, "approve from the dashboard");
+const tr = await trade;
+check(tr.ok && tr.tx === "0xswap", "the trade went through after approval", tr.refused);
+check((await j("/api/approve", { method: "POST", body: { id: p[0].id, decision: "denied" } })).status === 409, "can't answer twice");
+
+const t2 = w.swap({ chain: "base", sell_token: USDC, buy_token: WETH, sell_amount: "30000000", slippage_bps: 50 });
+p = []; for (let i = 0; i < 40 && !p.length; i++) { await new Promise((r) => setTimeout(r, 100)); p = pending(dir); }
+await j("/api/approve", { method: "POST", body: { id: p[0].id, decision: "denied" } });
+check((await t2).refused?.code === "denied", "deny from the dashboard stops the trade");
+
+// Password-gated changes
+check((await j("/api/policy", { method: "POST", body: { password: "nope", policy: { per_trade_usd: 999 } } })).status === 403, "limits: wrong password refused");
+const pol = await j("/api/policy", { method: "POST", body: { password: PW, policy: { per_trade_usd: 75 } } });
+check(pol.policy?.per_trade_usd === 75 && w.policy.per_trade_usd === 75, "limits: saved with the password", pol);
+const sneaky = await j("/api/policy", { method: "POST", body: { password: PW, policy: { withdraw_addresses: [{ chain: "base", address: "0x" + "9".repeat(40) }] } } });
+check(sneaky.policy?.withdraw_addresses.length === 0, "limits form can't add withdrawal addresses");
+check((await j("/api/policy", { method: "POST", body: { password: PW, policy: { per_trade_usd: -1 } } })).status === 400, "bad values refused");
+const ad = await j("/api/addresses", { method: "POST", body: { password: PW, chain: "base", address: "0x2222222222222222222222222222222222222222", label: "cb" } });
+check(ad.withdraw_addresses?.length === 1, "address saved from the dashboard");
+const csv = await raw(`/api/receipts.csv?t=${tok}`, { token: null });
+check(csv.status === 200 && csv.body.includes("0xswap"), "CSV export");
+await d.close();
+console.log(`\ndashboard: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

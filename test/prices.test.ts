@@ -1,0 +1,20 @@
+/** Price feed: 24h change from Coinbase stats, USDC at $1, WETH = ETH, keeps last good price on errors. Fake fetch. */
+import { PriceFeed } from "../src/prices.js";
+let pass = 0, fail = 0;
+const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
+let down = false; const seen: string[] = [];
+const f = (async (u: string) => { seen.push(u); if (down) throw new Error("offline");
+  const id = /products\/([A-Z]+-USD)\/stats/.exec(u)![1]!;
+  const d: Record<string, any> = { "ETH-USD": { open: "2549.68", last: "2529.42" }, "SOL-USD": { open: "111.61", last: "108.33" }, "USDT-USD": { open: "0.99896", last: "0.9987" } };
+  return Response.json(d[id]); }) as unknown as typeof fetch;
+const p = new PriceFeed({ fetch: f });
+await p.refresh();
+const s = p.snapshot();
+check(s.prices.ETH!.usd === 2529.42 && Math.abs(s.prices.ETH!.change_24h! - (2529.42 - 2549.68) / 2549.68) < 1e-12, "ETH price and 24h change", s.prices.ETH);
+check(s.prices.WETH!.usd === 2529.42, "WETH priced as ETH");
+check(s.prices.USDC!.usd === 1 && s.prices.SOL!.usd === 108.33 && s.prices.USDT!.usd === 0.9987, "USDC $1, SOL and USDT from Coinbase");
+check(seen.every((u) => u.startsWith("https://api.exchange.coinbase.com/products/") && u.endsWith("/stats")), "only public product stats are requested");
+down = true; await p.refresh();
+check(p.snapshot().prices.ETH!.usd === 2529.42, "offline: keeps the last good price");
+console.log(`\nprices: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

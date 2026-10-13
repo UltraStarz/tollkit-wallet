@@ -1,0 +1,93 @@
+{
+  "name": "@tollkit/wallet",
+  "version": "0.1.0",
+  "description": "Non-custodial wallet for AI trading agents: swaps on Base, Ethereum and Solana, x402 and MPP payments, budgets that hold, Telegram approvals, receipts.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Tollkit LLC <hello@tollkit.dev>",
+  "homepage": "https://tollkit.dev",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && tsx test/run.ts && tsx test/pay.test.ts && tsx test/wallet.test.ts && tsx test/send.test.ts && tsx test/dashboard.test.ts && tsx test/plugins.test.ts && tsx test/watch.test.ts && tsx test/prices.test.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@solana/kit": "^6.10.0",
+    "@solana/mpp": "^0.7.0",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.99.0",
+    "@x402/core": "2.28.0",
+    "@x402/evm": "2.28.0",
+    "@x402/fetch": "2.28.0",
+    "@x402/svm": "2.28.0",
+    "ethers": "^6.17.0",
+    "mppx": "^0.13.4",
+    "viem": "^2.57.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@coinbase/agentkit": "0.10.4",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./agentkit": {
+      "types": "./dist/agentkit.d.ts",
+      "default": "./dist/agentkit.js"
+    },
+    "./elizaos": {
+      "types": "./dist/elizaos.d.ts",
+      "default": "./dist/elizaos.js"
+    }
+  },
+  "bin": {
+    "tollkit-wallet": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "peerDependencies": {
+    "@coinbase/agentkit": ">=0.10.4 <0.11"
+  },
+  "peerDependenciesMeta": {
+    "@coinbase/agentkit": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UltraStarz/tollkit-wallet.git"
+  },
+  "bugs": {
+    "url": "https://github.com/UltraStarz/tollkit-wallet/issues"
+  },
+  "keywords": [
+    "wallet",
+    "ai-agents",
+    "x402",
+    "mpp",
+    "agentkit",
+    "elizaos",
+    "mcp",
+    "base",
+    "solana",
+    "ethereum",
+    "swap",
+    "non-custodial"
+  ]
+}
