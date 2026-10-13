@@ -1,5 +1,5 @@
 {
-  "name": "@tollkit/wallet",
+  "name": "tollkit-wallet",
   "version": "0.1.0",
   "description": "Non-custodial wallet for AI trading agents: swaps on Base, Ethereum and Solana, x402 and MPP payments, budgets that hold, Telegram approvals, receipts.",
   "type": "module",

@@ -1,7 +1,7 @@
 /**
  * ElizaOS plugin (elizaOS 1.x). No dependency on @elizaos/core.
  *
- *   import { tollkitWalletPlugin } from "@tollkit/wallet/elizaos";
+ *   import { tollkitWalletPlugin } from "tollkit-wallet/elizaos";
  *   // character / project: plugins: [tollkitWalletPlugin]
  *   // settings or env: TOLLKIT_WALLET_PASSWORD (or TOLLKIT_WALLET_PASSWORD_FILE), optional TOLLKIT_WALLET_HOME
  *

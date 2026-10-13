@@ -2,8 +2,8 @@
  * Coinbase AgentKit action provider.
  *
  *   import { AgentKit } from "@coinbase/agentkit";
- *   import { TollkitWallet } from "@tollkit/wallet";
- *   import { tollkitWalletActionProvider } from "@tollkit/wallet/agentkit";
+ *   import { TollkitWallet } from "tollkit-wallet";
+ *   import { tollkitWalletActionProvider } from "tollkit-wallet/agentkit";
  *   const w = await TollkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
  *   const agentkit = await AgentKit.from({ walletProvider, actionProviders: [tollkitWalletActionProvider(w)] });
  *

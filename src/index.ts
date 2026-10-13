@@ -1,4 +1,4 @@
-/** @tollkit/wallet: use the wallet from code (SDK). See README for the CLI and MCP server. */
+/** tollkit-wallet: use the wallet from code (SDK). See README for the CLI and MCP server. */
 export { TollkitWallet, loadTelegram, saveTelegram, balanceWarning, type WalletOptions, type SwapResult } from "./wallet.js";
 export { createKeystore, addresses } from "./keystore.js";
 export { DEFAULT_POLICY, PolicySchema, type Policy } from "./policy.js";

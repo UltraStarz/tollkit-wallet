@@ -23,7 +23,7 @@ Swaps cost a flat 0.5%, shown before every trade. On some Base and Ethereum pair
 ## Setup
 
 ```
-npm install -g @tollkit/wallet
+npm install -g tollkit-wallet
 tollkit-wallet init                 # choose a password; prints your Base/Ethereum and Solana addresses
 tollkit-wallet budget               # see limits; change with e.g. budget per_trade_usd=100
 tollkit-wallet telegram <bot-token> <chat-id>   # optional: approvals in Telegram
@@ -62,8 +62,8 @@ Tools: `wallet_status`, `wallet_balances`, `swap_quote`, `swap`, `pay_fetch`, `s
 
 ```ts
 import { AgentKit } from "@coinbase/agentkit";
-import { TollkitWallet } from "@tollkit/wallet";
-import { tollkitWalletActionProvider } from "@tollkit/wallet/agentkit";
+import { TollkitWallet } from "tollkit-wallet";
+import { tollkitWalletActionProvider } from "tollkit-wallet/agentkit";
 
 const wallet = await TollkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
 const agentkit = await AgentKit.from({ walletProvider, actionProviders: [tollkitWalletActionProvider(wallet)] });
@@ -74,7 +74,7 @@ This adds `tollkit_swap`, `tollkit_swap_quote`, `tollkit_pay_fetch`, `tollkit_wa
 ## Use with ElizaOS
 
 ```ts
-import { tollkitWalletPlugin } from "@tollkit/wallet/elizaos";
+import { tollkitWalletPlugin } from "tollkit-wallet/elizaos";
 // in your character or project: plugins: [tollkitWalletPlugin]
 ```
 
@@ -83,7 +83,7 @@ Set `TOLLKIT_WALLET_PASSWORD` (or `TOLLKIT_WALLET_PASSWORD_FILE`) in the agent's
 ## Use from code
 
 ```ts
-import { TollkitWallet } from "@tollkit/wallet";
+import { TollkitWallet } from "tollkit-wallet";
 const w = await TollkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
 const r = await w.pay("https://api.example.com/paid-endpoint");
 ```
