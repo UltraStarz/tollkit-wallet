@@ -17,7 +17,7 @@ header{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:
 .cp{margin-left:auto;flex:none;border:0;background:var(--surf2);color:var(--tx);border-radius:9px;padding:6px 10px;font:600 12px inherit;cursor:pointer;display:flex;align-items:center;gap:5px}
 .cp svg{width:14px;height:14px}.cp.done{color:var(--ok)}header .pill{margin-left:auto;white-space:nowrap;font-size:11px;padding:4px 9px;border-radius:99px;background:var(--surf);color:var(--mut)}
 main{flex:1;padding:16px;overflow:auto}
-nav{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line);background:var(--card)}
+nav{display:grid;grid-template-columns:repeat(6,1fr);border-top:1px solid var(--line);background:var(--card)}
 nav button{background:none;border:0;color:var(--mut);padding:10px 0 12px;font:inherit;font-size:11px;cursor:pointer;position:relative}
 nav button svg{display:block;margin:0 auto 3px;width:20px;height:20px}
 nav button.on{color:var(--acc)}
@@ -94,7 +94,7 @@ nav{background:transparent}
 .m .b:not(.g):not(.no):hover{box-shadow:0 10px 30px -10px rgba(var(--glow),.7)}
 .m .b.ok:hover{box-shadow:0 10px 30px -10px rgba(60,207,145,.7)}
 nav{position:relative}
-.ind{position:absolute;top:-1px;left:0;width:20%;height:2px;display:flex;justify-content:center;pointer-events:none;transition:transform .55s var(--ease)}
+.ind{position:absolute;top:-1px;left:0;width:16.6667%;height:2px;display:flex;justify-content:center;pointer-events:none;transition:transform .55s var(--ease)}
 .ind::before{content:"";width:34px;height:2px;border-radius:2px;background:var(--acc);box-shadow:0 0 14px 1px rgba(var(--glow),.85)}
 nav button svg{transition:transform .45s var(--ease)}nav button.on svg{transform:translateY(-2px) scale(1.1)}
 nav button:not(.on):hover{color:var(--tx)}
@@ -159,6 +159,25 @@ var NAMES={ETH:"Ethereum",WETH:"Wrapped Ether",USDC:"USD Coin",USDT:"Tether",SOL
 function priceOf(sym){var p=S&&S.prices&&S.prices.prices;return p&&p[String(sym).toUpperCase()]||null}
 function fmtUsd(n){if(n>0&&n<0.01)return "<$0.01";return "$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
 function fmtAmt(a){if(!a)return "0";return a.toLocaleString(undefined,a<1?{minimumFractionDigits:2,maximumFractionDigits:7}:{maximumFractionDigits:4})}
+var PV=null,TEMPL=["Buy $25 of SOL every Monday","Buy $50 of ETH if it drops 5%","Sell half my ETH if it rises 10% and sell all ETH if it falls 8%","Trailing stop 10% on SOL"];
+function stLabel(s){return {proposed:"Waiting for you",active:"On",paused:"Paused",done:"Done",cancelled:"Cancelled",expired:"Expired",error:"Stopped"}[s]||s}
+function away(r){var p=r.state&&r.state.last_price;if(!p)return "";var t=r.kind==="trailing_stop"&&r.state.high?r.state.high*(1-r.trail_pct/100):r.trigger_price;if(!t)return " · now "+fmtUsd(p);var d=(p-t)/p*100;return " · now "+fmtUsd(p)+", trigger "+fmtUsd(t)+" ("+Math.abs(d).toFixed(1)+"% "+(d>0?"above":"below")+")"}
+function ruleCard(r){var fills=(r.state&&r.state.fills||[]).filter(function(f){return f.ok});var last=fills[fills.length-1];var btn=function(id,st,lbl,cls){return '<button class="b '+cls+'" style="padding:7px 11px;font-size:12px" onclick="setRule(\''+id+'\',\''+st+'\')">'+lbl+'</button>'};
+var acts=r.status==="proposed"?btn(r.id,"active","Turn on","ok")+btn(r.id,"cancelled","Dismiss","no"):r.status==="active"?btn(r.id,"paused","Pause","g")+btn(r.id,"cancelled","Cancel","no"):(r.status==="paused"||r.status==="error")?btn(r.id,"active","Turn on","ok")+btn(r.id,"cancelled","Cancel","no"):"";
+return '<div class="row rule-'+r.status+'" style="display:block"><div style="display:flex;gap:10px;align-items:center">'+tokIcon(r.token,r.chain)+'<div style="min-width:0"><div>'+esc(r.description)+'</div><div class="sm mut">'+esc(stLabel(r.status))+(r.created_by==="agent"?" · from agent":"")+(r.group&&(S.rules||[]).filter(function(x){return x.group===r.group&&x.id!==r.id}).length?" · linked: when one fills, the other cancels":"")+(r.status==="active"?esc(away(r)):"")+(fills.length?" · "+fills.length+" fill"+(fills.length>1?"s":""):"")+(last&&last.tx&&EXP[r.chain]&&!last.paper?' · <a target="_blank" rel="noopener" href="'+EXP[r.chain]+esc(last.tx)+'">last tx</a>':"")+'</div>'+(r.state&&r.state.last_error&&r.status!=="done"?'<div class="sm warn">'+esc(r.state.last_error)+'</div>':"")+'</div></div>'+(acts?'<div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end">'+acts+'</div>':"")+'</div>'}
+function autopilot(){var R=S.rules||[],A=S.autopilot||{};var st=A.here?'<span class="ok">● Running here</span> · checks prices every 15s':A.running?'<span class="ok">● Running</span> in another window ('+esc(A.mode||"live")+')':'<span class="warn">● Not running</span>';
+var prop=R.filter(function(r){return r.status==="proposed"}),act=R.filter(function(r){return r.status==="active"||r.status==="paused"||r.status==="error"}),hist=R.filter(function(r){return ["done","cancelled","expired"].indexOf(r.status)>=0}).slice(0,15);
+var pv=PV?'<div class="ap" style="margin-top:10px"><div class="sm mut" style="margin-bottom:6px">Preview: nothing runs until you turn it on</div>'+(PV.rules.length?PV.rules.map(function(r){return '<div style="margin:4px 0">• '+esc(r.description)+(r.problem?' <span class="bad sm">('+esc(r.problem)+')</span>':"")+'</div>'}).join(""):'<div class="bad">No rules understood.</div>')+(PV.unparsed.length?'<div class="sm warn" style="margin-top:6px">Not understood: '+esc(PV.unparsed.join(" · "))+'</div>':"")+'<div class="btns"><button class="b g" onclick="PV=null;render()">Discard</button><button class="b ok"'+(PV.rules.length&&!PV.rules.some(function(r){return r.problem})?"":" disabled")+' onclick="addRules()">Turn on</button></div></div>':"";
+return '<h3>Autopilot</h3><div class="sm">'+st+'</div><div class="sm mut" style="margin-top:4px">Every fill follows your limits and approvals and is charged the same 0.5% fee as any swap. '+(A.agent_rules==="auto"?"Agents can turn rules on without asking you.":"Rules an agent suggests wait here for you.")+'</div>'+
+'<h3>New strategy</h3><textarea id="stxt" rows="3" placeholder="e.g. Buy $25 of SOL every Monday. Sell half my ETH if it rises 10% and all if it falls 8%." style="width:100%;background:var(--surf);border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font:inherit;resize:vertical"></textarea>'+
+'<div class="toggles" style="margin-top:6px">'+TEMPL.map(function(t,i){return '<button class="chip" style="border:0;cursor:pointer" onclick="document.getElementById(\'stxt\').value=TEMPL['+i+']">'+esc(t)+'</button>'}).join("")+'</div>'+
+'<div style="margin-top:10px"><button class="b" onclick="preview()">Preview</button></div>'+pv+msg()+
+(prop.length?'<h3>Waiting for you</h3>'+prop.map(ruleCard).join(""):"")+
+'<h3>Rules</h3>'+(act.length?act.map(ruleCard).join(""):'<div class="mut sm">No rules on yet.</div>')+
+(hist.length?'<h3>History</h3>'+hist.map(ruleCard).join(""):"")}
+function preview(){var t=document.getElementById("stxt").value;api("/rules/preview",{text:t}).then(function(r){PV=r;flash=null;render()}).catch(function(e){flash=[0,e.message];render()})}
+function addRules(){var rules=PV.rules.map(function(r){var o={};for(var k in r)if(k!=="description"&&k!=="problem")o[k]=r[k];return o});api("/rules",{rules:rules}).then(function(){PV=null;flash=[1,"Turned on. The autopilot is watching prices."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
+function setRule(id,st){api("/rules/status",{id:id,status:st}).then(function(){flash=[1,st==="active"?"Turned on.":st==="paused"?"Paused.":"Cancelled."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
 function liveFor(tx){if(!tx||!S||!S.live)return null;for(var i=0;i<S.live.events.length;i++)if(S.live.events[i].tx===tx)return S.live.events[i];return null}
 function lag(c){var h=S&&S.live&&S.live.heads&&S.live.heads[c];return h&&h.head&&h.finalized?Math.max(1,h.head-h.finalized):null}
 function confText(e){if(e.status==="failed")return "Failed";if(e.status==="final")return e.chain==="solana"?"Finalized":"Final";if(e.status==="pending")return "Waiting to confirm";if(e.chain==="solana")return "Confirmed";return "Confirmed · "+(e.confirmations||0).toLocaleString()+" block"+(e.confirmations===1?"":"s")}
@@ -179,16 +198,17 @@ if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeT
 function fallback(a){var t=document.createElement("textarea");t.value=a;t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();try{document.execCommand("copy")}catch(e){}t.remove()}
 function usd(n){n=Number(n)||0;return "$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:n<1&&n>0?4:2})}
 function ago(ts){var s=(Date.now()-Date.parse(ts))/1000;if(s<60)return "just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";return new Date(ts).toLocaleDateString()}
-var ICONS={home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',activity:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',approvals:'<path d="M5 13l4 4L19 7"/>',limits:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',withdraw:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>'};
-var TABS=["home","activity","approvals","limits","withdraw"],lastBadge=-1;
+var ICONS={autopilot:'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',activity:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',approvals:'<path d="M5 13l4 4L19 7"/>',limits:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',withdraw:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>'};
+var TABS=["home","activity","autopilot","approvals","limits","withdraw"],lastBadge=-1,lastAuto=-1;
 function nav(){var el=document.getElementById("nav");if(!el.querySelector("button")){el.innerHTML='<div class="ind" id="ind"></div>'+TABS.map(function(k){return '<button data-k="'+k+'" onclick="go(\''+k+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+ICONS[k]+'</svg>'+k[0].toUpperCase()+k.slice(1)+'</button>'}).join("")}
 el.querySelectorAll("button").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-k")===tab)});
 document.getElementById("ind").style.transform="translateX("+(TABS.indexOf(tab)*100)+"%)";
+var na=S&&S.rules?S.rules.filter(function(r){return r.status==="proposed"}).length:0;if(na!==lastAuto){lastAuto=na;var aa=el.querySelector('[data-k="autopilot"]'),o2=aa.querySelector(".badge");if(o2)o2.remove();if(na){var s2=document.createElement("span");s2.className="badge";s2.textContent=na;aa.appendChild(s2)}}
 var n=S?S.pending.length:0;if(n!==lastBadge){lastBadge=n;var ab=el.querySelector('[data-k="approvals"]'),old=ab.querySelector(".badge");if(old)old.remove();if(n){var sp=document.createElement("span");sp.className="badge";sp.textContent=n;ab.appendChild(sp)}}}
 function go(k){if(k===tab&&!flash)return;tab=k;flash=null;render(true)}
 function msg(){return flash?'<div class="msg '+(flash[0]?"okk":"err")+'">'+esc(flash[1])+'</div>':""}
 function render(enter){nav();if(!S)return;var a=S.approvals||"none";var ap=document.getElementById("appr");ap.classList.toggle("live",a!=="none"||!!S.live);ap.textContent=(S.live?"Live":"")+(S.live?" · ":"")+(a==="none"?"Approvals off":"Approvals on");ap.title=a==="none"?"Set up Telegram or keep this page open":"Answered via "+a.replace("+"," and ");var m=document.getElementById("main");
-if(tab==="home")m.innerHTML=home();else if(tab==="activity")m.innerHTML=activity();else if(tab==="approvals")m.innerHTML=approvals();else if(tab==="limits")m.innerHTML=limits();else{m.innerHTML=withdraw();tokOpts()}
+if(tab==="home")m.innerHTML=home();else if(tab==="activity")m.innerHTML=activity();else if(tab==="approvals")m.innerHTML=approvals();else if(tab==="limits")m.innerHTML=limits();else if(tab==="autopilot")m.innerHTML=autopilot();else{m.innerHTML=withdraw();tokOpts()}
 after(m,enter)}
 var shown=null;
 function after(m,enter){m.querySelectorAll(".row,.ap").forEach(function(r){r.classList.add("spot")});
@@ -218,8 +238,9 @@ var F=[["per_trade_usd","Per trade ($)"],["daily_trades_usd","Trades per day ($)
 function limits(){var p=S.policy;return '<h3>Limits</h3><div class="mut sm">The agent can\'t change these. Saving needs your password.</div><div class="grid2">'+F.map(function(f){return '<div><label>'+f[1]+'</label><input id="f_'+f[0]+'" type="number" min="0" step="any" value="'+p[f[0]]+'"></div>'}).join("")+'</div>'+
 '<label>Chains</label><div class="toggles">'+["base","solana","ethereum"].map(function(c){return '<label><input type="checkbox" id="c_'+c+'"'+(p.chains.indexOf(c)>=0?" checked":"")+'> '+c+'</label>'}).join("")+'</div>'+
 '<div class="toggles" style="margin-top:8px"><label><input type="checkbox" id="f_bsw"'+(p.block_seller_warnings?" checked":"")+'> Block sellers that fail the seller check</label></div>'+
+'<div class="toggles" style="margin-top:8px"><label><input type="checkbox" id="f_ar"'+(p.agent_rules==="auto"?" checked":"")+'> Let agents turn on autopilot rules without asking me</label></div>'+
 '<label>Password</label><input id="pw1" type="password" autocomplete="current-password"><div style="margin-top:12px"><button class="b" onclick="saveLim()">Save limits</button></div>'+msg()}
-function saveLim(){var p={};F.forEach(function(f){p[f[0]]=Number(document.getElementById("f_"+f[0]).value)});p.max_slippage_bps=Math.round(p.max_slippage_bps);p.chains=["base","solana","ethereum"].filter(function(c){return document.getElementById("c_"+c).checked});p.block_seller_warnings=document.getElementById("f_bsw").checked;
+function saveLim(){var p={};F.forEach(function(f){p[f[0]]=Number(document.getElementById("f_"+f[0]).value)});p.max_slippage_bps=Math.round(p.max_slippage_bps);p.chains=["base","solana","ethereum"].filter(function(c){return document.getElementById("c_"+c).checked});p.block_seller_warnings=document.getElementById("f_bsw").checked;p.agent_rules=document.getElementById("f_ar").checked?"auto":"propose";
 api("/policy",{password:document.getElementById("pw1").value,policy:p}).then(function(){flash=[1,"Saved."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
 var conf=null;
 function withdraw(){var W=S.policy.withdraw_addresses;var saved=W.length?W.map(function(a){return '<div class="row">'+chainIcon(a.chain)+'<div style="min-width:0"><div>'+esc(a.label||a.chain)+'</div><div class="addr mut" title="'+esc(a.address)+'">'+esc(short(a.address))+'</div></div><div class="r" style="display:flex;gap:6px">'+cpBtn(a.address)+'<button class="b no" style="padding:6px 9px;font-size:12px" onclick="rmAddr(\''+a.chain+'\',\''+esc(a.address)+'\')">Remove</button></div></div>'}).join(""):'<div class="mut sm">None yet. Funds can only be withdrawn to an address saved here.</div>';
@@ -232,7 +253,7 @@ function addAddr(){api("/addresses",{password:document.getElementById("pw3").val
 function rmAddr(c,a){var pw=prompt("Password to remove this address:");if(!pw)return;api("/addresses",{password:pw,action:"remove",chain:c,address:a}).then(function(){flash=[1,"Removed."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
 function prepW(){var a=S.policy.withdraw_addresses[Number(document.getElementById("w_to").value)];conf={chain:a.chain,to:a.address,token:document.getElementById("w_tok").value,amount:document.getElementById("w_amt").value.trim(),pw:document.getElementById("pw2").value};if(!conf.amount||!conf.pw){flash=[0,"Enter an amount and your password."];conf=null}render();if(conf){var s=document.getElementById("w_to");s.value=String(S.policy.withdraw_addresses.indexOf(a));tokOpts();document.getElementById("w_tok").value=conf.token;document.getElementById("w_amt").value=conf.amount;document.getElementById("pw2").value=conf.pw}}
 function doW(){var c=conf;conf=null;flash=[1,"Sending…"];render();api("/withdraw",{password:c.pw,chain:c.chain,token:c.token,to:c.to,amount:c.amount}).then(function(r){flash=r.ok?[1,"Sent. Transaction "+r.tx]:[0,r.refused.reason];refresh();loadBal()}).catch(function(e){flash=[0,e.message];render()})}
-function busy(){var el=document.activeElement;return el&&(el.tagName==="INPUT"||el.tagName==="SELECT")||conf}
+function busy(){var el=document.activeElement;return el&&(el.tagName==="INPUT"||el.tagName==="SELECT"||el.tagName==="TEXTAREA")||conf}
 var lastS="";
 function refresh(){return api("/state").then(function(s){var j=JSON.stringify(s);var first=!S;S=s;if(j===lastS)return;lastS=j;notifyLive();if(!busy())render(first);else nav()}).catch(function(e){document.getElementById("main").innerHTML='<div class="empty bad">'+esc(e.message)+'<div class="sm mut">Is <code>tollkit-wallet ui</code> still running?</div></div>'})}
 function loadBal(){B=null;if(tab==="home")render();api("/balances").then(function(b){B=b;if(tab==="home"&&!busy())render()})}

@@ -13,6 +13,10 @@ import { PolicySchema, type Policy } from "./policy.js";
 import { requestApproval } from "./telegram.js";
 import { resolveToken, toAtomic } from "./tokens.js";
 import { serveStdio, VERSION } from "./mcp.js";
+import { describeRule, type Rule } from "./rules.js";
+import { parseStrategy } from "./parse.js";
+import { PriceFeed } from "./prices.js";
+import { Autopilot } from "./autopilot.js";
 import type { Chain } from "./chains.js";
 
 const out = (v: unknown) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
@@ -65,7 +69,7 @@ async function main(argv: string[]) {
         const [k, v] = kv.split("=");
         if (k === "withdraw_addresses") throw new Error("Use `tollkit-wallet addresses add|remove` for withdrawal addresses.");
         if (!k || v === undefined || !(k in next)) throw new Error(`Unknown setting "${kv}". Settings: ${Object.keys(next).join(", ")}`);
-        next[k] = k === "chains" ? v.split(",") : k === "block_seller_warnings" ? v === "true" : Number(v);
+        next[k] = k === "chains" ? v.split(",") : k === "block_seller_warnings" ? v === "true" : k === "agent_rules" ? v : Number(v);
       }
       const parsed = PolicySchema.safeParse(next);
       if (!parsed.success) throw new Error(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
@@ -127,6 +131,58 @@ async function main(argv: string[]) {
       const w = await open();
       if (args.includes("--csv")) process.stdout.write(w.receiptsCsv(since)); else out(w.receipts(since)); return;
     }
+    case "rules": {
+      const w = await open();
+      const rs = w.rules().list();
+      if (!rs.length) { out("No autopilot rules yet. Add one: tollkit-wallet rule add \"buy $25 of SOL every Monday\""); return; }
+      for (const r of rs) out(ruleLine(r));
+      const st = Autopilot.status(w.dir);
+      out(st.running ? `Autopilot is running (${st.mode}).` : "Autopilot is not running. Start it with `tollkit-wallet autopilot` or keep `tollkit-wallet ui` open.");
+      return;
+    }
+    case "rule": {
+      const [sub, ...rest] = args;
+      const w = await open();
+      if (sub === "add") {
+        const text = rest.join(" ");
+        if (!text) throw new Error('Usage: tollkit-wallet rule add "buy $25 of SOL every Monday; sell all ETH if it falls 8%"');
+        const feed = new PriceFeed(); await feed.refresh();
+        const pr = parseStrategy(text, (t) => feed.snapshot().prices[t.toUpperCase()]?.usd);
+        if (pr.unparsed.length) out(`Not understood (ignored): ${pr.unparsed.map((u) => `"${u}"`).join(", ")}`);
+        if (!pr.rules.length) throw new Error("No rules understood.");
+        out("These rules will be turned on:");
+        for (const r of pr.rules) out(`  • ${describeRule(r)}`);
+        if ((await ask("Turn them on? [y/N] ")).toLowerCase() !== "y") { out("Cancelled."); return; }
+        for (const r of pr.rules) out(ruleLine(await w.rules().add(r, "owner", false)));
+        return;
+      }
+      if ((sub === "on" || sub === "pause" || sub === "cancel") && rest[0]) {
+        out(ruleLine(await w.rules().setStatus(rest[0], sub === "on" ? "active" : sub === "pause" ? "paused" : "cancelled"))); return;
+      }
+      throw new Error('Usage: tollkit-wallet rule add "<plain English>" | rule on|pause|cancel <id>');
+    }
+    case "autopilot": {
+      const paper = args.includes("--paper");
+      const w = await open();
+      const feed = new PriceFeed(); feed.start();
+      const ap = new Autopilot(w.rules(), w.executor(paper ? "paper" : "live"), feed, { dir: w.dir, onEvent: (e) => out(`${new Date().toISOString()} ${e.type.toUpperCase()} ${describeRule(e.rule)}: ${e.detail}`) });
+      ap.start();
+      out(`Autopilot running${paper ? " in PAPER mode (pretend money)" : ""}. ${w.rules().list().filter((r) => r.status === "active").length} active rule(s). Ctrl-C to stop.`);
+      await new Promise<void>((r) => process.once("SIGINT", () => { ap.stop(); feed.stop(); r(); }));
+      return;
+    }
+    case "paper": {
+      const [sub, ...rest] = args;
+      const w = await open();
+      if (sub === "reset") { out(w.paper().reset(rest[0] ? Number(rest[0]) : undefined)); return; }
+      if (sub === "swap") {
+        const [chain, amount, sellS, buyS] = rest as [Chain, string, string, string];
+        if (!chain || !amount || !sellS || !buyS) throw new Error("Usage: tollkit-wallet paper swap <chain> <amount> <sell> <buy>");
+        const [sell, buy] = await Promise.all([resolveToken(chain, sellS), resolveToken(chain, buyS)]);
+        out(await w.paper().swap({ chain, sell_token: sell.address, buy_token: buy.address, sell_amount: toAtomic(amount, sell.decimals), slippage_bps: Math.min(50, w.policy.max_slippage_bps) })); return;
+      }
+      out(w.paper().summary()); return;
+    }
     case "mcp": await serveStdio(); return;
     case "ui": { const { serveDashboard } = await import("./dashboard.js"); await serveDashboard(await askPassword(), { port: Number(flag(args, "--port") ?? 7420) }); return; }
     case "version": case "--version": out(VERSION); return;
@@ -142,8 +198,18 @@ async function main(argv: string[]) {
   withdraw <chain> <amount> <token> <to>   send funds to a saved address
   receipts [--csv] [--since date]   trades and payments
   mcp                               run the MCP server for agents (stdio)
-  ui [--port 7420]                  open the dashboard`);
+  ui [--port 7420]                  open the dashboard (runs the autopilot too)
+  rules                             list autopilot rules
+  rule add "<plain English>"        e.g. "buy $25 of SOL every Monday; sell all ETH if it falls 8%"
+  rule on|pause|cancel <id>         turn a rule on (e.g. one an agent proposed), pause or cancel it
+  autopilot [--paper]               run the autopilot without the dashboard (e.g. on a server)
+  paper [reset <usd> | swap ...]    practice with pretend money at live prices`);
   }
+}
+
+function ruleLine(r: Rule): string {
+  const fills = r.state.fills.filter((f) => f.ok).length;
+  return `[${r.id}] ${r.status.toUpperCase()}${r.created_by === "agent" ? " (agent)" : ""}: ${describeRule(r)}${r.state.last_price ? ` · now $${r.state.last_price}` : ""}${fills ? ` · ${fills} fill(s)` : ""}${r.state.last_error ? ` · ${r.state.last_error}` : ""}`;
 }
 
 main(process.argv.slice(2)).catch((e) => { console.error(`Error: ${(e as Error).message}`); process.exit(1); });

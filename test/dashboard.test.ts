@@ -68,6 +68,18 @@ check(sneaky.policy?.withdraw_addresses.length === 0, "limits form can't add wit
 check((await j("/api/policy", { method: "POST", body: { password: PW, policy: { per_trade_usd: -1 } } })).status === 400, "bad values refused");
 const ad = await j("/api/addresses", { method: "POST", body: { password: PW, chain: "base", address: "0x2222222222222222222222222222222222222222", label: "cb" } });
 check(ad.withdraw_addresses?.length === 1, "address saved from the dashboard");
+// Autopilot rules through the dashboard
+const pv = await j("/api/rules/preview", { method: "POST", body: { text: "buy $25 of SOL every monday. make me rich" } });
+check(pv.rules?.[0]?.kind === "dca" && pv.rules[0].description === "Buy $25 of SOL every Monday on Solana" && pv.unparsed?.[0] === "make me rich", "rule preview: plain description + what wasn't understood", pv);
+const { description: _d, problem: _p, ...rule } = pv.rules[0];
+const add = await j("/api/rules", { method: "POST", body: { rules: [rule] } });
+check(add.rules?.[0]?.status === "active" && add.rules[0].created_by === "owner", "owner turns a rule on from the dashboard", add);
+const st2 = await j("/api/state");
+check(st2.rules?.length === 1 && st2.autopilot && st2.autopilot.agent_rules === "propose", "state lists rules and autopilot status", st2.autopilot);
+const pause = await j("/api/rules/status", { method: "POST", body: { id: add.rules[0].id, status: "paused" } });
+check(pause.rule?.status === "paused", "pause a rule");
+check((await j("/api/rules", { method: "POST", body: { rules: [{ kind: "stop_loss", chain: "base", token: "ETH" }] } })).status === 400, "incomplete rule refused");
+check((await raw("/api/rules", { method: "POST", token: null, body: { rules: [rule] } })).status === 401, "rules need the dashboard token");
 const csv = await raw(`/api/receipts.csv?t=${tok}`, { token: null });
 check(csv.status === 200 && csv.body.includes("0xswap"), "CSV export");
 await d.close();

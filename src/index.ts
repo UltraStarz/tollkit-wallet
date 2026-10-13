@@ -8,3 +8,8 @@ export type { PayResult, Offer } from "./pay.js";
 export type { SwapRequest, SwapQuote } from "./swap.js";
 export type { Entry as Receipt } from "./ledger.js";
 export type { Chain } from "./chains.js";
+export { Autopilot, liveBalance, type Executor, type AutopilotEvent } from "./autopilot.js";
+export { RuleStore, RuleInput, describeRule, ruleProblem, type Rule, type RuleKind } from "./rules.js";
+export { parseStrategy } from "./parse.js";
+export { PaperBook } from "./paper.js";
+export { PriceFeed } from "./prices.js";

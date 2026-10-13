@@ -23,7 +23,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
 {
   const p = tollkitWalletActionProvider(w);
   const acts = p.getActions({} as any);
-  check(acts.length === 7 && acts.every((a) => a.name.startsWith("tollkit_")), "AgentKit: 7 actions, tollkit_ prefix", acts.map((a) => a.name));
+  check(acts.length === 12 && acts.every((a) => a.name.startsWith("tollkit_")), "AgentKit: 12 actions, tollkit_ prefix", acts.map((a) => a.name));
   check(p.supportsNetwork({ protocolFamily: "evm", networkId: "base-mainnet" } as any), "AgentKit: works on any network");
   const swap = acts.find((a) => a.name === "tollkit_swap")!;
   const r = JSON.parse(await swap.invoke({ chain: "base", sell: "USDC", buy: "WETH", amount: "10" }));
@@ -33,6 +33,11 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
   const badArgs = JSON.parse(await swap.invoke({ chain: "polygon", sell: "USDC" } as any));
   check(badArgs.refused?.code === "bad_request", "AgentKit: bad arguments refused", badArgs);
   check(!acts.some((a) => /withdraw|budget|polic|address/.test(a.name)), "AgentKit: no tool can change limits or withdraw");
+  const prop = acts.find((a) => a.name === "tollkit_autopilot_propose")!;
+  const pr = JSON.parse(await prop.invoke({ rules: [{ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 10, trigger_price: 1000 }] }));
+  check(pr.ok && pr.rules[0].status === "proposed" && /Buy \$10 of ETH/.test(pr.rules[0].description), "AgentKit: an agent's rule waits for the owner", pr);
+  const bad = JSON.parse(await prop.invoke({ rules: [{ kind: "stop_loss", chain: "base", token: "ETH", trigger_price: 1000 }] }));
+  check(bad.refused?.code === "bad_rule", "AgentKit: incomplete rule refused", bad);
 }
 
 // --- ElizaOS
@@ -40,7 +45,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
   const replies: string[] = [];
   let modelReply = '```json\n{"chain":"base","sell":"USDC","buy":"WETH","amount":"5","slippage_bps":null}\n```';
   const rt = { getSetting: () => null, useModel: async (_t: string, _p: { prompt: string }) => modelReply };
-  check(tollkitWalletPlugin.actions!.length === 7 && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_SWAP"), "Eliza: 7 actions incl. TOLLKIT_SWAP");
+  check(tollkitWalletPlugin.actions!.length === 12 && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_SWAP") && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_AUTOPILOT_SET"), "Eliza: 12 actions incl. TOLLKIT_SWAP and TOLLKIT_AUTOPILOT_SET");
   const swap = tollkitWalletPlugin.actions!.find((a) => a.name === "TOLLKIT_SWAP")!;
   check(!(await swap.validate(rt as any, {})), "Eliza: not offered when no wallet is configured");
   useWallet(rt as any, w);
@@ -60,7 +65,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
 {
   const s: any = buildServer(w);
   const names = Object.keys(s._registeredTools ?? {});
-  check(names.length === 7 && names.includes("swap") && names.includes("pay_fetch"), "MCP: same 7 tools", names);
+  check(names.length === 12 && names.includes("swap") && names.includes("autopilot_propose"), "MCP: same 12 tools", names);
 }
 
 console.log(`\nplugins: ${pass} passed, ${fail} failed`);

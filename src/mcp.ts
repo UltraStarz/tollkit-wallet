@@ -12,7 +12,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { TollkitWallet } from "./wallet.js";
 import { ACTIONS } from "./actions.js";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 export function passwordFromEnv(): string {
   const file = process.env.TOLLKIT_WALLET_PASSWORD_FILE;
@@ -30,7 +30,9 @@ export function buildServer(w: TollkitWallet): McpServer {
     s.registerTool(a.name, {
       description: a.description,
       inputSchema: (a.schema as any).shape,
-      annotations: a.spends ? { destructiveHint: true, openWorldHint: true, idempotentHint: false } : { readOnlyHint: true, openWorldHint: a.name !== "wallet_status" && a.name !== "receipts" },
+      annotations: a.spends ? { destructiveHint: true, openWorldHint: true, idempotentHint: false }
+        : /^autopilot_(propose|cancel)$/.test(a.name) ? { readOnlyHint: false, destructiveHint: a.name === "autopilot_propose", openWorldHint: true }
+        : { readOnlyHint: true, openWorldHint: !["wallet_status", "receipts", "autopilot_rules", "paper_status"].includes(a.name) },
     }, async (args: any) => json(await (a.run as any)(w, args ?? {})));
   }
   return s;

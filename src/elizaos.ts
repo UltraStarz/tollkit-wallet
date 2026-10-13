@@ -96,6 +96,11 @@ const ELIZA_NAMES: Record<string, { name: string; similes: string[] }> = {
   pay_fetch: { name: "TOLLKIT_PAY_FETCH", similes: ["PAY_API", "X402_PAY", "BUY_API_CALL", "PAID_FETCH"] },
   seller_check: { name: "TOLLKIT_SELLER_CHECK", similes: ["CHECK_SELLER", "VERIFY_ENDPOINT"] },
   receipts: { name: "TOLLKIT_RECEIPTS", similes: ["TRANSACTION_HISTORY", "WALLET_HISTORY", "RECEIPTS"] },
+  autopilot_propose: { name: "TOLLKIT_AUTOPILOT_SET", similes: ["LIMIT_ORDER", "STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP", "DCA", "RECURRING_BUY", "SET_STRATEGY"] },
+  autopilot_rules: { name: "TOLLKIT_AUTOPILOT_RULES", similes: ["LIST_ORDERS", "OPEN_ORDERS", "MY_STRATEGIES"] },
+  autopilot_cancel: { name: "TOLLKIT_AUTOPILOT_CANCEL", similes: ["CANCEL_ORDER", "STOP_STRATEGY"] },
+  paper_swap: { name: "TOLLKIT_PAPER_SWAP", similes: ["PAPER_TRADE", "PRACTICE_TRADE", "SIMULATE_TRADE"] },
+  paper_status: { name: "TOLLKIT_PAPER_STATUS", similes: ["PAPER_BALANCE", "PAPER_PORTFOLIO"] },
 };
 
 function toElizaAction(a: WalletAction): Action {

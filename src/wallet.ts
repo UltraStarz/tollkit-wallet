@@ -21,6 +21,9 @@ import { balanceAtomic, checkDestination, sendTokens, type SendRequest } from ".
 import { dashboardOpen, requestLocal } from "./approvals.js";
 import { randomUUID } from "node:crypto";
 import { KNOWN, type Token } from "./tokens.js";
+import { RuleStore } from "./rules.js";
+import { PaperBook } from "./paper.js";
+import { liveBalance, type Executor } from "./autopilot.js";
 
 type Fetch = typeof fetch;
 
@@ -290,6 +293,17 @@ export class TollkitWallet {
       log({ status: "failed", reason: (e as Error).message.slice(0, 300) });
       return { ok: false, to: dest, refused: { code: "send_failed", reason: (e as Error).message } };
     }
+  }
+
+  /** Autopilot rules for this wallet. */
+  rules(): RuleStore { return new RuleStore(this.o.dir); }
+  /** Paper trading book (real quotes, pretend money). */
+  paper(startUsd?: number): PaperBook { return new PaperBook(this, { dir: this.o.dir, startUsd }); }
+  /** What the autopilot trades with: the real wallet, or the paper book. */
+  executor(mode: "live" | "paper" = "live"): Executor {
+    const slippageBps = Math.min(100, this.policy.max_slippage_bps);
+    if (mode === "paper") { const pb = this.paper(); return { mode, slippageBps, swap: (r) => pb.swap(r), quote: (r) => this.quote(r), balance: async (c, t) => pb.balance(c, t) }; }
+    return { mode, slippageBps, swap: (r) => this.swap(r), quote: (r) => this.quote(r), balance: (c, t) => liveBalance(this.addresses, c, t, this.rpc(c), this.f) };
   }
 
   /** Drop the keys from memory. */

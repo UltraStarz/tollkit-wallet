@@ -15,6 +15,9 @@ import { resolveToken, toAtomic } from "./tokens.js";
 import { PAGE } from "./ui.js";
 import { Watcher } from "./watch.js";
 import { PriceFeed } from "./prices.js";
+import { Autopilot } from "./autopilot.js";
+import { RuleInput, describeRule, ruleProblem } from "./rules.js";
+import { parseStrategy } from "./parse.js";
 import type { Chain } from "./chains.js";
 
 const CHAINS = ["base", "ethereum", "solana"];
@@ -38,11 +41,15 @@ const send = (res: ServerResponse, code: number, body: unknown, type = "applicat
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 };
 
-export async function startDashboard(w: TollkitWallet, password: string, o: { port?: number; host?: string; watch?: boolean } = {}): Promise<DashboardHandle> {
+export async function startDashboard(w: TollkitWallet, password: string, o: { port?: number; host?: string; watch?: boolean; autopilot?: boolean } = {}): Promise<DashboardHandle> {
   const watcher = o.watch === false ? null : new Watcher(w);
   watcher?.start();
   const prices = o.watch === false ? null : new PriceFeed();
   prices?.start();
+  // The autopilot runs while the dashboard is open (live money; paper mode is `tollkit-wallet autopilot --paper`).
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir }) : null;
+  autopilot?.start();
+  const priceOf = (t: string) => prices?.snapshot().prices[t.toUpperCase()]?.usd;
   const token = randomBytes(24).toString("hex");
   const host = o.host ?? "127.0.0.1";
   let port = o.port ?? 7420;
@@ -68,7 +75,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       if (req.method === "GET" && p === "/api/state") {
         return send(res, 200, { ...w.status(), pending: pending(w.dir), receipts: w.receipts().slice(-200).reverse(),
           live: watcher ? { events: watcher.events(), balances: watcher.balances(), heads: watcher.heads() } : null,
-          prices: prices ? prices.snapshot() : null });
+          prices: prices ? prices.snapshot() : null,
+          rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
+          autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules } });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
       if (req.method === "GET" && p === "/api/receipts.csv") {
@@ -80,6 +89,29 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       if (p === "/api/approve") {
         const ok = decide(w.dir, String(b.id ?? ""), b.decision === "approved" ? "approved" : "denied");
         return send(res, ok ? 200 : 409, ok ? { ok } : { error: "That request was already answered or has expired." });
+      }
+      // Autopilot: preview plain English, add rules as the owner, turn rules on/off. Trades still follow the limits.
+      if (p === "/api/rules/preview") {
+        const pr = parseStrategy(String(b.text ?? "").slice(0, 2000), (t) => priceOf(t));
+        return send(res, 200, { rules: pr.rules.map((r) => ({ ...r, description: describeRule(r), problem: ruleProblem(r) })), unparsed: pr.unparsed });
+      }
+      if (p === "/api/rules") {
+        const list = Array.isArray(b.rules) ? b.rules.slice(0, 10) : [];
+        if (!list.length) return send(res, 400, { error: "No rules to add." });
+        const parsed = list.map((r: unknown) => RuleInput.safeParse(r));
+        const bad = parsed.find((x: any) => !x.success);
+        if (bad) return send(res, 400, { error: "A rule is incomplete: " + (bad as any).error.issues.map((i: any) => `${i.path.join(".")}: ${i.message}`).join("; ") });
+        const made = [];
+        for (const x of parsed as any[]) { const why = ruleProblem(x.data); if (why) return send(res, 400, { error: `${describeRule(x.data)}: ${why}` }); }
+        for (const x of parsed as any[]) made.push(await w.rules().add(x.data, "owner", false));
+        return send(res, 200, { rules: made.map((r) => ({ ...r, description: describeRule(r) })) });
+      }
+      if (p === "/api/rules/status") {
+        const st = String(b.status);
+        if (!["active", "paused", "cancelled"].includes(st)) return send(res, 400, { error: "status must be active, paused or cancelled" });
+        const r = await w.rules().setStatus(String(b.id ?? ""), st as "active" | "paused" | "cancelled");
+        void autopilot?.tick();
+        return send(res, 200, { rule: { ...r, description: describeRule(r) } });
       }
       // Everything below changes money rules or moves funds: password again, every time.
       if (typeof b.password !== "string" || b.password !== password) return send(res, 403, { error: "Wrong password." });
@@ -118,7 +150,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); watcher?.stop(); prices?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 

@@ -56,7 +56,7 @@ The agent has no tool for this.
 }
 ```
 
-Tools: `wallet_status`, `wallet_balances`, `swap_quote`, `swap`, `pay_fetch`, `seller_check`, `receipts`. There is no tool for changing limits, approvals or keys.
+Tools: `wallet_status`, `wallet_balances`, `swap_quote`, `swap`, `pay_fetch`, `seller_check`, `receipts`, `autopilot_propose`, `autopilot_rules`, `autopilot_cancel`, `paper_swap`, `paper_status`. There is no tool for changing limits, approvals or keys.
 
 ## Use with Coinbase AgentKit
 
@@ -101,3 +101,34 @@ const r = await w.pay("https://api.example.com/paid-endpoint");
 Swap quotes come through api.tollkit.dev. It holds the 0x and Jupiter API keys and adds the fee, and it only ever sees public data and signed transactions.
 
 If you lose the password, the funds can't be recovered.
+
+
+## Autopilot (limit orders, stop-loss, take-profit, trailing stops, recurring buys)
+
+Tell the wallet what to do in plain English, check the summary, and turn it on:
+
+```
+tollkit-wallet rule add "buy $25 of SOL every Monday; sell half my ETH if it rises 10% and sell all ETH if it falls 8%"
+tollkit-wallet rules                 # what's on, prices now, fills
+tollkit-wallet rule pause <id>       # or: rule on <id>, rule cancel <id>
+```
+
+Or use the **Autopilot** tab in the dashboard (`tollkit-wallet ui`). Rule types: limit buy, limit sell, take-profit, stop-loss, trailing stop, and recurring buys (hourly, daily, weekly or a set weekday, with an optional count and maximum price). A take-profit and a stop-loss on the same token are linked: when one fills, the other cancels.
+
+- Every fill goes through the same limits, approvals and receipts as any swap, and pays the same 0.5% fee.
+- Rules an agent suggests (`autopilot_propose`) wait for you to turn them on, unless you tick "Let agents turn on autopilot rules without asking me" in Limits (or `budget agent_rules=auto`).
+- The autopilot runs while the wallet runs: keep the dashboard open, or run `tollkit-wallet autopilot` on a computer or small server that stays on. Only one copy runs rules at a time.
+- Limit orders fill only at their price or better (within 1% for fees and spread). Stops always sell. When selling all of a chain's coin, a little is kept for network fees.
+
+## Paper trading
+
+Practise with pretend money at real live prices, fees included, under the same limits:
+
+```
+tollkit-wallet paper reset 1000          # $1,000 pretend USDC on each chain
+tollkit-wallet paper swap base 100 USDC ETH
+tollkit-wallet autopilot --paper         # run your rules on pretend money
+tollkit-wallet paper                     # balances, fills, fees
+```
+
+Agents get `paper_swap` and `paper_status`. Nothing is signed or sent.

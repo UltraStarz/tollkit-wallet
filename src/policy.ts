@@ -19,6 +19,8 @@ export const PolicySchema = z.object({
   max_slippage_bps: z.number().int().min(1).max(1000),
   chains: z.array(z.enum(["base", "ethereum", "solana"])).min(1),
   block_seller_warnings: z.boolean(),
+  /** Autopilot rules an agent proposes: "propose" waits for the owner to turn each on; "auto" turns them on at once (limits still apply). */
+  agent_rules: z.enum(["propose", "auto"]).default("propose"),
   /** The only places the owner can withdraw to. Sealed with the rest, so adding one needs the password. */
   withdraw_addresses: z.array(z.object({
     chain: z.enum(["base", "ethereum", "solana"]),
@@ -39,6 +41,7 @@ export const DEFAULT_POLICY: Policy = {
   // Ethereum is off until the owner turns it on: its network fees can eat small trades.
   chains: ["base", "solana"],
   block_seller_warnings: true,
+  agent_rules: "propose",
   withdraw_addresses: [],
 };
 

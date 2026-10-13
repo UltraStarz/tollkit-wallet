@@ -9,6 +9,9 @@ import type { TollkitWallet } from "./wallet.js";
 import { resolveToken, toAtomic } from "./tokens.js";
 import { checkSeller } from "./seller.js";
 import type { Chain } from "./chains.js";
+import { RuleInput, describeRule, ruleProblem, type Rule } from "./rules.js";
+import { parseStrategy } from "./parse.js";
+import { PriceFeed } from "./prices.js";
 
 const MAX_BODY = 50_000;
 
@@ -31,6 +34,12 @@ export const ReceiptArgs = z.object({
   limit: z.number().int().min(1).max(500).optional(),
 });
 export const NoArgs = z.object({});
+export const ProposeArgs = z.object({
+  text: z.string().max(2000).optional().describe("Plain-English strategy"),
+  rules: z.array(RuleInput).max(10).optional().describe("Exact rules instead of text"),
+});
+export const RulesListArgs = z.object({ status: z.enum(["proposed", "active", "paused", "done", "cancelled", "expired", "error"]).optional() });
+export const RuleIdArgs = z.object({ id: z.string().min(4).max(40) });
 
 export interface WalletAction<S extends z.ZodTypeAny = z.ZodTypeAny> {
   name: string;
@@ -76,4 +85,41 @@ export const ACTIONS = [
   def({ name: "receipts", spends: false, schema: ReceiptArgs,
     description: "Recent trades, payments and withdrawals with amounts, fees and transaction hashes.",
     run: async (w, a) => w.receipts(a.since).slice(-(a.limit ?? 50)) }),
+  def({ name: "autopilot_propose", spends: false, schema: ProposeArgs,
+    description: "Set up autopilot rules: limit buy/sell, stop-loss, take-profit, trailing stop, recurring buy (DCA). Give plain English in `text` (e.g. \"buy $25 of SOL every Monday; sell half my ETH if it rises 10% and all if it falls 8%\") or exact `rules`. Unless the owner allows auto, rules wait for the owner to turn them on in the dashboard; fills follow the owner's limits.",
+    run: async (w, a) => proposeRules(w, a) }),
+  def({ name: "autopilot_rules", spends: false, schema: RulesListArgs,
+    description: "The autopilot's rules with a plain description of each, status, last price seen, fills and any error.",
+    run: async (w, a) => w.rules().list().filter((r) => !a.status || r.status === a.status).map(showRule) }),
+  def({ name: "autopilot_cancel", spends: false, schema: RuleIdArgs,
+    description: "Cancel an autopilot rule so it never trades.",
+    run: async (w, a) => { try { return showRule(await w.rules().setStatus(a.id, "cancelled")); } catch (e) { return bad(e); } } }),
+  def({ name: "paper_swap", spends: false, schema: SwapArgs,
+    description: "Practice a swap with pretend money at the real live quote (fees included). Same limits as real trades; nothing is signed or sent.",
+    run: async (w, a) => { try { const { req, sell, buy } = await swapRequest(w, a); return { ...(await w.paper().swap(req)), sell, buy, paper: true }; } catch (e) { return bad(e); } } }),
+  def({ name: "paper_status", spends: false, schema: NoArgs,
+    description: "Paper-trading balances, number of practice fills and fees they would have cost.",
+    run: async (w) => w.paper().summary() }),
 ] as const;
+
+function showRule(r: Rule) {
+  const last = r.state.fills.at(-1);
+  return { id: r.id, status: r.status, description: describeRule(r), created_by: r.created_by, last_price: r.state.last_price, fills: r.state.fills.filter((f) => f.ok).length, last_fill: last, error: r.state.last_error, rule: { ...r, state: undefined } };
+}
+
+async function proposeRules(w: TollkitWallet, a: z.infer<typeof ProposeArgs>) {
+  let drafts: RuleInput[] = [...(a.rules ?? [])], unparsed: string[] = [];
+  if (a.text) {
+    const feed = new PriceFeed(); await feed.refresh();
+    const pr = parseStrategy(a.text, (t) => feed.snapshot().prices[t.toUpperCase()]?.usd);
+    drafts = drafts.concat(pr.rules); unparsed = pr.unparsed;
+  }
+  if (!drafts.length) return { ok: false, refused: { code: "nothing_understood", reason: "No rules were understood. Try e.g. \"buy $25 of SOL every Monday\" or pass `rules`." }, unparsed };
+  for (const d of drafts) { const why = ruleProblem(d); if (why) return { ok: false, refused: { code: "bad_rule", reason: `${describeRule(d)}: ${why}` }, unparsed }; }
+  const store = w.rules(), auto = w.policy.agent_rules === "auto", made = [] as ReturnType<typeof showRule>[];
+  for (const d of drafts) made.push(showRule(await store.add(d, "agent", auto)));
+  return {
+    ok: true, rules: made, unparsed,
+    note: auto ? "These rules are on. The autopilot runs while the wallet's dashboard or `tollkit-wallet autopilot` is running." : "These rules are waiting for the owner to turn them on in the dashboard (Autopilot tab) or with `tollkit-wallet rule on <id>`.",
+  };
+}
