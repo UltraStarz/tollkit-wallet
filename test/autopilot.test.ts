@@ -78,7 +78,7 @@ function market() {
 }
 {
   const dir = tmp(), m = market(), s = new RuleStore(dir);
-  let clock = Date.parse("2026-10-13T12:00:00Z");
+  let clock = Date.now(); // the store stamps new rules with the real clock
   const events: string[] = [];
   const ap = new Autopilot(s, m.exec, m.prices, { dir, now: () => clock, onEvent: (e) => events.push(`${e.type}:${e.rule.kind}`) });
   const buy = await s.add({ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 20, trigger_price: 2400 }, "owner", false);
