@@ -1,0 +1,18 @@
+/** Buy: the wallet asks Tollkit's server for a Coinbase checkout link with only public details. No network. */
+import { buyLink } from "../src/buy.js";
+let pass = 0, fail = 0;
+const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
+const A = { evm: "0x6b11C413f916eCFA846302ff05c171c3B497924e", solana: "E5Z17Jxsr4cimRUpgcZV29PnX3SqBWH3TqzUsS3DBgkU" };
+let sent: any = null, reply: { status: number; body: any } = { status: 200, body: { url: "https://pay.coinbase.com/buy?sessionToken=x", sandbox: false } };
+const f = (async (u: string, i: any) => { sent = { u, body: JSON.parse(i.body) }; return new Response(JSON.stringify(reply.body), { status: reply.status }); }) as any;
+const r = await buyLink(A, { chain: "solana", asset: "SOL", amount_usd: 40 }, { proxy: "https://p.example/wallet", fetch: f });
+check(r.url.startsWith("https://pay.coinbase.com/") && sent.u === "https://p.example/wallet/onramp" && JSON.stringify(sent.body) === JSON.stringify({ address: A.solana, network: "solana", asset: "SOL", amount_usd: 40 }), "asks for a link for the Solana address; sends nothing else", sent);
+await buyLink(A, { chain: "base", asset: "USDC", sandbox: true }, { proxy: "https://p.example/wallet", fetch: f });
+check(sent.body.address === A.evm && sent.body.sandbox === true && !("amount_usd" in sent.body), "Base uses the EVM address; test mode passed through");
+let e = ""; try { await buyLink(A, { chain: "base", asset: "SOL" }, { fetch: f }); } catch (x) { e = (x as Error).message; } check(/USDC or ETH/.test(e), "SOL on Base refused before any request", e);
+reply = { status: 503, body: { message: "Buying with a card isn't enabled on this server yet." } };
+e = ""; try { await buyLink(A, { chain: "base", asset: "ETH" }, { fetch: f }); } catch (x) { e = (x as Error).message; } check(/isn't enabled/.test(e), "server's reason shown", e);
+reply = { status: 200, body: { url: "https://evil.example/" } };
+e = ""; try { await buyLink(A, { chain: "base", asset: "ETH" }, { fetch: f }); } catch (x) { e = (x as Error).message; } check(/Coinbase checkout/.test(e), "only opens pay.coinbase.com links");
+console.log(`\nbuy: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

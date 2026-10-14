@@ -5,6 +5,8 @@
  * addresses.
  */
 import { z } from "zod";
+import { isLocalUrl } from "./netguard.js";
+export { isLocalUrl } from "./netguard.js";
 import type { TollkitWallet } from "./wallet.js";
 import { resolveToken, toAtomic } from "./tokens.js";
 import { checkSeller } from "./seller.js";
@@ -97,7 +99,8 @@ export const ACTIONS = [
   def({ name: "pay_fetch", spends: true, schema: PayArgs,
     description: "Fetch a URL and pay for it if it asks (x402 or MPP, USDC/USDT on Base, Ethereum or Solana). Checks the seller, screens the recipient against OFAC, stays within the owner's limits. Returns the response body.",
     run: async (w, a) => {
-      const r = await w.pay(a.url, { method: a.method ?? (a.body ? "POST" : "GET"), headers: a.headers, body: a.body });
+      if (isLocalUrl(a.url)) return { paid: false, status: 0, refused: { code: "local_address", reason: "pay_fetch only calls public internet addresses." } };
+      const r = await w.pay(a.url, { method: a.method ?? (a.body ? "POST" : "GET"), headers: a.headers, body: a.body }, { publicOnly: true });
       let body: string | undefined;
       if (r.response) { const t = await r.response.text(); body = t.length > MAX_BODY ? t.slice(0, MAX_BODY) + `\n…[truncated ${t.length - MAX_BODY} chars]` : t; }
       return { paid: r.paid, status: r.status, cost_usd: r.offer?.usd, protocol: r.offer?.protocol, chain: r.offer?.chain, tx: r.tx, refused: r.refused, content_type: r.response?.headers.get("content-type"), body };

@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { files, walletHome } from "./paths.js";
 import type { Policy } from "./policy.js";
 
-export type Kind = "trade" | "payment" | "withdrawal";
+export type Kind = "trade" | "payment" | "withdrawal" | "stake" | "move" | "dapp";
 export type Status = "pending" | "done" | "failed";
 
 export interface Entry {

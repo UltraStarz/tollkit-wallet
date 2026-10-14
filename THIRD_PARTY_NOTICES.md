@@ -15,3 +15,7 @@ The coin and network names and logos are trademarks of their owners and are used
 ## Simple Icons
 
 The Claude, Cursor, GitHub Copilot and Gemini logos in the dashboard's "Connect your AI" picker (`src/ai-icons.ts`) come from Simple Icons (https://simpleicons.org), whose data is released under CC0 1.0. The logos are trademarks of their owners and are shown only to say which apps work with the wallet.
+
+## Wallet Standard (extension/inpage.js)
+
+The Solana wallet registration in `extension/inpage.js` follows `registerWallet` from `@wallet-standard/wallet` (https://github.com/wallet-standard/wallet-standard), Apache License 2.0. The feature names and shapes come from `@wallet-standard/features` and `@solana/wallet-standard-features` (Apache License 2.0).

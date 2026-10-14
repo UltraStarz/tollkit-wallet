@@ -23,7 +23,7 @@ const PW = "correct horse battery";
   const dir = tmp();
   const a = await createKeystore(PW, { dir, scrypt: FAST });
   check(/^0x[0-9a-fA-F]{40}$/.test(a.evm) && a.solana.length >= 32, "creates EVM + Solana addresses", a);
-  check(JSON.stringify(addresses(dir)) === JSON.stringify(a), "addresses readable without password");
+  check(JSON.stringify(addresses(dir)) === JSON.stringify({ evm: a.evm, solana: a.solana }) && a.phrase?.split(" ").length === 12, "addresses readable without password; new wallets come with a 12-word phrase");
   const raw = readFileSync(files(dir).keystore, "utf8");
   check(!raw.includes("privateKey") && !/[0-9a-f]{128}/.test(JSON.parse(raw).solana.ct.slice(0, 10) + "x"), "no plaintext key in the file");
   const k = await unlock(PW, dir);

@@ -6,9 +6,10 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { Contract, JsonRpcProvider, formatUnits } from "ethers";
+import { Contract, JsonRpcProvider, formatUnits, parseUnits } from "ethers";
 import { DEFAULT_RPC, EVM_CHAIN_ID, STABLES, SWAP_FEE_BPS, WSOL, NATIVE_EVM, type Chain } from "./chains.js";
 import { addresses, unlock, type Keys } from "./keystore.js";
+import { TokenList } from "./holdings.js";
 import { entries, exportCsv, LimitError, record, reserve, settle, spentToday, type Entry } from "./ledger.js";
 import { payFetch, type PayResult } from "./pay.js";
 import { loadPolicy, savePolicy, type Policy } from "./policy.js";
@@ -24,6 +25,11 @@ import { KNOWN, type Token } from "./tokens.js";
 import { RuleStore } from "./rules.js";
 import { PaperBook } from "./paper.js";
 import { liveBalance, type Executor } from "./autopilot.js";
+import { Staking, type StakingOptions } from "./stake.js";
+import { Sales, SEND_WINDOW_MS } from "./sell.js";
+import { DappBridge } from "./dapp.js";
+import { publicFetch } from "./netguard.js";
+import { Mover, canMove, fmtAmount, type MoveAsset, type MoverOptions, type MoveQuote } from "./bridge.js";
 
 type Fetch = typeof fetch;
 
@@ -36,6 +42,12 @@ export interface WalletOptions {
   send?: (r: SendRequest, keys: Keys) => Promise<string>;
   /** Override for tests: sign + send a vetted quote. */
   execute?: (q: SwapQuote, keys: Keys) => Promise<string>;
+  /** Override for tests: the Solana connection and sender used for staking. */
+  staking?: Pick<StakingOptions, "conn" | "send">;
+  /** Override for tests: chain calls used when moving between networks. */
+  mover?: Partial<MoverOptions>;
+  /** Override for tests: network calls and approvals for sites using the browser extension. */
+  dapp?: Partial<ConstructorParameters<typeof DappBridge>[0]>;
   /** Override for tests / other channels. Default: Telegram if configured. */
   approve?: ((text: string) => Promise<Decision>) | null;
 }
@@ -248,6 +260,7 @@ export class TollkitWallet {
     try {
       const tx = await (this.o.execute ?? ((qq, k) => executeSwap(qq, k, { fetch: this.f, proxy: this.o.proxy, rpc: this.o.rpc })))(q, this.keys);
       settle(id, { status: "done", tx }, this.o.dir);
+      if (q.chain !== "solana" && q.buy_token !== NATIVE_EVM) try { new TokenList(this.o.dir).add(q.chain, q.buy_token); } catch { /* display only */ }
       return { ok: true, quote: strip(q), tx, receipt_id: id };
     } catch (e) {
       settle(id, { status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir);
@@ -256,10 +269,12 @@ export class TollkitWallet {
   }
 
   /** Fetch a URL, paying through x402 or MPP if it asks, within the owner's rules. */
-  async pay(url: string, init?: RequestInit): Promise<PayResult> {
+  async pay(url: string, init?: RequestInit, opts: { publicOnly?: boolean } = {}): Promise<PayResult> {
+    // Agents only reach the public internet (not this computer or the local network), redirects included.
+    const f = opts.publicOnly ? publicFetch(this.f) : this.f;
     return payFetch(url, init, this.keys, {
-      dir: this.o.dir, policy: this.policy, fetch: this.f, sanctions: this.sanctions,
-      checkSeller: (u, payTo) => checkSeller(u, payTo, this.f), approve: this.approver, solanaRpc: this.o.rpc?.solana,
+      dir: this.o.dir, policy: this.policy, fetch: f, sanctions: this.sanctions,
+      checkSeller: (u, payTo) => checkSeller(u, payTo, f), approve: this.approver, solanaRpc: this.o.rpc?.solana,
     });
   }
 
@@ -292,6 +307,139 @@ export class TollkitWallet {
     } catch (e) {
       log({ status: "failed", reason: (e as Error).message.slice(0, 300) });
       return { ok: false, to: dest, refused: { code: "send_failed", reason: (e as Error).message } };
+    }
+  }
+
+  /** SOL staking. Reading is open; stake, unstake and withdraw need the password every time. */
+  staking(): Staking {
+    return this.stk ??= new Staking({ owner: this.addresses.solana, rpc: this.rpc("solana"), ...(this.o.staking ?? {}) });
+  }
+  private stk?: Staking;
+
+  async stakeAction(password: string, a: { action: "stake"; sol: number; vote: string } | { action: "unstake" | "withdraw"; account: string }): Promise<{ tx: string; account?: string }> {
+    if (password !== this.password) throw new Error("wrong password");
+    if (!this.policy.chains.includes("solana")) throw new Error("Solana is turned off in your settings.");
+    const id = randomUUID(), ts = new Date().toISOString(), st = this.staking();
+    const name = async (vote: string) => (await st.validators().catch(() => [])).find((v) => v.vote === vote)?.name ?? `${vote.slice(0, 4)}…${vote.slice(-4)}`;
+    let detail = "", seller = "";
+    const log = (e: { status: "done" | "failed"; tx?: string; reason?: string }) => record({ id, ts, kind: "stake", usd: 0, chain: "solana", seller, tool: a.action, detail, ...e }, this.o.dir);
+    try {
+      if (a.action === "stake") {
+        if (!Number.isFinite(a.sol) || a.sol <= 0) throw new Error("Enter how much SOL to stake.");
+        seller = a.vote; detail = `Stake ${a.sol} SOL with ${await name(a.vote)}`;
+        const r = await st.stake(this.keys.solana, Math.round(a.sol * 1e9), a.vote);
+        log({ status: "done", tx: r.tx });
+        return r;
+      }
+      const acct = (await st.list()).find((x) => x.address === a.account);
+      seller = acct?.voter ?? a.account;
+      const sol = acct ? (a.action === "withdraw" ? acct.lamports : acct.delegated) / 1e9 : 0;
+      detail = `${a.action === "unstake" ? "Unstake" : "Withdraw stake:"} ${sol} SOL${acct?.voter ?  " from " + (await name(acct.voter)) : ""}`;
+      const tx = a.action === "unstake" ? await st.unstake(this.keys.solana, a.account) : (await st.withdraw(this.keys.solana, a.account)).tx;
+      log({ status: "done", tx });
+      return { tx };
+    } catch (e) {
+      if (detail) log({ status: "failed", reason: (e as Error).message.slice(0, 300) });
+      throw e;
+    }
+  }
+
+  /** Moving USDC/ETH between this wallet's own addresses on different networks. */
+  mover(): Mover {
+    return this.mv ??= new Mover({ evm: this.addresses.evm, solana: this.addresses.solana, dir: this.o.dir, proxy: this.o.proxy ?? DEFAULT_PROXY, fetch: this.o.fetch, rpc: this.o.rpc, ...(this.o.mover ?? {}) });
+  }
+  private mv?: Mover;
+
+  /** A priced move (nothing signed). `amount` is in coins, e.g. "25" USDC or "0.05" ETH. */
+  async moveQuote(asset: MoveAsset, from: Chain, to: Chain, amount: string): Promise<MoveQuote> {
+    if (asset !== "USDC" && asset !== "ETH") throw new Error("Pick USDC or ETH.");
+    for (const c of [from, to]) if (!this.policy.chains.includes(c)) throw new Error(`${c} is turned off in your settings.`);
+    if (!canMove(asset, from, to)) throw new Error(asset === "ETH" ? "ETH moves between Base and Ethereum only." : "Pick two different networks.");
+    let atomic: bigint;
+    try { atomic = parseUnits(String(amount).trim(), asset === "USDC" ? 6 : 18); } catch { throw new Error("Enter an amount like 25 or 0.05."); }
+    return this.mover().quote(asset, from, to, atomic.toString());
+  }
+
+  /** Move with a fresh quote. Needs the password every time. */
+  async move(password: string, asset: MoveAsset, from: Chain, to: Chain, amount: string, seenReceiveMin?: string) {
+    if (password !== this.password) throw new Error("wrong password");
+    const q = await this.moveQuote(asset, from, to, amount);
+    // The quote is fetched again here; never accept one worse than what the owner was shown.
+    if (seenReceiveMin !== undefined && /^\d+$/.test(seenReceiveMin) && BigInt(q.receive_min) < BigInt(seenReceiveMin)) throw new Error(`The price changed: you'd now get at least ${fmtAmount(asset, q.receive_min)}. Check the new quote and try again.`);
+    const id = randomUUID(), ts = new Date().toISOString();
+    const usd = asset === "USDC" ? Number(q.amount) / 1e6 : 0;
+    const base = { id, ts, kind: "move" as const, usd, chain: from, seller: q.via === "cctp" ? "Circle CCTP" : "Across", tool: "move", fee_usd: asset === "USDC" ? Number(q.tollkit_fee) / 1e6 : undefined, detail: `${fmtAmount(asset, q.amount)} ${from} -> ${to}` };
+    try {
+      const rec = await this.mover().execute(q, this.keys);
+      record({ ...base, status: "done", tx: rec.tx }, this.o.dir);
+      return { ok: true, move: rec, quote: q };
+    } catch (e) {
+      record({ ...base, status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir);
+      throw e;
+    }
+  }
+
+  /** Websites using this wallet through the Tollkit browser extension. Approvals happen in the dashboard. */
+  dapps(): DappBridge {
+    return this.dp ??= new DappBridge({ evm: this.addresses.evm, solana: this.addresses.solana, keys: () => this.keys, chains: () => this.policy.chains, dir: this.o.dir, rpc: this.o.rpc,
+      approve: (text) => requestLocal(this.o.dir, text, { timeoutMs: 5 * 60_000 }), ...(this.o.dapp ?? {}) });
+  }
+  private dp?: DappBridge;
+
+  /** Cash-out sales started from the dashboard. */
+  sales(): Sales { return this.sl ??= new Sales({ dir: this.o.dir, proxy: this.o.proxy, fetch: this.o.fetch }); }
+  private sl?: Sales;
+
+  /**
+   * Send the crypto for a Coinbase sale, after the owner clicked "Cash out now" there. Needs the password.
+   * Sends only what Coinbase reports for this sale, on the network and coin the owner picked, from this wallet.
+   */
+  async cashOutSend(password: string, ref: string): Promise<{ ok: true; tx: string; to: string; amount: string }> {
+    if (password !== this.password) throw new Error("wrong password");
+    const sale = this.sales().get(ref);
+    if (!sale) throw new Error("That sale isn't from this wallet.");
+    if (sale.state !== "open") throw new Error(sale.state === "sent" || sale.state === "sending" ? "Already sent for this sale. Check Activity." : `This sale is ${sale.state}.`);
+    if (!sale.amount) throw new Error("This sale has no amount set. Start a new cash out with an amount.");
+    if (this.selling.has(ref)) throw new Error("Already sending for this sale.");
+    this.selling.add(ref);
+    try { return await this.cashOutSendLocked(sale, ref); } finally { this.selling.delete(ref); }
+  }
+  private selling = new Set<string>();
+  private async cashOutSendLocked(sale: NonNullable<ReturnType<Sales["get"]>>, ref: string): Promise<{ ok: true; tx: string; to: string; amount: string }> {
+    const own = sale.chain === "solana" ? this.addresses.solana : this.addresses.evm;
+    const t = await this.sales().status(own, ref);
+    if (!t || !/STARTED/.test(t.status) || !t.to_address) throw new Error("Coinbase isn't ready yet. Click \"Cash out now\" on the Coinbase page first.");
+    if (t.network.toLowerCase() !== sale.chain || t.asset.toUpperCase() !== sale.asset) throw new Error(`Coinbase is expecting ${t.asset} on ${t.network}, not ${sale.asset} on ${sale.chain}. Start a new cash out.`);
+    if (t.from_address && (sale.chain === "solana" ? t.from_address !== own : t.from_address.toLowerCase() !== own.toLowerCase())) throw new Error("Coinbase is expecting the crypto from a different wallet.");
+    const since = Date.parse(t.updated_at || t.created_at || "");
+    if (Number.isFinite(since) && Date.now() - since > SEND_WINDOW_MS) throw new Error("Coinbase's 30 minutes to send have passed. Start a new cash out.");
+    const token = KNOWN[sale.chain][sale.asset];
+    if (!token) throw new Error("Unsupported coin.");
+    const dest = checkDestination(sale.chain, t.to_address);
+    let atomic: bigint;
+    try { atomic = parseUnits(String(t.sell_amount?.value ?? ""), token.decimals); } catch { throw new Error("Coinbase didn't say how much to send."); }
+    if (atomic <= 0n) throw new Error("Coinbase didn't say how much to send.");
+    // Never more than the owner chose to sell, and only in the coin they picked.
+    if (t.sell_amount?.currency && t.sell_amount.currency.toUpperCase() !== token.symbol) throw new Error(`Coinbase is expecting ${t.sell_amount.currency}, not ${token.symbol}. Start a new cash out.`);
+    if (atomic > parseUnits(sale.amount!, token.decimals)) throw new Error(`Coinbase is expecting ${t.sell_amount!.value} ${token.symbol}, more than the ${sale.amount} you chose. Start a new cash out.`);
+    if (!this.o.send) {
+      const have = await balanceAtomic(sale.chain, token, own, this.rpc(sale.chain)).catch(() => null);
+      if (have !== null && have < atomic) throw new Error(`The wallet has ${formatUnits(have, token.decimals)} ${token.symbol} on ${sale.chain}, less than the ${t.sell_amount!.value} Coinbase is expecting.`);
+    }
+    const id = randomUUID(), ts = new Date().toISOString();
+    const base = { id, ts, kind: "withdrawal" as const, usd: token.symbol === "USDC" ? Number(t.sell_amount!.value) : 0, chain: sale.chain, seller: "Coinbase", tool: "cash out", detail: `${t.sell_amount!.value} ${token.symbol} -> Coinbase (cash out${t.total ? `, ${t.total.value} ${t.total.currency}` : ""})` };
+    // Marked before signing, so a retry or a second click can never send twice.
+    this.sales().update(ref, { state: "sending" });
+    try {
+      const tx = await (this.o.send ?? ((r, k) => sendTokens(r, k, this.rpc(sale.chain))))({ chain: sale.chain, token, to: dest, amount: atomic.toString() }, this.keys);
+      record({ ...base, status: "done", tx }, this.o.dir);
+      this.sales().update(ref, { state: "sent", tx });
+      return { ok: true, tx, to: dest, amount: `${t.sell_amount!.value} ${token.symbol}` };
+    } catch (e) {
+      record({ ...base, status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir);
+      // It may or may not have reached the network; don't offer to send again for this sale.
+      this.sales().update(ref, { state: "failed", reason: (e as Error).message.slice(0, 200) });
+      throw new Error(`${(e as Error).message.slice(0, 200)} Check Activity before starting a new cash out.`);
     }
   }
 

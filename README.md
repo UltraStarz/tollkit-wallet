@@ -25,7 +25,7 @@ Swaps cost a flat 0.5%, shown before every trade. On some Base and Ethereum pair
 ```
 npm install -g tollkit-wallet
 tollkit-wallet init                 # choose a password; prints your Base/Ethereum and Solana addresses
-tollkit-wallet budget               # see limits; change with e.g. budget per_trade_usd=100
+tollkit-wallet budget               # see limits; change with e.g. budget per_trade_usd=100 (or in the dashboard's Settings tab)
 tollkit-wallet telegram <bot-token> <chat-id>   # optional: approvals in Telegram
 ```
 
@@ -84,6 +84,14 @@ import { tollkitWalletPlugin } from "tollkit-wallet/elizaos";
 
 Set `TOLLKIT_WALLET_PASSWORD` (or `TOLLKIT_WALLET_PASSWORD_FILE`) in the agent's settings or environment. The agent's model reads the request ("swap 25 USDC to SOL"), and the wallet checks it against your limits before anything is signed.
 
+## Use with websites (browser extension)
+
+The Tollkit extension for Chrome, Brave and Edge lets websites connect to this wallet the way they connect to MetaMask or Phantom: Base and Ethereum apps through the standard Ethereum provider (EIP-1193/EIP-6963), Solana apps through the Wallet Standard.
+
+Keys stay in Tollkit. When a site asks to connect, sign or send, the request shows up in the dashboard's Approvals tab with the site's name and the details. Transactions are checked against the network first. Nothing happens until you approve. Read-only calls go straight through.
+
+To add it: run `tollkit-wallet extension` for the folder and steps (Developer mode, then Load unpacked), then pair it from **Settings → Pair a browser**. Connected sites are listed in Settings, where you can disconnect them. The dashboard has to be open for sites to use the wallet.
+
 ## Use from code
 
 ```ts
@@ -91,6 +99,45 @@ import { TollkitWallet } from "tollkit-wallet";
 const w = await TollkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
 const r = await w.pay("https://api.example.com/paid-endpoint");
 ```
+
+## Backup and recovery
+
+New wallets (0.2.2 and later) are made from a 12-word recovery phrase. It's shown once when you create the wallet, and you can see it again with `tollkit-wallet backup` or **Back up** in the dashboard (password needed). The dashboard asks you to confirm three of the words before it counts as backed up.
+
+The phrase uses the same derivation paths as MetaMask and Phantom (Base/Ethereum `m/44'/60'/0'/0/0`, Solana `m/44'/501'/0'/0'`), so it restores the same addresses there too.
+
+To restore: `tollkit-wallet restore` and type the phrase. Wallets made before 0.2.2 have no phrase; their backup is the two private keys (`tollkit-wallet backup` shows them), restored with `tollkit-wallet restore --keys`. Add `--replace` to restore over an existing wallet; its files are kept, renamed with `.replaced-<time>`.
+
+## Tokens and price charts
+
+The dashboard's Home tab lists every token the wallet holds that has a price, with its value and 24-hour change. Tap a token for a price chart (1D, 1W, 1M, 1Y). Prices and charts come from DefiLlama.
+
+How tokens are found:
+- Solana: every SPL and Token-2022 token account the address owns.
+- Ethereum: Blockscout's public token list for the address.
+- Base: tokens you've swapped into with this wallet, plus any you add with **Add a token** (paste the contract address). Base has no free public token index that works without a key, so the wallet doesn't scan for others.
+
+Tokens with no price (most airdropped spam) are hidden and counted below the list. Added tokens are saved in `tokens.json` in the wallet folder.
+
+## Buy crypto with a card
+
+**Buy** on the Home tab opens Coinbase's checkout to buy USDC or ETH on Base or Ethereum, or USDC or SOL on Solana, sent straight to this wallet's address. The wallet asks Tollkit's server for a single-use Coinbase Onramp link; only your public address, the network, the coin and the amount are sent. Coinbase handles the payment and any ID checks, and its own fees and limits apply. Tick **Test purchase** to try it in Coinbase's sandbox with no real money.
+
+## Cash out to your bank
+
+**Sell** on the Home tab sells USDC, ETH or SOL through Coinbase to your bank or PayPal. You need a Coinbase account. The wallet opens Coinbase's sell page; you choose where the money goes and click **Cash out now**. Coinbase then gives an address to send the crypto to, and the dashboard shows it with the amount, Coinbase's fee and what you'll receive. Nothing is sent until you confirm with your password. Coinbase allows 30 minutes for the send. Only your public address, the network, the coin and the amount go to Tollkit's server.
+
+## Move between networks
+
+**Move** on the Home tab sends your own USDC between Base, Ethereum and Solana, or ETH between Base and Ethereum, to this wallet's address on the other network.
+
+- USDC uses Circle's own transfer (CCTP): it's burned on one network and minted on the other by Circle, usually in 8 to 20 seconds. Circle's forwarding service pays the network fee on arrival, so you don't need gas there.
+- ETH goes through Across, usually in under a minute.
+- Tollkit's fee is 0.25%. Circle's or Across's fee, and the amount you'll receive at least, are shown before you confirm. Moves need your password and don't count against your spending limits.
+
+## Stake SOL
+
+**Stake** on the Home tab stakes SOL with a validator you pick from the ones currently voting, listed by how much SOL is staked with them, with their fee. The minimum is set by the network (1 SOL as of October 2026) and read live. Stakes start earning after the current epoch ends (about a day). Unstake any time; once the epoch ends, **Withdraw** returns the SOL to your wallet. The wallet keeps both stake and withdraw authority, and staking needs your password.
 
 ## Where things live
 
@@ -120,7 +167,7 @@ tollkit-wallet rule pause <id>       # or: rule on <id>, rule cancel <id>
 Or use the **Autopilot** tab in the dashboard (`tollkit-wallet ui`). Rule types: limit buy, limit sell, take-profit, stop-loss, trailing stop, and recurring buys (hourly, daily, weekly or a set weekday, with an optional count and maximum price). A take-profit and a stop-loss on the same token are linked: when one fills, the other cancels.
 
 - Every fill goes through the same limits, approvals and receipts as any swap, and pays the same 0.5% fee.
-- Rules an agent suggests (`autopilot_propose`) wait for you to turn them on, unless you tick "Let agents turn on autopilot rules without asking me" in Limits (or `budget agent_rules=auto`).
+- Rules an agent suggests (`autopilot_propose`) wait for you to turn them on, unless you tick "Let agents turn on autopilot rules without asking me" in Settings (or `budget agent_rules=auto`).
 - The autopilot runs while the wallet runs: keep the dashboard open, or run `tollkit-wallet autopilot` on a computer or small server that stays on. Only one copy runs rules at a time.
 - Limit orders fill only at their price or better (within 1% for fees and spread). Stops always sell. When selling all of a chain's coin, a little is kept for network fees.
 

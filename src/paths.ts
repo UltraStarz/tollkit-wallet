@@ -21,4 +21,5 @@ export const files = (dir: string) => ({
   lock: path.join(dir, ".lock"),
   sanctions: path.join(dir, "sanctions.json"),
   telegram: path.join(dir, "telegram.json"),
+  backup: path.join(dir, "backup.json"),
 });

@@ -34,7 +34,7 @@ function raw(p: string, o: { method?: string; host?: string; token?: string | nu
 }
 const j = async (p: string, o?: any) => { const r = await raw(p, o); return { status: r.status, ...JSON.parse(r.body || "{}") }; };
 
-check((await raw(`/?t=${tok}`)).body.includes("<title>Tollkit Wallet</title>"), "page served with the link's token");
+check((await raw(`/?t=${tok}`)).body.includes("<title>Tollkit</title>"), "page served with the link's token");
 check((await raw("/?t=wrong")).status === 401, "page refused without the token");
 check((await raw("/api/state", { token: null })).status === 401, "API refused without the token");
 check((await raw("/api/state", { host: "evil.example:17420" })).status === 403, "other Host header refused (DNS rebinding)");
