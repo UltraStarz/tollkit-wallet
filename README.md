@@ -121,7 +121,7 @@ Tokens with no price (most airdropped spam) are hidden and counted below the lis
 
 ## Buy crypto with a card
 
-**Buy** on the Home tab opens Coinbase's checkout to buy USDC or ETH on Base or Ethereum, or USDC or SOL on Solana, sent straight to this wallet's address. The wallet asks Tollkit's server for a single-use Coinbase Onramp link; only your public address, the network, the coin and the amount are sent. Coinbase handles the payment and any ID checks, and its own fees and limits apply. Tick **Test purchase** to try it in Coinbase's sandbox with no real money.
+**Buy** on the Home tab opens Coinbase's checkout to buy USDC or ETH on Base or Ethereum, or USDC or SOL on Solana, sent straight to this wallet's address. The wallet asks Tollkit's server for a single-use Coinbase Onramp link; only your public address, the network, the coin and the amount are sent. Coinbase handles the payment and any ID checks, and its own fees and limits apply.
 
 ## Cash out to your bank
 

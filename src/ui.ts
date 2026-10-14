@@ -444,7 +444,7 @@ var h='<h2>Buy crypto</h2><p class="ailead">Pay by card or bank with Coinbase. T
 '<div class="ailbl">Coin</div><div class="bseg">'+BUYA[BUY.chain].map(function(a){return '<button data-ba="'+a+'" class="bsb'+(BUY.asset===a?" on":"")+'">'+tokIcon(a)+esc(a)+'</button>'}).join("")+'</div>'+
 '<div class="ailbl">Amount</div><div class="bseg">'+["25","50","100","250"].map(function(v){return '<button data-bm="'+v+'" class="bsb'+(BUY.amt===v&&!BUY.custom?" on":"")+'">$'+v+'</button>'}).join("")+'<input id="bcust" class="bcust" inputmode="decimal" placeholder="Other" value="'+esc(BUY.custom)+'" oninput="BUY.custom=this.value.replace(/[^0-9.]/g,\'\')"></div>'+
 '<div class="sm mut" style="margin-top:12px">Sends to <span class="addr">'+esc(short(addr))+'</span> on '+esc(CHAIN_NAMES[BUY.chain]||BUY.chain)+'. Coinbase may ask you to sign in or confirm your ID. Tollkit never sees your payment details.</div>'+
-'<label class="bkchk"><input type="checkbox" '+(BUY.test?"checked":"")+' onchange="BUY.test=this.checked;buyRender()"> Test purchase (Coinbase sandbox, no real money)</label>'+
+
 (BUY.err?'<div class="msg err">'+esc(BUY.err)+'</div>':'')+(BUY.done?'<div class="msg okk">'+esc(BUY.done)+'</div>':'')+
 '<button class="b aigoap" data-bgo'+(BUY.busy?" disabled":"")+'>'+(BUY.busy?"Opening Coinbase…":"Continue to Coinbase")+'</button>';
 var f=document.activeElement&&document.activeElement.id==="bcust";BUY.o.querySelector(".aibody").innerHTML=h;if(f){var i=document.getElementById("bcust");i.focus();i.setSelectionRange(i.value.length,i.value.length)}}
