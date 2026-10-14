@@ -1,6 +1,8 @@
 /** The dashboard page. One file, no outside scripts, fonts or images. */
 import { COIN_ICONS } from "./coin-icons.js";
+import { AI_ICONS } from "./ai-icons.js";
 const COIN_JSON = JSON.stringify(COIN_ICONS).replace(/</g, "\\u003c");
+const AI_ICON_JSON = JSON.stringify(AI_ICONS).replace(/</g, "\\u003c");
 export const PAGE = String.raw`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tollkit Wallet</title>
@@ -134,6 +136,78 @@ input,select{transition:border-color .2s ease,box-shadow .25s ease}input:focus,s
 @keyframes tk-down{0%{background:rgba(255,107,107,.25);color:var(--bad)}100%{background:transparent}}
 .daychg{margin:2px 0 10px}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+.aib{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:14px;background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 6px 24px rgba(var(--glow),.25)}
+.aib:hover{transform:translateY(-1px);box-shadow:0 10px 32px rgba(var(--glow),.38)}
+.aiconn{display:flex;gap:8px;margin-top:14px;align-items:stretch}
+.aich{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surf);border:1px solid var(--line);border-radius:14px;color:var(--tx);font:inherit;cursor:pointer;text-align:left;transition:border-color .15s,transform .2s var(--ease)}
+.aich:hover{border-color:var(--acc);transform:translateY(-1px)}
+.aistk{display:flex;flex:none}.aistk i{width:30px;height:30px;border-radius:50%;background:var(--surf2);border:2px solid var(--surf);display:flex;align-items:center;justify-content:center;margin-left:-8px}.aistk i:first-child{margin-left:0}
+.aistk svg{width:16px;height:16px;margin:0}.ail-claude{color:#d97757}
+.aichn{min-width:0;display:flex;flex-direction:column}.aichn b{font-size:13.5px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.aichn small{font-size:11.5px;color:var(--mut)}
+.aiap{flex:none;display:flex;align-items:center;gap:7px;padding:0 16px;border-radius:14px;background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 6px 24px rgba(var(--glow),.25)}.aiap svg{margin:0}
+.aiap:hover{transform:translateY(-1px);box-shadow:0 10px 32px rgba(var(--glow),.38)}
+.aiwt{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#fff;color:var(--acc2);font-size:11px;display:inline-flex;align-items:center;justify-content:center}
+.aiic{display:inline-flex}.aiic svg{width:16px;height:16px;margin-left:-3px;padding:2px;border-radius:50%;background:rgba(0,0,0,.25)}
+.aio{position:fixed;inset:0;z-index:50;background:rgba(5,6,9,.72);backdrop-filter:blur(6px);display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px 16px;animation:aifade .25s ease}
+.aidlg{position:relative;width:100%;max-width:540px;max-height:90vh;overflow-y:auto;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px 20px 18px;box-shadow:0 30px 90px rgba(0,0,0,.6);animation:tk-rise .5s var(--ease) both}
+.aidlg h2{margin:0 0 4px;font-size:19px;letter-spacing:-.01em}
+.aix{position:absolute;top:10px;right:10px;width:34px;height:34px;border-radius:10px;border:1px solid transparent;background:none;color:var(--mut);font-size:22px;line-height:1;cursor:pointer}.aix:hover{border-color:var(--line);color:var(--tx)}
+.ailead{color:var(--mut);font-size:14px;margin:0 0 14px;line-height:1.5}
+.ailbl{display:block;font-size:12px;font-weight:600;color:var(--mut);margin-bottom:5px}
+.aiin{width:100%;background:var(--surf);border:1px solid var(--line);color:var(--tx);border-radius:11px;padding:11px 12px;font:inherit}
+.aiin:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px rgba(var(--glow),.18)}
+.aismall{font-size:12px;color:var(--mut);margin:6px 0 14px;line-height:1.45}
+.ailist{display:flex;flex-direction:column;gap:8px}
+.airow{background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:11px 12px 8px;animation:tk-rise .5s var(--ease) both;animation-delay:calc(var(--i)*40ms)}
+.airt{display:flex;align-items:center;gap:11px}.airt>svg{width:24px;height:24px;flex:none}
+.ainm{flex:1;min-width:0;display:flex;flex-direction:column}.ainm b{font-size:14.5px}.ainm small{font-size:12px;color:var(--mut)}
+.aiadd{padding:8px 16px;border-radius:10px;font-size:13.5px;text-decoration:none;flex:none}a.aiadd{display:inline-block;background:var(--acc2);color:#fff;font-weight:600}.aiadd[disabled]{opacity:.6;cursor:default}
+.aim{font-size:12.5px;margin:7px 0 0 35px}
+.aihand{background:none;border:0;padding:4px 0 0 35px;color:var(--mut);font:inherit;font-size:12px;cursor:pointer}.aihand:hover{color:var(--tx)}
+.aihb{margin:6px 0 4px 35px}
+.aip{font-size:13px;margin:6px 0}.aisml2{padding:5px 10px;font-size:12.5px;text-decoration:none;display:inline-block}
+.aist{margin:0 0 4px;padding-left:18px;font-size:13px;line-height:1.55}.aist li{margin:5px 0}
+.aidlg code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;color:var(--acc);overflow-wrap:anywhere}
+.kbd{font-family:ui-monospace,monospace;font-size:.85em;background:var(--surf2);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.aicmd{display:flex;gap:8px;align-items:flex-start;background:#08090c;border:1px solid var(--line);border-radius:12px;padding:9px 9px 9px 13px;margin:8px 0}
+.aicmd pre{flex:1;min-width:0;margin:0;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cdd6e4;white-space:pre-wrap;overflow-wrap:anywhere}
+.aicp{padding:6px 11px;font-size:12.5px;border-radius:9px}
+.aigoap{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:14px;background:linear-gradient(135deg,var(--acc),var(--acc2))}.aigoap svg{margin:0}
+.aidone{margin-top:16px;padding-top:13px;border-top:1px solid var(--line);font-size:13px;color:var(--mut);line-height:1.5}.aidone b{color:var(--tx)}
+@keyframes aifade{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.aio,.aidlg,.airow{animation:none}}
+.tc-chat{background:var(--surf);border:1px solid var(--line);border-radius:18px;margin-top:12px;overflow:hidden}
+.tc-chd{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid var(--line)}
+.tc-chn{display:flex;align-items:center;gap:9px;min-width:0}.tc-chn>svg{width:22px;height:22px;flex:none;color:#d97757}.tc-chn b{display:block;font-size:14px}.tc-chn small{display:block;font-size:11.5px;color:var(--mut)}
+.tc-chr{display:flex;align-items:center;gap:6px}.tc-chk{display:flex;align-items:center;gap:4px;color:var(--mut)}
+.tc-chk select{max-width:130px;background:var(--surf2);color:var(--tx);border:1px solid var(--line);border-radius:9px;padding:5px 6px;font:inherit;font-size:12px}
+.tc-chx{width:32px;height:32px;padding:0;border-radius:9px;display:flex;align-items:center;justify-content:center;flex:none;font-size:20px;font-weight:500;line-height:1}.tc-csend svg{margin:0}
+.tc-cbody{position:relative;max-height:min(58vh,520px);min-height:180px;overflow-y:auto;padding:14px 12px 6px;display:flex;flex-direction:column;gap:12px}
+.tc-cm{display:flex;gap:8px}.tc-cm.tc-new{animation:tk-rise .45s var(--ease) both}.tc-cm.tc-you{justify-content:flex-end}
+.tc-cm.tc-you .tc-cb{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border-radius:16px 16px 4px 16px;max-width:82%}
+.tc-cav{width:26px;height:26px;border-radius:50%;background:var(--surf2);display:flex;align-items:center;justify-content:center;flex:none;color:#d97757}.tc-cav svg{width:15px;height:15px}
+.tc-cbw{min-width:0;flex:1;max-width:92%}
+.tc-cb{padding:9px 12px;font-size:14px;line-height:1.5;border-radius:16px 16px 16px 4px;background:var(--card);border:1px solid var(--line);overflow-wrap:anywhere}
+.tc-cm.tc-you .tc-cb{border:0}.tc-cb p{margin:0 0 7px}.tc-cb p:last-child{margin:0}.tc-cb ul{margin:0 0 7px;padding-left:18px}.tc-cb li{margin:2px 0}.tc-cb code{font-family:ui-monospace,monospace;font-size:.9em}
+.tc-cm.tc-err .tc-cb{border-color:rgba(255,107,107,.45);color:var(--bad)}
+.tc-ctag{font-size:11px;color:var(--mut);margin:0 0 4px 2px}
+.tc-ccards{margin-top:8px;display:flex;flex-direction:column;gap:8px}.tc-ccards .row{margin:0;background:var(--card)}
+.tc-cq{display:flex;align-items:center;justify-content:center;gap:5px;font-size:11.5px;color:var(--mut);text-align:center}
+.tc-cempty{padding:22px 12px;text-align:center}.tc-cempty b{font-size:15px}.tc-cempty p{color:var(--mut);font-size:13.5px;line-height:1.5;margin:6px auto 12px;max-width:380px}
+.tc-cchips{display:flex;flex-wrap:wrap;gap:7px;justify-content:center}
+.tc-cchip{border:1px solid var(--line);background:var(--card);color:var(--tx);border-radius:99px;padding:7px 12px;font:inherit;font-size:12.5px;cursor:pointer;transition:border-color .15s,transform .2s var(--ease)}.tc-cchip:hover{border-color:var(--acc);transform:translateY(-1px)}
+.tc-ctyping{display:inline-flex;align-items:center;gap:4px;color:var(--mut);font-size:12.5px}.tc-ctyping span{margin-left:6px}
+.tc-ctyping i{width:6px;height:6px;border-radius:50%;background:var(--mut);animation:cdot 1.2s infinite ease-in-out}.tc-ctyping i:nth-child(2){animation-delay:.15s}.tc-ctyping i:nth-child(3){animation-delay:.3s}
+@keyframes cdot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+.tc-cpw{margin:0 12px 10px;padding:10px 11px;border-radius:12px;background:rgba(245,184,74,.1);border:1px solid rgba(245,184,74,.4)}
+.tc-crow{display:flex;gap:8px;margin-top:8px}.tc-crow input{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:9px 10px;font:inherit}
+.tc-cin{display:flex;gap:8px;align-items:flex-end;padding:10px 12px 12px;border-top:1px solid var(--line)}
+.tc-cin textarea{flex:1;resize:none;background:var(--card);border:1px solid var(--line);color:var(--tx);border-radius:14px;padding:10px 12px;font:inherit;font-size:14px;line-height:1.4;max-height:140px}
+.tc-cin textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px rgba(var(--glow),.18)}
+.tc-csend{width:42px;height:42px;padding:0;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none}.tc-csend[disabled]{opacity:.45;cursor:default}
+.tc-why{font-size:12.5px;color:var(--tx);opacity:.85;margin-top:5px;line-height:1.45}
+.mrule summary{cursor:pointer;color:var(--mut);font-size:13px;margin-top:14px}
+@media (prefers-reduced-motion:reduce){.tc-cm.tc-new{animation:none}.tc-ctyping i{animation:none}}
 </style></head><body>
 <div class="aur" aria-hidden="true"><div class="drift"><i></i><i></i><i></i></div></div>
 <div class="wrap"><div class="card">
@@ -151,6 +225,80 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){retur
 function api(p,body){return fetch("/api"+p,{method:body?"POST":"GET",headers:{"x-tw-token":T,"content-type":"application/json"},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||("HTTP "+r.status));return j})})}
 function short(a){a=String(a||"");return a.length>14?a.slice(0,a.indexOf("0x")===0?6:4)+"…"+a.slice(-4):a}
 var COIN=${COIN_JSON};
+var AIIC=${AI_ICON_JSON},AIO=null,AIPW="",AIMSG={},AIOPEN={},AIBUSY=null;
+function aiSvg(k){var i=AIIC[k];return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor"'+(i.rule?' fill-rule="'+i.rule+'"':'')+' d="'+i.d+'"/></svg>'}
+var AIMETA={claude:["claude","Claude"],"claude-code":["claude","Claude Code"],cursor:["cursor","Cursor"],vscode:["copilot","VS Code"],codex:["terminal","Codex"],gemini:["gemini","Gemini CLI"]};
+function aiBtn(){var on=((S.connect||{}).apps||[]).filter(function(a){return a.added});
+if(!on.length)return '<button class="b aib" onclick="openAI()"><span class="aiic">'+aiSvg("claude")+aiSvg("cursor")+aiSvg("gemini")+'</span>Connect your AI</button>';
+var icons=[],names=[];on.forEach(function(a){var m=AIMETA[a.id];if(!m)return;names.push(m[1]);if(icons.indexOf(m[0])<0)icons.push(m[0])});
+var wait=(S.rules||[]).filter(function(r){return r.status==="proposed"}).length;
+return '<div class="aiconn"><button class="aich" onclick="openAI()" title="Manage connected AI apps"><span class="aistk">'+icons.slice(0,4).map(function(k){return '<i class="ail-'+k+'">'+aiSvg(k)+'</i>'}).join("")+'</span><span class="aichn"><b>'+esc(names.join(" + "))+'</b><small><span class="ok">●</span> Connected</small></span></button>'+
+'<button class="b aiap" onclick="goAuto()"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z" fill="currentColor"/></svg>Autopilot'+(wait?'<span class="aiwt">'+wait+'</span>':'')+'</button></div>'}
+function goAuto(){go("autopilot");setTimeout(function(){var t=document.getElementById("chin");if(t&&!t.disabled)t.focus()},120)}
+function aiCfg(){var c=S.connect||{};return c.launch||{command:"npx",args:["-y","tollkit-wallet","mcp"],env:{TOLLKIT_WALLET_PASSWORD_FILE:c.password_file||""}}}
+function shq(s){s=String(s);if(/^[\w@%+=:,.\/-]+$/.test(s))return s;return (S.connect&&S.connect.windows)?'"'+s.replace(/"/g,'\\"')+'"':"'"+s.replace(/'/g,"'\\''")+"'"}
+function aiEnv(flag){var e=aiCfg().env;return Object.keys(e).map(function(k){return flag+" "+shq(k+"="+e[k])}).join(" ")}
+function aiCmd(){var c=aiCfg();return [c.command].concat(c.args).map(shq).join(" ")}
+function aiJson(key,extra){var c=aiCfg(),o={};o[key]={};o[key]["tollkit-wallet"]=extra?Object.assign({},extra,c):c;return JSON.stringify(o,null,2)}
+function aiCode(id,t){return '<div class="aicmd"><pre id="'+id+'">'+esc(t)+'</pre><button class="b g aicp" data-copy="'+id+'">Copy</button></div>'}
+function b64u(s){try{return btoa(unescape(encodeURIComponent(s)))}catch(e){return btoa(s)}}
+// Steps checked against each app's docs or the app itself on 2026-10-14. Change only with a source.
+var AIAPPS=[
+{id:"claude",name:"Claude",sub:"Desktop app",icon:"claude",hand:function(){return '<ol class="aist"><li>In the menu bar, click <b>Claude → Settings…</b>, open <b>Developer</b> and click <b>Edit Config</b>.</li><li>Put this in the file. If it already has <code>"mcpServers"</code>, add just the <code>"tollkit-wallet"</code> entry:</li></ol>'+aiCode("ai-cd",aiJson("mcpServers"))+'<ol class="aist" start="3"><li>Quit Claude completely and open it again.</li></ol>'}},
+{id:"claude-code",name:"Claude Code",sub:"Terminal",icon:"claude",hand:function(){return '<p class="aip">Paste into your terminal:</p>'+aiCode("ai-cc","claude mcp add "+aiEnv("--env")+" --transport stdio --scope user tollkit-wallet -- "+aiCmd())}},
+{id:"cursor",name:"Cursor",sub:"Code editor",icon:"cursor",hand:function(){var link="cursor://anysphere.cursor-deeplink/mcp/install?name=tollkit-wallet&config="+encodeURIComponent(b64u(JSON.stringify(aiCfg())));return '<p class="aip"><a class="b g aisml2" href="'+esc(link)+'">Open in Cursor</a> or add this to <span class="kbd">~/.cursor/mcp.json</span> and restart Cursor:</p>'+aiCode("ai-cu",aiJson("mcpServers"))}},
+{id:"vscode",name:"VS Code",sub:"With GitHub Copilot",icon:"copilot",hand:function(){return '<p class="aip">Run <b>MCP: Open User Configuration</b> from the Command Palette and add:</p>'+aiCode("ai-vs",aiJson("servers",{type:"stdio"}))}},
+{id:"codex",name:"Codex",sub:"OpenAI’s terminal agent",icon:"terminal",hand:function(){return '<p class="aip">Paste into your terminal:</p>'+aiCode("ai-cx","codex mcp add tollkit-wallet "+aiEnv("--env")+" -- "+aiCmd())}},
+{id:"gemini",name:"Gemini CLI",sub:"Terminal",icon:"gemini",hand:function(){var c=aiCfg();return '<p class="aip">Paste into your terminal:</p>'+aiCode("ai-gm","gemini mcp add -s user "+aiEnv("-e")+" tollkit-wallet "+shq(c.command)+" -- "+c.args.map(shq).join(" "))}}
+];
+function aiSt(id){var a=((S.connect||{}).apps||[]).filter(function(x){return x.id===id})[0];return a||{id:id,found:false,added:false,current:false,how:"file"}}
+function aiRow(x,i){var st=aiSt(x.id),busy=AIBUSY===x.id,m=AIMSG[x.id],line,btn;
+if(st.how==="link"){line='Opens VS Code to finish';btn='<a class="b aiadd" href="'+esc((S.connect||{}).vscode||"#")+'">Add</a>'}
+else if(!st.found){line='Not found on this computer';btn=''}
+else if(st.added&&st.current){line='<span class="ok">'+svgOk()+'Connected</span>';btn='<button class="b g aiadd" data-act="remove" data-id="'+x.id+'"'+(busy?" disabled":"")+'>'+(busy?"…":"Remove")+'</button>'}
+else if(st.added){line='<span class="warn">Needs an update</span>';btn='<button class="b aiadd" data-act="add" data-id="'+x.id+'"'+(busy?" disabled":"")+'>'+(busy?"…":"Update")+'</button>'}
+else{line='Found on this computer';btn='<button class="b aiadd" data-act="add" data-id="'+x.id+'"'+(busy?" disabled":"")+'>'+(busy?"Adding…":"Add")+'</button>'}
+return '<div class="airow" style="--i:'+i+'"><div class="airt">'+aiSvg(x.icon)+'<div class="ainm"><b>'+esc(x.name)+'</b><small>'+line+'</small></div>'+btn+'</div>'+(m?'<div class="aim '+(m[0]?"ok":"bad")+'">'+esc(m[1])+'</div>':'')+'<button class="aihand" data-hand="'+x.id+'">'+(AIOPEN[x.id]?"Hide steps":"Do it by hand")+'</button>'+(AIOPEN[x.id]?'<div class="aihb">'+x.hand()+'</div>':'')+'</div>'}
+function svgOk(){return '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'}
+function aiRender(){if(!AIO)return;var c=S.connect||{},foc=document.activeElement&&document.activeElement.id==="aipw";
+var h='<h2>Connect your AI</h2><p class="ailead">Let Claude, Cursor or another AI app use this wallet. It follows your limits, can’t withdraw or see your keys, and any rules it suggests wait in Autopilot for you.</p>'+
+'<label class="ailbl" for="aipw">Wallet password</label><input id="aipw" class="aiin" type="password" autocomplete="current-password" placeholder="Needed to add an app" value="'+esc(AIPW)+'">'+
+'<p class="aismall">'+(c.ready?'Your AI apps unlock the wallet with a saved copy of this password, readable only by your account on this computer.':'Adding an app saves a copy of this password on this computer, readable only by your account, so the app can unlock the wallet. Anyone who can read it and your wallet folder could spend within your limits.')+'</p>'+
+'<div class="ailist">'+AIAPPS.map(aiRow).join("")+'</div>'+
+(((S.connect||{}).apps||[]).some(function(a){return a.added})?'<button class="b aigoap" onclick="closeAI();goAuto()"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z" fill="currentColor"/></svg>Open Autopilot</button>':'')+'<div class="aidone"><b>Check it worked.</b> Ask your AI: <b>“What’s in my Tollkit wallet?”</b> Other apps: run <code>'+esc(aiCmd())+'</code> with <code>TOLLKIT_WALLET_PASSWORD_FILE</code> set.</div>';
+var sc=AIO.querySelector(".aidlg").scrollTop;AIO.querySelector(".aibody").innerHTML=h;AIO.querySelector(".aidlg").scrollTop=sc;var pw=document.getElementById("aipw");pw.oninput=function(){AIPW=pw.value};if(foc)pw.focus()}
+function openAI(){if(!AIO){AIO=document.createElement("div");AIO.className="aio";AIO.innerHTML='<div class="aidlg" role="dialog" aria-modal="true" aria-label="Connect your AI"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';AIO.addEventListener("mousedown",function(e){if(e.target===AIO)closeAI()});AIO.addEventListener("click",aiClick);document.body.appendChild(AIO)}aiRender();setTimeout(function(){var p=document.getElementById("aipw");if(p&&!AIPW)p.focus()},60)}
+function closeAI(){if(AIO){AIO.remove();AIO=null;AIPW="";AIMSG={}}}
+function aiDo(act,id){if(act!=="remove"&&!AIPW){AIMSG[id]=[0,"Type your wallet password first."];aiRender();document.getElementById("aipw").focus();return}
+AIBUSY=id;AIMSG[id]=null;aiRender();api("/connect",{password:AIPW,action:act,app:id}).then(function(r){AIMSG[id]=[1,r.message];return refresh()}).catch(function(e){AIMSG[id]=[0,e.message]}).then(function(){AIBUSY=null;aiRender()})}
+function aiClick(e){var t=e.target.closest("button,a");if(!t)return;if(t.classList.contains("aix"))closeAI();else if(t.hasAttribute("data-act"))aiDo(t.getAttribute("data-act"),t.getAttribute("data-id"));else if(t.hasAttribute("data-hand")){var k=t.getAttribute("data-hand");AIOPEN[k]=!AIOPEN[k];aiRender()}else if(t.hasAttribute("data-copy")){var el=document.getElementById(t.getAttribute("data-copy")),v=el?el.textContent:"",done=function(){t.textContent="Copied";setTimeout(function(){t.textContent="Copy"},1500)};if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(v).then(done,function(){fallback(v);done()});else{fallback(v);done()}}}
+document.addEventListener("keydown",function(e){if(AIO&&e.key==="Escape")closeAI()});
+var LASTAP=null,CH={seen:null,n:-1,top:null,draft:"",pw:"",err:null,sending:false,manual:false},CHIPS=["Protect my ETH if the price drops hard","Buy SOL on dips, about $20 at a time","Set up a weekly buy I can stick with","How are my rules doing?"];
+function fmtAi(t){var B=/^\s*([-•*]|\d+\.)\s+/,h=esc(t).replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>").replace(/\x60([^\x60]+)\x60/g,"<code>$1</code>");return h.split(/\n{2,}/).map(function(p){var out="",ul=[],tx=[];function fT(){if(tx.length){out+='<p>'+tx.join("<br>")+'</p>';tx=[]}}function fU(){if(ul.length){out+='<ul>'+ul.map(function(l){return '<li>'+l+'</li>'}).join("")+'</ul>';ul=[]}}p.split("\n").forEach(function(l){if(B.test(l)){fT();ul.push(l.replace(B,""))}else{fU();tx.push(l)}});fT();fU();return out}).join("")}
+function tm(ts){var d=new Date(ts);return d.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+(Date.now()-d>864e5?" · "+d.toLocaleDateString([],{month:"short",day:"numeric"}):"")}
+function aiName(){var A=S.ai||{};return A.provider?A.provider.name:"AI"}
+function ckey(m){return m.role==="you"?"y:"+m.text:(m.id||m.ts)}
+function chatMsg(m){var nw=CH.seen&&!CH.seen[ckey(m)]?" tc-new":"";if(m.role==="you")return '<div class="tc-cm tc-you'+nw+'"><div class="tc-cb">'+esc(m.text).replace(/\n/g,"<br>")+'</div></div>';
+if(m.checkin&&m.quiet&&!m.error)return '<div class="tc-cq">'+svgClock()+'Check-in '+tm(m.ts)+' · '+esc(m.text.replace(/^No changes[.:,]?\s*/i,"No changes. "))+'</div>';
+var cards=(m.rules||[]).map(function(id){var r=(S.rules||[]).filter(function(x){return x.id===id})[0];return r?ruleCard(r):""}).join("");
+return '<div class="tc-cm tc-ai'+nw+(m.error?" tc-err":"")+'"><div class="tc-cav">'+aiSvg("claude")+'</div><div class="tc-cbw">'+(m.checkin?'<div class="tc-ctag">Check-in · '+tm(m.ts)+'</div>':'')+'<div class="tc-cb">'+fmtAi(m.text)+'</div>'+(cards?'<div class="tc-ccards">'+cards+'</div>':'')+'</div></div>'}
+function svgClock(){return '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'}
+function chatBox(){var A=S.ai;if(!A)return "";var M=A.messages||[],busy=A.busy||CH.sending;
+var head='<div class="tc-chd"><div class="tc-chn">'+aiSvg("claude")+'<div><b>'+esc(aiName())+'</b><small>'+(busy?'<span class="ok">Working…</span>':A.provider?'Your Claude, on this computer':'Not set up')+'</small></div></div>'+
+'<div class="tc-chr"><label class="tc-chk" title="Let the AI review your rules on a schedule">'+svgClock()+'<select onchange="setCheckin(this.value)">'+[[0,"Check-ins off"],[1,"Every hour"],[4,"Every 4 hours"],[12,"Every 12 hours"],[24,"Daily"]].map(function(o){return '<option value="'+o[0]+'"'+(A.checkin.every_hours===o[0]?" selected":"")+'>'+o[1]+'</option>'}).join("")+'</select></label>'+(M.length?'<button class="b g tc-chx" onclick="newChat()" title="New chat" aria-label="New chat">+</button>':'')+'</div></div>';
+if(!A.provider)return '<div class="tc-chat">'+head+'<div class="tc-cempty"><b>Chat with your AI here</b><p>Install <b>Claude Code</b> on this computer and sign in once (run <code>claude</code> in Terminal). Then reopen this page. It uses your own Claude plan; the wallet never sees your Claude login.</p></div></div>';
+var body=M.length?M.map(chatMsg).join(""):'<div class="tc-cempty"><b>What do you want your autopilot to do?</b><p>Say it in your own words. '+esc(aiName())+' checks prices and your balances, then suggests rules you can turn on with one tap.</p><div class="tc-cchips">'+CHIPS.map(function(c,i){return '<button class="tc-cchip" onclick="chatSend(CHIPS['+i+'])">'+esc(c)+'</button>'}).join("")+'</div></div>';
+if(busy)body+='<div class="tc-cm tc-ai"><div class="tc-cav">'+aiSvg("claude")+'</div><div class="tc-cbw"><div class="tc-cb tc-ctyping"><i></i><i></i><i></i><span>'+(A.busy&&A.busy.kind==="checkin"?"Checking in on your rules…":"Looking at prices and your wallet…")+'</span></div></div></div>';
+var pw=!A.ready?'<div class="tc-cpw"><div class="sm">One time: your wallet password lets '+esc(aiName())+' read your balances. It’s saved on this computer, readable only by your account.</div><div class="tc-crow"><input id="chpw" type="password" placeholder="Wallet password" value="'+esc(CH.pw)+'" oninput="CH.pw=this.value"><button class="b" onclick="chatPw()">Save</button></div></div>':"";
+var inp='<div class="tc-cin"><textarea id="chin" rows="1" placeholder="Message '+esc(aiName())+'…" oninput="CH.draft=this.value;grow(this)" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();chatSend()}"'+(A.ready?"":" disabled")+'>'+esc(CH.draft)+'</textarea><button class="b tc-csend" onclick="chatSend()"'+(busy||!A.ready?" disabled":"")+' aria-label="Send"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>';
+return '<div class="tc-chat">'+head+'<div class="tc-cbody" id="cbody">'+body+'</div>'+(CH.err?'<div class="msg tc-err" style="margin:0 12px 10px">'+esc(CH.err)+'</div>':'')+pw+inp+'</div>'}
+function grow(t){t.style.height="auto";t.style.height=Math.min(140,t.scrollHeight)+"px"}
+function chatAfter(){var b=document.getElementById("cbody");if(!b)return;CH.seen=CH.seen||{};((S.ai||{}).messages||[]).forEach(function(m){CH.seen[ckey(m)]=1});var n=((S.ai||{}).messages||[]).length+((S.ai||{}).busy||CH.sending?1:0);if(n!==CH.n||CH.top===null){var ms=b.querySelectorAll(".tc-cm"),last=ms[ms.length-1];b.style.scrollBehavior="auto";b.scrollTop=last&&last.offsetHeight>b.clientHeight-16?last.offsetTop-8:b.scrollHeight;b.style.scrollBehavior=""}else b.scrollTop=CH.top;CH.n=n;b.onscroll=function(){CH.top=b.scrollTop};var t=document.getElementById("chin");if(t){grow(t);if(CH.refocus!==undefined&&CH.refocus!==null){t.focus();try{t.setSelectionRange(CH.refocus,CH.refocus)}catch(e){}CH.refocus=null}}}
+function chatSend(text){var t=(text!==undefined?text:CH.draft).trim();if(!t||CH.sending)return;CH.sending=true;CH.err=null;if(text===undefined)CH.draft="";S.ai.messages=(S.ai.messages||[]).concat([{role:"you",text:t,ts:new Date().toISOString()}]);render();
+api("/ai/chat",{text:t}).then(function(){return refresh()}).catch(function(e){CH.err=e.message;if(text===undefined)CH.draft=t}).then(function(){CH.sending=false;render()})}
+function chatPw(){api("/ai/password",{password:CH.pw}).then(function(){CH.pw="";CH.err=null;return refresh()}).catch(function(e){CH.err=e.message;render()})}
+function setCheckin(h){api("/ai/checkin",{hours:Number(h)}).then(function(){flash=[1,Number(h)?"Check-ins on. "+aiName()+" will review your rules and suggest changes for you to approve.":"Check-ins off."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
+function newChat(){api("/ai/new",{}).then(function(){CH.n=-1;CH.top=null;refresh()}).catch(function(e){flash=[0,e.message];render()})}
 function tokIcon(sym,chain){var k=String(sym||"").toUpperCase();if(k==="WETH")k="ETH";var svg=COIN.coin[k];return '<div class="ic tok">'+(svg||esc(k.slice(0,3)))+(chain&&COIN.chain[chain]?'<span class="cb">'+COIN.chain[chain]+'</span>':"")+'</div>'}
 function chainIcon(chain,extra){return '<div class="ic tok">'+(COIN.chain[chain]||esc(String(chain||"?")[0].toUpperCase()))+(extra&&COIN.chain[extra]?'<span class="cb">'+COIN.chain[extra]+'</span>':"")+'</div>'}
 function kindIcon(e){var m=/^[\d.,]+ ([A-Za-z]+)/.exec(e.detail||"");if(e.kind!=="payment"&&m)return tokIcon(m[1],e.chain);return '<div class="ic tok"><span class="glyph">'+(e.kind==="payment"?"P":e.kind==="trade"?"S":"W")+'</span>'+(COIN.chain[e.chain]?'<span class="cb">'+COIN.chain[e.chain]+'</span>':"")+'</div>'}
@@ -164,17 +312,20 @@ function stLabel(s){return {proposed:"Waiting for you",active:"On",paused:"Pause
 function away(r){var p=r.state&&r.state.last_price;if(!p)return "";var t=r.kind==="trailing_stop"&&r.state.high?r.state.high*(1-r.trail_pct/100):r.trigger_price;if(!t)return " · now "+fmtUsd(p);var d=(p-t)/p*100;return " · now "+fmtUsd(p)+", trigger "+fmtUsd(t)+" ("+Math.abs(d).toFixed(1)+"% "+(d>0?"above":"below")+")"}
 function ruleCard(r){var fills=(r.state&&r.state.fills||[]).filter(function(f){return f.ok});var last=fills[fills.length-1];var btn=function(id,st,lbl,cls){return '<button class="b '+cls+'" style="padding:7px 11px;font-size:12px" onclick="setRule(\''+id+'\',\''+st+'\')">'+lbl+'</button>'};
 var acts=r.status==="proposed"?btn(r.id,"active","Turn on","ok")+btn(r.id,"cancelled","Dismiss","no"):r.status==="active"?btn(r.id,"paused","Pause","g")+btn(r.id,"cancelled","Cancel","no"):(r.status==="paused"||r.status==="error")?btn(r.id,"active","Turn on","ok")+btn(r.id,"cancelled","Cancel","no"):"";
-return '<div class="row rule-'+r.status+'" style="display:block"><div style="display:flex;gap:10px;align-items:center">'+tokIcon(r.token,r.chain)+'<div style="min-width:0"><div>'+esc(r.description)+'</div><div class="sm mut">'+esc(stLabel(r.status))+(r.created_by==="agent"?" · from agent":"")+(r.group&&(S.rules||[]).filter(function(x){return x.group===r.group&&x.id!==r.id}).length?" · linked: when one fills, the other cancels":"")+(r.status==="active"?esc(away(r)):"")+(fills.length?" · "+fills.length+" fill"+(fills.length>1?"s":""):"")+(last&&last.tx&&EXP[r.chain]&&!last.paper?' · <a target="_blank" rel="noopener" href="'+EXP[r.chain]+esc(last.tx)+'">last tx</a>':"")+'</div>'+(r.state&&r.state.last_error&&r.status!=="done"?'<div class="sm warn">'+esc(r.state.last_error)+'</div>':"")+'</div></div>'+(acts?'<div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end">'+acts+'</div>':"")+'</div>'}
-function autopilot(){var R=S.rules||[],A=S.autopilot||{};var st=A.here?'<span class="ok">● Running here</span> · checks prices every 15s':A.running?'<span class="ok">● Running</span> in another window ('+esc(A.mode||"live")+')':'<span class="warn">● Not running</span>';
-var prop=R.filter(function(r){return r.status==="proposed"}),act=R.filter(function(r){return r.status==="active"||r.status==="paused"||r.status==="error"}),hist=R.filter(function(r){return ["done","cancelled","expired"].indexOf(r.status)>=0}).slice(0,15);
+return '<div class="row rule-'+r.status+'" style="display:block"><div style="display:flex;gap:10px;align-items:center">'+tokIcon(r.token,r.chain)+'<div style="min-width:0"><div>'+esc(r.description)+'</div><div class="sm mut">'+esc(stLabel(r.status))+(r.created_by==="agent"?" · suggested by AI":"")+(r.group&&(S.rules||[]).filter(function(x){return x.group===r.group&&x.id!==r.id}).length?" · linked: when one fills, the other cancels":"")+(r.status==="active"?esc(away(r)):"")+(fills.length?" · "+fills.length+" fill"+(fills.length>1?"s":""):"")+(last&&last.tx&&EXP[r.chain]&&!last.paper?' · <a target="_blank" rel="noopener" href="'+EXP[r.chain]+esc(last.tx)+'">last tx</a>':"")+'</div>'+(r.state&&r.state.last_error&&r.status!=="done"?'<div class="sm warn">'+esc(r.state.last_error)+'</div>':"")+(r.reason?'<div class="tc-why">'+esc(r.reason)+'</div>':"")+(r.replaces?'<div class="sm mut">Replaces: '+esc(((S.rules||[]).filter(function(x){return x.id===r.replaces})[0]||{description:r.replaces}).description)+'</div>':"")+(r.state&&r.state.note?'<div class="sm mut">'+esc(r.state.note)+'</div>':"")+'</div></div>'+(acts?'<div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end">'+acts+'</div>':"")+'</div>'}
+function autopilot(){var R=S.rules||[],A=S.autopilot||{};var st=A.here?'<span class="ok">● Autopilot on</span> · checks prices every 15s':A.running?'<span class="ok">● Autopilot on</span> in another window ('+esc(A.mode||"live")+')':'<span class="warn">● Autopilot not running</span>';
+var inChat={};((S.ai||{}).messages||[]).forEach(function(m){(m.rules||[]).forEach(function(id){inChat[id]=1})});
+var prop=R.filter(function(r){return r.status==="proposed"&&!inChat[r.id]}),act=R.filter(function(r){return r.status==="active"||r.status==="paused"||r.status==="error"}),hist=R.filter(function(r){return ["done","cancelled","expired"].indexOf(r.status)>=0}).slice(0,15);
 var pv=PV?'<div class="ap" style="margin-top:10px"><div class="sm mut" style="margin-bottom:6px">Preview: nothing runs until you turn it on</div>'+(PV.rules.length?PV.rules.map(function(r){return '<div style="margin:4px 0">• '+esc(r.description)+(r.problem?' <span class="bad sm">('+esc(r.problem)+')</span>':"")+'</div>'}).join(""):'<div class="bad">No rules understood.</div>')+(PV.unparsed.length?'<div class="sm warn" style="margin-top:6px">Not understood: '+esc(PV.unparsed.join(" · "))+'</div>':"")+'<div class="btns"><button class="b g" onclick="PV=null;render()">Discard</button><button class="b ok"'+(PV.rules.length&&!PV.rules.some(function(r){return r.problem})?"":" disabled")+' onclick="addRules()">Turn on</button></div></div>':"";
-return '<h3>Autopilot</h3><div class="sm">'+st+'</div><div class="sm mut" style="margin-top:4px">Every fill follows your limits and approvals and is charged the same 0.5% fee as any swap. '+(A.agent_rules==="auto"?"Agents can turn rules on without asking you.":"Rules an agent suggests wait here for you.")+'</div>'+
-'<h3>New strategy</h3><textarea id="stxt" rows="3" placeholder="e.g. Buy $25 of SOL every Monday. Sell half my ETH if it rises 10% and all if it falls 8%." style="width:100%;background:var(--surf);border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font:inherit;resize:vertical"></textarea>'+
-'<div class="toggles" style="margin-top:6px">'+TEMPL.map(function(t,i){return '<button class="chip" style="border:0;cursor:pointer" onclick="document.getElementById(\'stxt\').value=TEMPL['+i+']">'+esc(t)+'</button>'}).join("")+'</div>'+
-'<div style="margin-top:10px"><button class="b" onclick="preview()">Preview</button></div>'+pv+msg()+
+var manualOpen=CH.manual||!S.ai||!(S.ai||{}).provider;
+return '<div class="sm">'+st+'</div><div class="sm mut" style="margin-top:3px">Every fill follows your limits and approvals, with the same 0.5% fee as any swap.</div>'+msg()+
+chatBox()+
 (prop.length?'<h3>Waiting for you</h3>'+prop.map(ruleCard).join(""):"")+
-'<h3>Rules</h3>'+(act.length?act.map(ruleCard).join(""):'<div class="mut sm">No rules on yet.</div>')+
-(hist.length?'<h3>History</h3>'+hist.map(ruleCard).join(""):"")}
+'<h3>Your rules</h3>'+(act.length?act.map(ruleCard).join(""):'<div class="mut sm">No rules on yet.</div>')+
+(hist.length?'<h3>History</h3>'+hist.map(ruleCard).join(""):"")+
+'<details class="mrule"'+(manualOpen?" open":"")+' ontoggle="CH.manual=this.open"><summary>Write a rule yourself</summary><textarea id="stxt" rows="3" placeholder="e.g. Buy $25 of SOL every Monday. Sell half my ETH if it rises 10% and all if it falls 8%." style="width:100%;margin-top:8px;background:var(--surf);border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font:inherit;resize:vertical"></textarea>'+
+'<div class="toggles" style="margin-top:6px">'+TEMPL.map(function(t,i){return '<button class="chip" style="border:0;cursor:pointer" onclick="document.getElementById(\'stxt\').value=TEMPL['+i+']">'+esc(t)+'</button>'}).join("")+'</div>'+
+'<div style="margin-top:10px"><button class="b" onclick="preview()">Preview</button></div>'+pv+'</details>'}
 function preview(){var t=document.getElementById("stxt").value;api("/rules/preview",{text:t}).then(function(r){PV=r;flash=null;render()}).catch(function(e){flash=[0,e.message];render()})}
 function addRules(){var rules=PV.rules.map(function(r){var o={};for(var k in r)if(k!=="description"&&k!=="problem")o[k]=r[k];return o});api("/rules",{rules:rules}).then(function(){PV=null;flash=[1,"Turned on. The autopilot is watching prices."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
 function setRule(id,st){api("/rules/status",{id:id,status:st}).then(function(){flash=[1,st==="active"?"Turned on.":st==="paused"?"Paused.":"Cancelled."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
@@ -196,6 +347,8 @@ function cpBtn(a){return '<button class="cp" title="Copy full address" onclick="
 function cp(btn,a){var done=function(){btn.classList.add("done");btn.innerHTML=CPI+"Copied";setTimeout(function(){btn.classList.remove("done");btn.innerHTML=CPI+"Copy"},1500)};
 if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(a).then(done,function(){fallback(a);done()});else{fallback(a);done()}}
 function fallback(a){var t=document.createElement("textarea");t.value=a;t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();try{document.execCommand("copy")}catch(e){}t.remove()}
+function shortWhy(r){r=String(r);var m=/reverted: "([^"]+)"/.exec(r);if(m)r="Transaction would fail: "+m[1];r=r.split(" (action=")[0];return r.length>140?r.slice(0,137)+"…":r}
+function rowUsd(e){if(Number(e.usd)>0)return usd(e.usd);var m=/^([\d.]+) ([A-Za-z]+)/.exec(e.detail||""),p=m&&priceOf(m[2]==="WETH"?"ETH":m[2]);return p&&p.usd?'<span title="at today\'s price">≈'+usd(Number(m[1])*p.usd)+'</span>':usd(e.usd)}
 function usd(n){n=Number(n)||0;return "$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:n<1&&n>0?4:2})}
 function ago(ts){var s=(Date.now()-Date.parse(ts))/1000;if(s<60)return "just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";return new Date(ts).toLocaleDateString()}
 var ICONS={autopilot:'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',activity:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',approvals:'<path d="M5 13l4 4L19 7"/>',limits:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',withdraw:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>'};
@@ -208,7 +361,7 @@ var n=S?S.pending.length:0;if(n!==lastBadge){lastBadge=n;var ab=el.querySelector
 function go(k){if(k===tab&&!flash)return;tab=k;flash=null;render(true)}
 function msg(){return flash?'<div class="msg '+(flash[0]?"okk":"err")+'">'+esc(flash[1])+'</div>':""}
 function render(enter){nav();if(!S)return;var a=S.approvals||"none";var ap=document.getElementById("appr");ap.classList.toggle("live",a!=="none"||!!S.live);ap.textContent=(S.live?"Live":"")+(S.live?" · ":"")+(a==="none"?"Approvals off":"Approvals on");ap.title=a==="none"?"Set up Telegram or keep this page open":"Answered via "+a.replace("+"," and ");var m=document.getElementById("main");
-if(tab==="home")m.innerHTML=home();else if(tab==="activity")m.innerHTML=activity();else if(tab==="approvals")m.innerHTML=approvals();else if(tab==="limits")m.innerHTML=limits();else if(tab==="autopilot")m.innerHTML=autopilot();else{m.innerHTML=withdraw();tokOpts()}
+if(tab!=="autopilot")LASTAP=null;var prevTab=m.dataset.tab;m.dataset.tab=tab;if(tab==="home")m.innerHTML=home();else if(tab==="activity")m.innerHTML=activity();else if(tab==="approvals")m.innerHTML=approvals();else if(tab==="limits")m.innerHTML=limits();else if(tab==="autopilot"){var h=autopilot();if(!enter&&h===LASTAP&&prevTab==="autopilot"){chatAfter();return}m.innerHTML=h;LASTAP=h;chatAfter()}else{m.innerHTML=withdraw();tokOpts()}
 after(m,enter)}
 var shown=null;
 function after(m,enter){m.querySelectorAll(".row,.ap").forEach(function(r){r.classList.add("spot")});
@@ -226,11 +379,11 @@ rows+='<div class="row">'+tokIcon(t.token,c)+'<div style="min-width:0"><div clas
 var p=S.policy,sp=S.spent_today;function lim(lbl,used,max){return '<div class="row" style="display:block"><div style="display:flex"><span>'+lbl+'</span><span class="r mut">'+usd(used)+' of '+usd(max)+'</span></div><div class="bar"><i data-w="'+Math.min(100,used/max*100).toFixed(2)+'"></i></div></div>'}
 var chgPct=tot-chg>0?chg/(tot-chg):0;
 return '<div class="mut sm">Total balance</div><div class="big">'+(BL?'<span id="tot" data-v="'+tot+'">'+fmtUsd(shown===null?0:shown)+'</span>':'<span class="skel"></span>')+'</div><div class="sm daychg">'+(BL&&S.prices&&S.prices.at?'<span class="'+(chg>=0?"ok":"bad")+'">'+(Math.abs(chg)<0.01?(chg>=0?"+":"−")+"$0.00":(chg>=0?"+":"−")+fmtUsd(Math.abs(chg)))+' ('+(chg>=0?"+":"")+(chgPct*100).toFixed(2)+'%)</span><span class="mut"> today</span>':'<span class="mut">Prices loading…</span>')+'</div>'+
-liveSection()+'<h3>Today</h3>'+lim("Trades",sp.trades_usd,p.daily_trades_usd)+lim("Payments",sp.payments_usd,p.daily_payments_usd)+
+aiBtn()+liveSection()+'<h3>Today</h3>'+lim("Trades",sp.trades_usd,p.daily_trades_usd)+lim("Payments",sp.payments_usd,p.daily_payments_usd)+
 '<h3>Balances</h3>'+(rows||'<div class="mut">Loading…</div>')+
 '<h3>Deposit addresses</h3><div class="row">'+chainIcon("base","ethereum")+'<div><div class="sm mut">Base / Ethereum</div><div class="addr" title="'+esc(S.addresses.evm)+'">'+esc(short(S.addresses.evm))+'</div></div>'+cpBtn(S.addresses.evm)+'</div><div class="row">'+chainIcon("solana")+'<div><div class="sm mut">Solana</div><div class="addr" title="'+esc(S.addresses.solana)+'">'+esc(short(S.addresses.solana))+'</div></div>'+cpBtn(S.addresses.solana)+'</div>'}
 function activity(){var r=S.receipts;if(!r.length)return '<div class="empty">No trades or payments yet.</div>';return '<div style="display:flex;align-items:center"><h3 style="margin:0">Activity</h3><a class="sm" style="margin-left:auto" href="/api/receipts.csv?t='+T+'">Export CSV</a></div>'+r.map(function(e){var name=e.kind==="trade"?"Swap":e.kind==="payment"?"Payment":"Withdrawal";var st=e.status==="done"?"":(e.status==="failed"?' <span class="chip bad">failed</span>':' <span class="chip warn">pending</span>');var link=(e.tx&&EXP[e.chain]?' · <a target="_blank" rel="noopener" href="'+EXP[e.chain]+esc(e.tx)+'">tx</a>':"")+confChip(liveFor(e.tx));
-return '<div class="row">'+kindIcon(e)+'<div style="min-width:0"><div>'+name+st+'</div><div class="sm mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">'+esc(e.kind==="payment"?e.seller:(e.detail||""))+'</div><div class="sm mut">'+esc(e.chain||"")+' · '+ago(e.ts)+link+(e.reason?'<div class="sm bad">'+esc(e.reason)+'</div>':"")+'</div></div><div class="r">'+usd(e.usd)+(e.fee_usd?'<div class="sm mut">fee '+usd(e.fee_usd)+'</div>':"")+'</div></div>'}).join("")}
+return '<div class="row">'+kindIcon(e)+'<div style="min-width:0"><div>'+name+st+'</div><div class="sm mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">'+esc(e.kind==="payment"?e.seller:(e.detail||""))+'</div><div class="sm mut">'+esc(e.chain||"")+' · '+ago(e.ts)+link+(e.reason?'<div class="sm bad" style="overflow-wrap:anywhere" title="'+esc(e.reason)+'">'+esc(shortWhy(e.reason))+'</div>':"")+'</div></div><div class="r">'+rowUsd(e)+(e.fee_usd?'<div class="sm mut">fee '+usd(e.fee_usd)+'</div>':"")+'</div></div>'}).join("")}
 function approvals(){var p=S.pending;var head='<h3>Waiting for you</h3>';if(!p.length)return head+'<div class="empty">Nothing to approve.<div class="sm" style="margin-top:6px">Trades over '+usd(S.policy.approval_above_usd)+' show up here and in Telegram while this page is open.</div></div>'+msg();
 return head+p.map(function(x){return '<div class="ap">'+esc(x.text)+'<div class="sm mut" style="margin-top:6px">Expires '+new Date(x.expires).toLocaleTimeString()+'</div><div class="btns"><button class="b no" onclick="ans(\''+x.id+'\',\'denied\')">Deny</button><button class="b ok" onclick="ans(\''+x.id+'\',\'approved\')">Approve</button></div></div>'}).join("")+msg()}
 function ans(id,d){api("/approve",{id:id,decision:d}).then(function(){flash=[1,d==="approved"?"Approved.":"Denied."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
@@ -253,7 +406,7 @@ function addAddr(){api("/addresses",{password:document.getElementById("pw3").val
 function rmAddr(c,a){var pw=prompt("Password to remove this address:");if(!pw)return;api("/addresses",{password:pw,action:"remove",chain:c,address:a}).then(function(){flash=[1,"Removed."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
 function prepW(){var a=S.policy.withdraw_addresses[Number(document.getElementById("w_to").value)];conf={chain:a.chain,to:a.address,token:document.getElementById("w_tok").value,amount:document.getElementById("w_amt").value.trim(),pw:document.getElementById("pw2").value};if(!conf.amount||!conf.pw){flash=[0,"Enter an amount and your password."];conf=null}render();if(conf){var s=document.getElementById("w_to");s.value=String(S.policy.withdraw_addresses.indexOf(a));tokOpts();document.getElementById("w_tok").value=conf.token;document.getElementById("w_amt").value=conf.amount;document.getElementById("pw2").value=conf.pw}}
 function doW(){var c=conf;conf=null;flash=[1,"Sending…"];render();api("/withdraw",{password:c.pw,chain:c.chain,token:c.token,to:c.to,amount:c.amount}).then(function(r){flash=r.ok?[1,"Sent. Transaction "+r.tx]:[0,r.refused.reason];refresh();loadBal()}).catch(function(e){flash=[0,e.message];render()})}
-function busy(){var el=document.activeElement;return el&&(el.tagName==="INPUT"||el.tagName==="SELECT"||el.tagName==="TEXTAREA")||conf}
+function busy(){var el=document.activeElement;if(el&&el.id==="chin"){CH.refocus=el.selectionStart;return !!conf}return el&&(el.tagName==="INPUT"||el.tagName==="SELECT"||el.tagName==="TEXTAREA")||conf}
 var lastS="";
 function refresh(){return api("/state").then(function(s){var j=JSON.stringify(s);var first=!S;S=s;if(j===lastS)return;lastS=j;notifyLive();if(!busy())render(first);else nav()}).catch(function(e){document.getElementById("main").innerHTML='<div class="empty bad">'+esc(e.message)+'<div class="sm mut">Is <code>tollkit-wallet ui</code> still running?</div></div>'})}
 function loadBal(){B=null;if(tab==="home")render();api("/balances").then(function(b){B=b;if(tab==="home"&&!busy())render()})}

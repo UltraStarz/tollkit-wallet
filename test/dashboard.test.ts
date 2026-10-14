@@ -1,5 +1,5 @@
 /** Dashboard server: access control, state, approvals end-to-end, password-gated changes. Local only; fake quotes. */
-import { mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { request } from "node:http";
@@ -14,6 +14,7 @@ const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console
 const PW = "correct horse battery";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", WETH = "0x4200000000000000000000000000000000000006";
 const dir = mkdtempSync(path.join(os.tmpdir(), "twd-"));
+process.env.HOME = mkdtempSync(path.join(os.tmpdir(), "twd-home-")); // AI-app settings checks and removes stay in a scratch home
 await createKeystore(PW, { dir, scrypt: { N: 1 << 10, r: 8, p: 1 } });
 const quotes = (async (u: string) => { const url = new URL(u); const sell = url.searchParams.get("sellAmount")!;
   return Response.json({ sellAmount: sell, buyAmount: "1", minBuyAmount: "1", fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: "0x1", value: "0" } }); }) as unknown as typeof fetch;
@@ -82,6 +83,18 @@ check((await j("/api/rules", { method: "POST", body: { rules: [{ kind: "stop_los
 check((await raw("/api/rules", { method: "POST", token: null, body: { rules: [rule] } })).status === 401, "rules need the dashboard token");
 const csv = await raw(`/api/receipts.csv?t=${tok}`, { token: null });
 check(csv.status === 200 && csv.body.includes("0xswap"), "CSV export");
+// "Connect your AI": the page gets the password-file path and whether it exists, never the password
+const c1 = (await j("/api/state")).connect;
+check(c1 && c1.ready === false && c1.password_file === path.join(dir, "password") && c1.launch?.env?.TOLLKIT_WALLET_HOME === dir && c1.launch.args.at(-1) === "mcp" && c1.apps.length === 6, "connect: launch config, app list, not ready yet", c1);
+writeFileSync(path.join(dir, "password"), PW, { mode: 0o600 });
+const c2 = (await j("/api/state")).connect;
+check(c2.ready === true && !JSON.stringify(c2).includes(PW), "connect: ready once the file exists; password never sent to the page", c2);
+const page = await raw(`/?t=${tok}`, { token: null });
+check(page.body.includes("Connect your AI") && page.body.includes("cursor://anysphere.cursor-deeplink/mcp/install") && page.body.includes("Do it by hand"), "page has the Connect your AI picker");
+const noPw = await raw("/api/connect", { method: "POST", body: { app: "cursor", action: "add", password: "nope" } });
+check(noPw.status === 403, "connect: adding an app needs the wallet password");
+const rm = await raw("/api/connect", { method: "POST", body: { app: "cursor", action: "remove" } });
+check(rm.status !== 403, "connect: removing an app doesn't need the password", rm.status);
 await d.close();
 console.log(`\ndashboard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

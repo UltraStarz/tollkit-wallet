@@ -19,6 +19,10 @@ import { Autopilot } from "./autopilot.js";
 import { RuleInput, describeRule, ruleProblem } from "./rules.js";
 import { parseStrategy } from "./parse.js";
 import type { Chain } from "./chains.js";
+import { existsSync } from "node:fs";
+import { passwordFile } from "./paths.js";
+import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLink, type AppId } from "./connect.js";
+import { AiAssistant } from "./ai.js";
 
 const CHAINS = ["base", "ethereum", "solana"];
 
@@ -41,7 +45,7 @@ const send = (res: ServerResponse, code: number, body: unknown, type = "applicat
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 };
 
-export async function startDashboard(w: TollkitWallet, password: string, o: { port?: number; host?: string; watch?: boolean; autopilot?: boolean } = {}): Promise<DashboardHandle> {
+export async function startDashboard(w: TollkitWallet, password: string, o: { port?: number; host?: string; watch?: boolean; autopilot?: boolean; connectApps?: boolean; ai?: AiAssistant | false } = {}): Promise<DashboardHandle> {
   const watcher = o.watch === false ? null : new Watcher(w);
   watcher?.start();
   const prices = o.watch === false ? null : new PriceFeed();
@@ -49,6 +53,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // The autopilot runs while the dashboard is open (live money; paper mode is `tollkit-wallet autopilot --paper`).
   const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir }) : null;
   autopilot?.start();
+  // The Autopilot tab's AI chat and scheduled check-ins (runs while the dashboard is open).
+  const ai = o.ai === false ? null : o.ai ?? new AiAssistant(w, { dir: w.dir });
+  const aiTimer = ai ? setInterval(() => void ai.tick().catch(() => {}), 60_000) : null;
   const priceOf = (t: string) => prices?.snapshot().prices[t.toUpperCase()]?.usd;
   const token = randomBytes(24).toString("hex");
   const host = o.host ?? "127.0.0.1";
@@ -77,7 +84,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           live: watcher ? { events: watcher.events(), balances: watcher.balances(), heads: watcher.heads() } : null,
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
-          autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules } });
+          autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
+          connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir) },
+          ai: ai ? ai.view() : null });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
       if (req.method === "GET" && p === "/api/receipts.csv") {
@@ -113,6 +122,23 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         void autopilot?.tick();
         return send(res, 200, { rule: { ...r, description: describeRule(r) } });
       }
+      // Removing an AI app only takes access away, so it doesn't need the password.
+      if (p === "/api/connect" && b.action === "remove") {
+        const app = String(b.app ?? "") as AppId;
+        if (!["claude", "claude-code", "cursor", "codex", "gemini"].includes(app)) return send(res, 400, { error: "Unknown app." });
+        if (o.connectApps === false) return send(res, 400, { error: "Turned off here." });
+        return send(res, 200, { message: await removeApp(app) });
+      }
+      // AI chat: messages only lead to suggested rules, which the owner turns on.
+      if (p === "/api/ai/chat") {
+        if (!ai) return send(res, 400, { error: "AI chat is off here." });
+        const text = String(b.text ?? "").slice(0, 4000), bad = ai.precheck(text);
+        if (bad) return send(res, 400, { error: bad.message, code: bad.code });
+        void ai.send(text).catch(() => {});
+        return send(res, 200, { ok: true });
+      }
+      if (p === "/api/ai/checkin") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); ai.setCheckin(Number(b.hours)); return send(res, 200, { ok: true }); }
+      if (p === "/api/ai/new") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); if (ai.busy) return send(res, 409, { error: "Wait for the AI to finish." }); ai.newChat(); return send(res, 200, { ok: true }); }
       // Everything below changes money rules or moves funds: password again, every time.
       if (typeof b.password !== "string" || b.password !== password) return send(res, 403, { error: "Wrong password." });
       if (p === "/api/policy") {
@@ -125,6 +151,15 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!CHAINS.includes(chain)) return send(res, 400, { error: "Pick a chain." });
         const pol = b.action === "remove" ? w.removeWithdrawAddress(password, chain, String(b.address ?? "")) : await w.saveWithdrawAddress(password, chain, String(b.address ?? ""), String(b.label ?? ""));
         return send(res, 200, { withdraw_addresses: pol.withdraw_addresses });
+      }
+      if (p === "/api/ai/password") { savePasswordFile(password, w.dir); return send(res, 200, { ok: true }); }
+      // Connect your AI: writes the AI app's own settings (and the password file) on this computer.
+      if (p === "/api/connect") {
+        const app = String(b.app ?? "") as AppId;
+        if (!["claude", "claude-code", "cursor", "codex", "gemini"].includes(app)) return send(res, 400, { error: "Unknown app." });
+        if (o.connectApps === false) return send(res, 400, { error: "Turned off here." });
+        if (!existsSync(passwordFile(w.dir))) savePasswordFile(password, w.dir);
+        return send(res, 200, { message: await addApp(app, w.dir) });
       }
       if (p === "/api/withdraw") {
         const chain = String(b.chain) as Chain;
@@ -150,7 +185,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); if (aiTimer) clearInterval(aiTimer); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 

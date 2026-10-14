@@ -56,7 +56,11 @@ The agent has no tool for this.
 }
 ```
 
-Tools: `wallet_status`, `wallet_balances`, `swap_quote`, `swap`, `pay_fetch`, `seller_check`, `receipts`, `autopilot_propose`, `autopilot_rules`, `autopilot_cancel`, `paper_swap`, `paper_status`. There is no tool for changing limits, approvals or keys.
+Tools: `wallet_status`, `wallet_balances`, `swap_quote`, `swap`, `pay_fetch`, `seller_check`, `receipts`, `market_prices`, `price_history`, `autopilot_propose`, `autopilot_rules`, `autopilot_cancel`, `paper_swap`, `paper_status`. There is no tool for changing limits, approvals or keys.
+
+The easiest way: open the dashboard (`tollkit-wallet ui`), click **Connect your AI**, type your wallet password and click **Add** next to your app. It finds Claude desktop, Claude Code, Cursor, Codex and Gemini CLI on your computer and adds the wallet to their settings for you (keeping a backup of any file it changes); VS Code opens to confirm. Each app also has the steps to do it by hand.
+
+The app needs to unlock the wallet on its own, so adding an app saves your password to `~/.tollkit-wallet/password`, readable only by your user account (or run `tollkit-wallet password-file` to do just that step). Anyone who can read that file and your wallet folder can spend within your limits, so keep both on this computer.
 
 ## Use with Coinbase AgentKit
 
@@ -69,7 +73,7 @@ const wallet = await TollkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
 const agentkit = await AgentKit.from({ walletProvider, actionProviders: [tollkitWalletActionProvider(wallet)] });
 ```
 
-This adds `tollkit_swap`, `tollkit_swap_quote`, `tollkit_pay_fetch`, `tollkit_wallet_balances`, `tollkit_wallet_status`, `tollkit_seller_check` and `tollkit_receipts`. They use the Tollkit wallet's own keys and limits, whatever AgentKit wallet provider you use.
+This adds the same 14 tools as the MCP server, with a `tollkit_` prefix (`tollkit_swap`, `tollkit_pay_fetch`, `tollkit_autopilot_propose`, …). They use the Tollkit wallet's own keys and limits, whatever AgentKit wallet provider you use.
 
 ## Use with ElizaOS
 
@@ -119,6 +123,14 @@ Or use the **Autopilot** tab in the dashboard (`tollkit-wallet ui`). Rule types:
 - Rules an agent suggests (`autopilot_propose`) wait for you to turn them on, unless you tick "Let agents turn on autopilot rules without asking me" in Limits (or `budget agent_rules=auto`).
 - The autopilot runs while the wallet runs: keep the dashboard open, or run `tollkit-wallet autopilot` on a computer or small server that stays on. Only one copy runs rules at a time.
 - Limit orders fill only at their price or better (within 1% for fees and spread). Stops always sell. When selling all of a chain's coin, a little is kept for network fees.
+
+### Chat with your AI on the Autopilot tab
+
+If Claude Code is installed and signed in on this computer, the Autopilot tab is a chat. Say what you want in your own words ("protect my ETH if it drops hard", "buy SOL on dips, $20 at a time"); Claude checks your balances, live prices and recent price history, explains its thinking, and suggests rules as cards you turn on with one tap. It runs on your own Claude plan.
+
+For these chats Claude Code runs with its own tools switched off and only the wallet's advisor tools available (`tollkit-wallet mcp --advisor`: balances, limits, receipts, prices, price history, your rules, and suggesting rules). It can't trade, pay, withdraw or change limits, and its suggestions always wait for you, even if you let other agents turn rules on.
+
+**Check-ins:** pick every 1, 4, 12 or 24 hours and Claude reviews your rules against the market and what you've told it, then suggests changes (for example raising a stop-loss after a rise). A suggested change replaces the old rule only when you turn it on. If Telegram is set up, check-in suggestions also arrive there with Approve and Deny. Check-ins run while the dashboard is open.
 
 ## Paper trading
 

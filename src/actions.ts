@@ -40,6 +40,29 @@ export const ProposeArgs = z.object({
 });
 export const RulesListArgs = z.object({ status: z.enum(["proposed", "active", "paused", "done", "cancelled", "expired", "error"]).optional() });
 export const RuleIdArgs = z.object({ id: z.string().min(4).max(40) });
+export const HistoryArgs = z.object({
+  token: z.enum(["ETH", "WETH", "SOL"]).describe("ETH (also WETH) or SOL; prices from Coinbase Exchange"),
+  interval: z.enum(["15m", "1h", "6h", "1d"]).optional().describe("Candle size (default 1h)"),
+  points: z.number().int().min(5).max(200).optional().describe("How many candles, newest last (default 48)"),
+});
+
+const GRAN = { "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400 } as const;
+/** Coinbase Exchange public candles: [time, low, high, open, close, volume], newest first, at most 300, no key. */
+export async function priceHistory(a: z.infer<typeof HistoryArgs>, f: typeof fetch = fetch) {
+  const product = a.token === "SOL" ? "SOL-USD" : "ETH-USD", interval = a.interval ?? "1h";
+  const r = await f(`https://api.exchange.coinbase.com/products/${product}/candles?granularity=${GRAN[interval]}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+  if (!r.ok) return { ok: false, refused: { code: "unavailable", reason: `Price history isn't available right now (HTTP ${r.status}).` } };
+  const rows = ((await r.json()) as number[][]).sort((x, y) => x[0]! - y[0]!).slice(-(a.points ?? 48));
+  if (!rows.length) return { ok: false, refused: { code: "unavailable", reason: "No price history returned." } };
+  const closes = rows.map((x) => x[4]!), first = rows[0]![3]!, last = closes.at(-1)!;
+  return {
+    ok: true, token: a.token, interval, source: "Coinbase Exchange",
+    from: new Date(rows[0]![0]! * 1000).toISOString(), to: new Date(rows.at(-1)![0]! * 1000).toISOString(),
+    open: first, last, change_pct: +(((last - first) / first) * 100).toFixed(2),
+    high: Math.max(...rows.map((x) => x[2]!)), low: Math.min(...rows.map((x) => x[1]!)),
+    candles: rows.map(([t, low, high, open, close]) => ({ t: new Date(t! * 1000).toISOString(), open, high, low, close })),
+  };
+}
 
 export interface WalletAction<S extends z.ZodTypeAny = z.ZodTypeAny> {
   name: string;
@@ -85,8 +108,14 @@ export const ACTIONS = [
   def({ name: "receipts", spends: false, schema: ReceiptArgs,
     description: "Recent trades, payments and withdrawals with amounts, fees and transaction hashes.",
     run: async (w, a) => w.receipts(a.since).slice(-(a.limit ?? 50)) }),
+  def({ name: "market_prices", spends: false, schema: NoArgs,
+    description: "Live USD prices and 24-hour change for ETH, SOL and USDT (Coinbase Exchange; USDC is $1).",
+    run: async () => { const f = new PriceFeed(); await f.refresh(); return f.snapshot(); } }),
+  def({ name: "price_history", spends: false, schema: HistoryArgs,
+    description: "Recent price candles for ETH or SOL (open, high, low, close) with the period's change, high and low. Use it to judge trends and to set sensible trigger prices.",
+    run: async (_w, a) => priceHistory(a) }),
   def({ name: "autopilot_propose", spends: false, schema: ProposeArgs,
-    description: "Set up autopilot rules: limit buy/sell, stop-loss, take-profit, trailing stop, recurring buy (DCA). Give plain English in `text` (e.g. \"buy $25 of SOL every Monday; sell half my ETH if it rises 10% and all if it falls 8%\") or exact `rules`. Unless the owner allows auto, rules wait for the owner to turn them on in the dashboard; fills follow the owner's limits.",
+    description: "Set up autopilot rules: limit buy/sell, stop-loss, take-profit, trailing stop, recurring buy (DCA). Give plain English in `text` (e.g. \"buy $25 of SOL every Monday; sell half my ETH if it rises 10% and all if it falls 8%\") or exact `rules`. Give each rule a short plain `reason`; to change an existing rule, propose its replacement with `replaces: <id>`. Unless the owner allows auto, rules wait for the owner to turn them on in the dashboard; fills follow the owner's limits.",
     run: async (w, a) => proposeRules(w, a) }),
   def({ name: "autopilot_rules", spends: false, schema: RulesListArgs,
     description: "The autopilot's rules with a plain description of each, status, last price seen, fills and any error.",
@@ -107,7 +136,7 @@ function showRule(r: Rule) {
   return { id: r.id, status: r.status, description: describeRule(r), created_by: r.created_by, last_price: r.state.last_price, fills: r.state.fills.filter((f) => f.ok).length, last_fill: last, error: r.state.last_error, rule: { ...r, state: undefined } };
 }
 
-async function proposeRules(w: TollkitWallet, a: z.infer<typeof ProposeArgs>) {
+export async function proposeRules(w: TollkitWallet, a: z.infer<typeof ProposeArgs>, o: { neverAuto?: boolean } = {}) {
   let drafts: RuleInput[] = [...(a.rules ?? [])], unparsed: string[] = [];
   if (a.text) {
     const feed = new PriceFeed(); await feed.refresh();
@@ -116,8 +145,8 @@ async function proposeRules(w: TollkitWallet, a: z.infer<typeof ProposeArgs>) {
   }
   if (!drafts.length) return { ok: false, refused: { code: "nothing_understood", reason: "No rules were understood. Try e.g. \"buy $25 of SOL every Monday\" or pass `rules`." }, unparsed };
   for (const d of drafts) { const why = ruleProblem(d); if (why) return { ok: false, refused: { code: "bad_rule", reason: `${describeRule(d)}: ${why}` }, unparsed }; }
-  const store = w.rules(), auto = w.policy.agent_rules === "auto", made = [] as ReturnType<typeof showRule>[];
-  for (const d of drafts) made.push(showRule(await store.add(d, "agent", auto)));
+  const store = w.rules(), auto = !o.neverAuto && w.policy.agent_rules === "auto", made = [] as ReturnType<typeof showRule>[];
+  for (const d of drafts) { try { made.push(showRule(await store.add(d, "agent", auto))); } catch (e) { return { ok: false, refused: { code: "bad_rule", reason: `${describeRule(d)}: ${(e as Error).message}` }, rules: made, unparsed }; } }
   return {
     ok: true, rules: made, unparsed,
     note: auto ? "These rules are on. The autopilot runs while the wallet's dashboard or `tollkit-wallet autopilot` is running." : "These rules are waiting for the owner to turn them on in the dashboard (Autopilot tab) or with `tollkit-wallet rule on <id>`.",

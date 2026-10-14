@@ -9,6 +9,11 @@ export function walletHome(dir?: string): string {
   return d;
 }
 
+/** Where `tollkit-wallet password-file` saves the password so an AI app can start the MCP server. */
+export const passwordFile = (dir?: string) => path.join(walletHome(dir), "password");
+/** True when the wallet lives somewhere other than the default folder. */
+export const customHome = (dir?: string) => path.resolve(walletHome(dir)) !== path.resolve(path.join(os.homedir(), ".tollkit-wallet"));
+
 export const files = (dir: string) => ({
   keystore: path.join(dir, "keystore.json"),
   policy: path.join(dir, "policy.json"),

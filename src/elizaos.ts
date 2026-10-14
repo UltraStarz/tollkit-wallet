@@ -101,6 +101,8 @@ const ELIZA_NAMES: Record<string, { name: string; similes: string[] }> = {
   autopilot_cancel: { name: "TOLLKIT_AUTOPILOT_CANCEL", similes: ["CANCEL_ORDER", "STOP_STRATEGY"] },
   paper_swap: { name: "TOLLKIT_PAPER_SWAP", similes: ["PAPER_TRADE", "PRACTICE_TRADE", "SIMULATE_TRADE"] },
   paper_status: { name: "TOLLKIT_PAPER_STATUS", similes: ["PAPER_BALANCE", "PAPER_PORTFOLIO"] },
+  market_prices: { name: "TOLLKIT_MARKET_PRICES", similes: ["CRYPTO_PRICE", "ETH_PRICE", "SOL_PRICE"] },
+  price_history: { name: "TOLLKIT_PRICE_HISTORY", similes: ["PRICE_CHART", "PRICE_TREND", "CANDLES"] },
 };
 
 function toElizaAction(a: WalletAction): Action {

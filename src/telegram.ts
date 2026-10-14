@@ -22,6 +22,11 @@ async function call(cfg: TelegramConfig, method: string, body: unknown, f: Fetch
   return j.result;
 }
 
+/** A plain message to the owner (no buttons). */
+export async function notify(cfg: TelegramConfig, text: string, f: Fetch = fetch): Promise<void> {
+  await call(cfg, "sendMessage", { chat_id: cfg.chat_id, text }, f, 15_000);
+}
+
 export async function requestApproval(cfg: TelegramConfig, text: string, opts: { timeoutMs?: number; fetch?: Fetch; signal?: AbortSignal } = {}): Promise<Decision> {
   const f = opts.fetch ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 5 * 60_000;

@@ -44,6 +44,10 @@ export const RuleInput = z.object({
   /** Rules sharing a group cancel each other when one fills (take-profit + stop-loss). */
   group: z.string().max(40).optional(),
   expires_at: z.string().datetime().optional(),
+  /** Why this rule: one or two plain sentences, shown to the owner on the rule card (set by AI suggestions). */
+  reason: z.string().max(400).optional(),
+  /** Id of an existing rule this one replaces: turning this on cancels that one (e.g. moving a stop-loss up). */
+  replaces: z.string().min(4).max(40).optional(),
 });
 export type RuleInput = z.infer<typeof RuleInput>;
 
@@ -62,6 +66,7 @@ export interface Rule extends RuleInput {
     last_price?: number;
     last_checked?: string;
     last_error?: string;
+    note?: string;        // e.g. "Replaced by ab12cd34"
     fills: Fill[];
   };
 }
@@ -115,6 +120,13 @@ export function nextRun(r: Pick<RuleInput, "every" | "weekday">, from: Date): Da
   return new Date(from.getTime() + INTERVAL_MS[r.every ?? "day"]);
 }
 
+/** When a replacement goes live, the rule it replaces is cancelled so both never run. */
+function retire(rules: Rule[], r: Rule) {
+  if (!r.replaces) return;
+  const old = rules.find((x) => x.id === r.replaces);
+  if (old && !["done", "cancelled", "expired"].includes(old.status)) { old.status = "cancelled"; old.state.note = `Replaced by ${r.id}`; }
+}
+
 export class RuleStore {
   readonly file: string;
   constructor(private readonly dir?: string) { this.file = path.join(walletHome(dir), "rules.json"); }
@@ -140,6 +152,10 @@ export class RuleStore {
     const parsed = RuleInput.parse(input);
     const why = ruleProblem(parsed);
     if (why) throw new Error(why);
+    if (parsed.replaces) {
+      const old = this.get(parsed.replaces);
+      if (!old || ["done", "cancelled", "expired"].includes(old.status)) throw new Error(`replaces: no open rule ${parsed.replaces}.`);
+    }
     const now = new Date();
     const active = by === "owner" || autoActivate;
     const rule: Rule = {
@@ -147,7 +163,7 @@ export class RuleStore {
       status: active ? "active" : "proposed", ...(active ? { activated_at: now.toISOString() } : {}),
       state: { runs: 0, failures: 0, fills: [], ...(parsed.kind === "dca" ? { next_run: (parsed.every === "week" && parsed.weekday !== undefined ? nextRun(parsed, now) : now).toISOString() } : {}) },
     };
-    await this.mutate((rules) => { rules.push(rule); });
+    await this.mutate((rules) => { rules.push(rule); if (active) retire(rules, rule); });
     return rule;
   }
 
@@ -158,6 +174,7 @@ export class RuleStore {
       if (!r) throw new Error(`No rule ${id}.`);
       if (["done", "cancelled", "expired"].includes(r.status)) throw new Error(`Rule ${id} is ${r.status}; make a new one instead.`);
       r.status = status;
+      if (status === "active") retire(rules, r);
       if (status === "active") {
         r.activated_at = new Date().toISOString();
         r.state.high = undefined; r.state.failures = 0; r.state.last_error = undefined;

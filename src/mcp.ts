@@ -10,9 +10,12 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { TollkitWallet } from "./wallet.js";
-import { ACTIONS } from "./actions.js";
+import { ACTIONS, proposeRules } from "./actions.js";
 
-export const VERSION = "0.2.0";
+/** The only tools the wallet's built-in AI chat gets: read, look at prices, and suggest rules for the owner to turn on. */
+export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_propose", "paper_status"];
+
+export const VERSION = "0.2.1";
 
 export function passwordFromEnv(): string {
   const file = process.env.TOLLKIT_WALLET_PASSWORD_FILE;
@@ -24,21 +27,24 @@ export function passwordFromEnv(): string {
 
 const json = (v: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(v, null, 2) }] });
 
-export function buildServer(w: TollkitWallet): McpServer {
+export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): McpServer {
   const s = new McpServer({ name: "tollkit-wallet", version: VERSION });
   for (const a of ACTIONS) {
+    if (o.advisor && !ADVISOR_TOOLS.includes(a.name)) continue;
+    // In advisor mode suggestions always wait for the owner, whatever agent_rules says.
+    const run = o.advisor && a.name === "autopilot_propose" ? (ww: TollkitWallet, args: any) => proposeRules(ww, args, { neverAuto: true }) : a.run;
     s.registerTool(a.name, {
       description: a.description,
       inputSchema: (a.schema as any).shape,
       annotations: a.spends ? { destructiveHint: true, openWorldHint: true, idempotentHint: false }
         : /^autopilot_(propose|cancel)$/.test(a.name) ? { readOnlyHint: false, destructiveHint: a.name === "autopilot_propose", openWorldHint: true }
         : { readOnlyHint: true, openWorldHint: !["wallet_status", "receipts", "autopilot_rules", "paper_status"].includes(a.name) },
-    }, async (args: any) => json(await (a.run as any)(w, args ?? {})));
+    }, async (args: any) => json(await (run as any)(w, args ?? {})));
   }
   return s;
 }
 
-export async function serveStdio(o: { dir?: string } = {}) {
+export async function serveStdio(o: { dir?: string; advisor?: boolean } = {}) {
   const w = await TollkitWallet.open(passwordFromEnv(), { dir: o.dir });
-  await buildServer(w).connect(new StdioServerTransport());
+  await buildServer(w, { advisor: o.advisor }).connect(new StdioServerTransport());
 }

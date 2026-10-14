@@ -18,6 +18,8 @@ import { parseStrategy } from "./parse.js";
 import { PriceFeed } from "./prices.js";
 import { Autopilot } from "./autopilot.js";
 import type { Chain } from "./chains.js";
+import { chmodSync, writeFileSync } from "node:fs";
+import { passwordFile } from "./paths.js";
 
 const out = (v: unknown) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
 
@@ -183,7 +185,17 @@ async function main(argv: string[]) {
       }
       out(w.paper().summary()); return;
     }
-    case "mcp": await serveStdio(); return;
+    case "mcp": await serveStdio({ advisor: args.includes("--advisor") }); return;
+    case "password-file": {
+      // Lets an AI app (Claude, Cursor, …) start `tollkit-wallet mcp` without typing the password.
+      const pw = await askPassword();
+      await TollkitWallet.open(pw); // wrong password fails here, before anything is written
+      const f = passwordFile();
+      writeFileSync(f, pw, { mode: 0o600 });
+      chmodSync(f, 0o600);
+      out(`Saved. Only your user account can read ${f}.\nIn your AI app, set TOLLKIT_WALLET_PASSWORD_FILE=${f} (the dashboard's "Connect your AI" button fills it in).\nAnyone who can read this file and your wallet folder can spend within your limits, so keep both on this computer.`);
+      return;
+    }
     case "ui": { const { serveDashboard } = await import("./dashboard.js"); await serveDashboard(await askPassword(), { port: Number(flag(args, "--port") ?? 7420) }); return; }
     case "version": case "--version": out(VERSION); return;
     default:
@@ -198,6 +210,7 @@ async function main(argv: string[]) {
   withdraw <chain> <amount> <token> <to>   send funds to a saved address
   receipts [--csv] [--since date]   trades and payments
   mcp                               run the MCP server for agents (stdio)
+  password-file                     save your password so an AI app can start the MCP server
   ui [--port 7420]                  open the dashboard (runs the autopilot too)
   rules                             list autopilot rules
   rule add "<plain English>"        e.g. "buy $25 of SOL every Monday; sell all ETH if it falls 8%"

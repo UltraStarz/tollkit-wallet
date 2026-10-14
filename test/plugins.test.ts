@@ -7,7 +7,7 @@ import { TollkitWallet } from "../src/wallet.js";
 import { ALLOWANCE_HOLDER } from "../src/chains.js";
 import { tollkitWalletActionProvider } from "../src/agentkit.js";
 import { tollkitWalletPlugin, useWallet, parseJsonObject } from "../src/elizaos.js";
-import { buildServer } from "../src/mcp.js";
+import { buildServer, ADVISOR_TOOLS } from "../src/mcp.js";
 
 let pass = 0, fail = 0;
 const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
@@ -23,7 +23,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
 {
   const p = tollkitWalletActionProvider(w);
   const acts = p.getActions({} as any);
-  check(acts.length === 12 && acts.every((a) => a.name.startsWith("tollkit_")), "AgentKit: 12 actions, tollkit_ prefix", acts.map((a) => a.name));
+  check(acts.length === 14 && acts.every((a) => a.name.startsWith("tollkit_")), "AgentKit: 14 actions, tollkit_ prefix", acts.map((a) => a.name));
   check(p.supportsNetwork({ protocolFamily: "evm", networkId: "base-mainnet" } as any), "AgentKit: works on any network");
   const swap = acts.find((a) => a.name === "tollkit_swap")!;
   const r = JSON.parse(await swap.invoke({ chain: "base", sell: "USDC", buy: "WETH", amount: "10" }));
@@ -45,7 +45,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
   const replies: string[] = [];
   let modelReply = '```json\n{"chain":"base","sell":"USDC","buy":"WETH","amount":"5","slippage_bps":null}\n```';
   const rt = { getSetting: () => null, useModel: async (_t: string, _p: { prompt: string }) => modelReply };
-  check(tollkitWalletPlugin.actions!.length === 12 && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_SWAP") && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_AUTOPILOT_SET"), "Eliza: 12 actions incl. TOLLKIT_SWAP and TOLLKIT_AUTOPILOT_SET");
+  check(tollkitWalletPlugin.actions!.length === 14 && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_SWAP") && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_AUTOPILOT_SET"), "Eliza: 14 actions incl. TOLLKIT_SWAP and TOLLKIT_AUTOPILOT_SET");
   const swap = tollkitWalletPlugin.actions!.find((a) => a.name === "TOLLKIT_SWAP")!;
   check(!(await swap.validate(rt as any, {})), "Eliza: not offered when no wallet is configured");
   useWallet(rt as any, w);
@@ -65,7 +65,18 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
 {
   const s: any = buildServer(w);
   const names = Object.keys(s._registeredTools ?? {});
-  check(names.length === 12 && names.includes("swap") && names.includes("autopilot_propose"), "MCP: same 12 tools", names);
+  check(names.length === 14 && names.includes("swap") && names.includes("autopilot_propose") && names.includes("price_history"), "MCP: same 14 tools", names);
+  const adv: any = buildServer(w, { advisor: true });
+  const an = Object.keys(adv._registeredTools ?? {});
+  check(an.length === ADVISOR_TOOLS.length && !an.some((n) => /^(swap|pay_fetch|autopilot_cancel|paper_swap|seller_check)$/.test(n)), "MCP advisor mode: read, prices and suggest only, no trading", an);
+  // advisor suggestions wait for the owner even when agents may turn rules on
+  w.policy.agent_rules = "auto";
+  const res = JSON.parse((await adv._registeredTools.autopilot_propose.handler({ rules: [{ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 10, trigger_price: 1000, reason: "test" }] })).content[0].text);
+  check(res.ok && res.rules[0].status === "proposed" && res.rules[0].rule.reason === "test", "advisor: rules stay proposed even with agent_rules=auto", res);
+  const full: any = buildServer(w);
+  const res2 = JSON.parse((await full._registeredTools.autopilot_propose.handler({ rules: [{ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 10, trigger_price: 1000 }] })).content[0].text);
+  check(res2.ok && res2.rules[0].status === "active", "full server still honours agent_rules=auto", res2.rules?.[0]?.status);
+  w.policy.agent_rules = "propose";
 }
 
 console.log(`\nplugins: ${pass} passed, ${fail} failed`);
