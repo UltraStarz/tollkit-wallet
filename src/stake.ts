@@ -13,7 +13,8 @@
  * Staking moves no money out of the wallet's control, so it isn't counted against spending limits,
  * but it needs the password every time and agents can't reach it.
  */
-import { Authorized, Connection, Lockup, PublicKey, StakeProgram, Transaction, ValidatorInfo, sendAndConfirmTransaction, type Keypair } from "@solana/web3.js";
+import { Authorized, Connection, Lockup, PublicKey, StakeProgram, Transaction, ValidatorInfo, type Keypair } from "@solana/web3.js";
+import { sendAndConfirm } from "./solconfirm.js";
 
 export const CONFIG_PROGRAM = new PublicKey("Config1111111111111111111111111111111111111");
 const U64_MAX = "18446744073709551615";
@@ -164,6 +165,6 @@ export class Staking {
 
   private send(tx: Transaction, kp: Keypair): Promise<string> {
     if (this.o.send) return this.o.send(tx, kp);
-    return sendAndConfirmTransaction(new Connection(this.o.rpc, "confirmed"), tx, [kp]);
+    return sendAndConfirm(new Connection(this.o.rpc, "confirmed"), tx, [kp]);
   }
 }

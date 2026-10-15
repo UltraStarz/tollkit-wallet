@@ -5,6 +5,11 @@ import path from "node:path";
 import { createKeystore } from "../src/keystore.js";
 import { TollkitWallet } from "../src/wallet.js";
 import { ALLOWANCE_HOLDER } from "../src/chains.js";
+import { AbiCoder, Interface } from "ethers";
+// A real-shaped 0x AllowanceHolder.exec call (as decoded from a live Base quote, 2026-10-14), so the wallet's calldata check passes.
+const SETTLER = "0x4f6f91599858bf0d19fabCF2c5d591fE13f7C059";
+const zxData = (sellTok: string, sell: string, taker: string, buyTok: string, min: string) => new Interface(["function exec(address,address,uint256,address,bytes)"]).encodeFunctionData("exec", [SETTLER, sellTok, sell, SETTLER,
+  "0x1fff991f" + AbiCoder.defaultAbiCoder().encode(["address", "address", "uint256"], [taker, buyTok, min]).slice(2) + "00".repeat(96)]);
 
 let pass = 0, fail = 0;
 const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
@@ -26,7 +31,7 @@ async function fresh(over: any = {}) {
     const sell = url.searchParams.get("sellAmount")!; const buyTok = url.searchParams.get("buyToken")!;
     const isUsdcOut = buyTok.toLowerCase() === USDC.toLowerCase();
     return Response.json({ sellAmount: sell, buyAmount: isUsdcOut ? "3000000" : "12000000000000000", minBuyAmount: isUsdcOut ? "2970000" : "11880000000000000",
-      fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: "0x1", value: "0" } });
+      fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: zxData(url.searchParams.get("sellToken")!, sell, url.searchParams.get("taker")!, buyTok, isUsdcOut ? "2970000" : "11880000000000000"), value: "0" } });
   }) as unknown as typeof fetch;
   const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.example", approve: null, execute: async (q) => { sent.push(q.sell_amount); return "0xswap"; }, ...over });
   return { w, sent, dir };

@@ -14,7 +14,7 @@ check(coinId("base", NATIVE_EVM) === "coingecko:ethereum" && coinId("solana", WS
 const l = new TokenList(dir);
 const BRETT = "0x532f27101965dd16442e59d40670faf5ebb142e4";
 l.add("base", BRETT); l.add("base", BRETT.toUpperCase().replace("0X", "0x")); l.add("base", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"); l.add("solana", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN");
-check(JSON.stringify(l.list()) === JSON.stringify({ base: ["0x532f27101965dd16442E59d40670FaF5eBB142E4"] }), "token list: checksummed, no duplicates, core tokens and Solana skipped", l.list());
+check(JSON.stringify(l.list()) === JSON.stringify({ base: ["0x532f27101965dd16442E59d40670FaF5eBB142E4"], solana: ["JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"] }), "token list: checksummed, no duplicates, core tokens skipped, Solana mints kept as typed", l.list());
 l.remove("base", BRETT);
 check((l.list().base ?? []).length === 0, "token list: remove");
 

@@ -6,7 +6,7 @@ const short = (a) => (a && a.length > 14 ? a.slice(0, 6) + "…" + a.slice(-4) :
 function pairView(err) {
   main.innerHTML = `<p>Connect this browser to the Tollkit Wallet on this computer.</p>
 <ol><li>Start Tollkit: <b>tollkit-wallet ui</b></li><li>In Tollkit, open <b>Settings</b> and click <b>Pair a browser</b>.</li><li>Paste the code here.</li></ol>
-<input id="code" placeholder="7420-AB12-CD34" autocomplete="off" spellcheck="false">
+<input id="code" placeholder="Paste the code from Tollkit" autocomplete="off" spellcheck="false">
 <button id="go">Pair</button>${err ? `<div class="msg err">${esc(err)}</div>` : ""}`;
   const go = async () => {
     const b = document.getElementById("go"); b.disabled = true; b.textContent = "Pairing…";

@@ -16,9 +16,15 @@ import { z } from "zod";
 import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
 
-export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca"] as const;
+export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid"] as const;
 export type RuleKind = (typeof RULE_KINDS)[number];
 export const BUY_KINDS: RuleKind[] = ["limit_buy", "dca"];
+
+/** Grid price levels, lowest first. */
+export function gridLevels(r: Pick<RuleInput, "lower_price" | "upper_price" | "levels">): number[] {
+  const n = r.levels ?? 0, lo = r.lower_price ?? 0, hi = r.upper_price ?? 0;
+  return Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
+}
 export type RuleStatus = "proposed" | "active" | "paused" | "done" | "cancelled" | "expired" | "error";
 
 /** What an owner or agent asks for. */
@@ -48,10 +54,21 @@ export const RuleInput = z.object({
   reason: z.string().max(400).optional(),
   /** Id of an existing rule this one replaces: turning this on cancels that one (e.g. moving a stop-loss up). */
   replaces: z.string().min(4).max(40).optional(),
+  /** Grid: trade between these prices, buying at each level and selling one level up. amount_usd is per level. */
+  lower_price: z.number().positive().optional(),
+  upper_price: z.number().positive().optional(),
+  levels: z.number().int().min(3).max(40).optional(),
+  /** Bots: rules made together from one template share a bot id (src/bots.ts). */
+  /** Wait until this rule (same bot) has filled before watching the price; and sell exactly what that rule bought. */
+  after: z.string().min(2).max(40).optional(),
+  sell_from: z.string().min(2).max(40).optional(),
+  bot: z.string().regex(/^[\w-]{4,40}$/).optional(),
+  bot_name: z.string().max(60).optional(),
+  template: z.string().max(40).optional(),
 });
 export type RuleInput = z.infer<typeof RuleInput>;
 
-export interface Fill { ts: string; ok: boolean; usd?: number; tx?: string; paper?: boolean; reason?: string }
+export interface Fill { ts: string; ok: boolean; usd?: number; tx?: string; paper?: boolean; reason?: string; side?: "buy" | "sell"; units?: number }
 export interface Rule extends RuleInput {
   id: string;
   status: RuleStatus;
@@ -68,6 +85,15 @@ export interface Rule extends RuleInput {
     last_error?: string;
     note?: string;        // e.g. "Replaced by ab12cd34"
     fills: Fill[];
+    /** Totals that outlive the last-50 fills list: successful and failed trades, dollars and units each way. */
+    ok_count?: number; fail_count?: number;
+    spent_usd?: number; received_usd?: number; bought_units?: number; sold_units?: number;
+    /** Exact amount bought (smallest units), for a rule that sells what another rule bought. */
+    bought_atomic?: string;
+    /** Grid: units bought at each level that are waiting to be sold one level up, and what they cost. */
+    grid?: { units: (number | null)[]; cost: (number | null)[]; atomic: (string | null)[] };
+    /** Grid: completed buy-then-sell round trips and their profit. */
+    round_trips?: number; grid_profit_usd?: number;
   };
 }
 
@@ -83,6 +109,7 @@ export function describeRule(r: RuleInput): string {
     case "take_profit": return `Take profit: sell ${sell} when it reaches ${$(r.trigger_price)}${on}`;
     case "stop_loss": return `Stop-loss: sell ${sell} if it falls to ${$(r.trigger_price)}${on}`;
     case "trailing_stop": return `Trailing stop: sell ${sell} if it falls ${r.trail_pct}% from its highest price${on}`;
+    case "grid": return `Grid: buy ${$(r.amount_usd)} of ${t} at each of ${r.levels ?? "?"} levels from ${$(r.lower_price)} to ${$(r.upper_price)}, and sell each one a level higher${on}`;
     case "dca": {
       const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       const when = r.every === "week" && r.weekday !== undefined ? `every ${days[r.weekday]}` : `every ${r.every ?? "?"}`;
@@ -93,9 +120,17 @@ export function describeRule(r: RuleInput): string {
 
 /** Checks that the fields a kind needs are there. Returns a reason, or null. */
 export function ruleProblem(r: RuleInput): string | null {
+  if (r.kind === "grid") {
+    if (!r.amount_usd) return "A grid needs amount_usd (dollars per level).";
+    if (!r.lower_price || !r.upper_price || r.lower_price >= r.upper_price) return "A grid needs lower_price below upper_price.";
+    if (!r.levels) return "A grid needs levels (3 to 40).";
+    if ((r.upper_price - r.lower_price) / (r.levels - 1) < r.lower_price * 0.003) return "Grid levels are too close together (under 0.3% apart); fees would eat every trade.";
+    if (/^(USDC|USDT)$/i.test(r.token)) return "Rules trade an asset against USDC; the token can't be a stablecoin.";
+    return null;
+  }
   const isBuy = BUY_KINDS.includes(r.kind);
   if (isBuy && !r.amount_usd) return "A buy needs amount_usd (dollars to spend).";
-  if (!isBuy && r.sell_percent === undefined && r.sell_amount === undefined) return "A sell needs sell_percent or sell_amount.";
+  if (!isBuy && r.sell_percent === undefined && r.sell_amount === undefined && !r.sell_from) return "A sell needs sell_percent or sell_amount.";
   if (!isBuy && r.sell_percent !== undefined && r.sell_amount !== undefined) return "Use sell_percent or sell_amount, not both.";
   if (["limit_buy", "limit_sell", "stop_loss", "take_profit"].includes(r.kind) && !r.trigger_price) return `A ${r.kind.replace("_", " ")} needs trigger_price.`;
   if (r.kind === "trailing_stop" && !r.trail_pct) return "A trailing stop needs trail_pct.";
@@ -161,10 +196,22 @@ export class RuleStore {
     const rule: Rule = {
       ...parsed, id: randomUUID().slice(0, 8), created_by: by, created_at: now.toISOString(),
       status: active ? "active" : "proposed", ...(active ? { activated_at: now.toISOString() } : {}),
-      state: { runs: 0, failures: 0, fills: [], ...(parsed.kind === "dca" ? { next_run: (parsed.every === "week" && parsed.weekday !== undefined ? nextRun(parsed, now) : now).toISOString() } : {}) },
+      state: { runs: 0, failures: 0, fills: [], ...(parsed.kind === "grid" ? { grid: { units: Array(parsed.levels! - 1).fill(null), cost: Array(parsed.levels! - 1).fill(null), atomic: Array(parsed.levels! - 1).fill(null) } } : {}), ...(parsed.kind === "dca" ? { next_run: (parsed.every === "week" && parsed.weekday !== undefined ? nextRun(parsed, now) : now).toISOString() } : {}) },
     };
     await this.mutate((rules) => { rules.push(rule); if (active) retire(rules, rule); });
     return rule;
+  }
+
+  /** A bot's rules, added together. "@0", "@1"... in after/sell_from point at earlier rules in the same list. */
+  async addBot(inputs: RuleInput[], by: "owner" | "agent", autoActivate: boolean): Promise<Rule[]> {
+    const made: Rule[] = [];
+    for (const input of inputs) {
+      const fix = (v?: string) => (v && /^@\d+$/.test(v) ? made[Number(v.slice(1))]?.id : v);
+      const ref = { ...input, after: fix(input.after), sell_from: fix(input.sell_from) };
+      if ((input.after && !ref.after) || (input.sell_from && !ref.sell_from)) throw new Error("A bot step points at a step that doesn't exist.");
+      made.push(await this.add(ref, by, autoActivate));
+    }
+    return made;
   }
 
   /** Owner actions. Turning a rule on resets the trailing high and failure count. */

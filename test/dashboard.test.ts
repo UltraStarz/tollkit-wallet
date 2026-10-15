@@ -1,5 +1,6 @@
 /** Dashboard server: access control, state, approvals end-to-end, password-gated changes. Local only; fake quotes. */
 import { writeFileSync, mkdtempSync } from "node:fs";
+import { zxData } from "./fixtures/zx.js";
 import os from "node:os";
 import path from "node:path";
 import { request } from "node:http";
@@ -17,7 +18,7 @@ const dir = mkdtempSync(path.join(os.tmpdir(), "twd-"));
 process.env.HOME = mkdtempSync(path.join(os.tmpdir(), "twd-home-")); // AI-app settings checks and removes stay in a scratch home
 await createKeystore(PW, { dir, scrypt: { N: 1 << 10, r: 8, p: 1 } });
 const quotes = (async (u: string) => { const url = new URL(u); const sell = url.searchParams.get("sellAmount")!;
-  return Response.json({ sellAmount: sell, buyAmount: "1", minBuyAmount: "1", fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: "0x1", value: "0" } }); }) as unknown as typeof fetch;
+  return Response.json({ sellAmount: sell, buyAmount: "1", minBuyAmount: "1", fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: zxData(url, "1"), value: "0" } }); }) as unknown as typeof fetch;
 const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.example", execute: async () => "0xswap" });
 (w.sanctions as any).isSanctioned = async () => false; // the fake fetch only serves quotes
 const d = await startDashboard(w, PW, { port: 17420, watch: false });

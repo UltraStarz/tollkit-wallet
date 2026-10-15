@@ -15,7 +15,7 @@ import { createHash, createPrivateKey, randomBytes, randomUUID, sign as edSign, 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Connection, PublicKey, VersionedTransaction, type Keypair } from "@solana/web3.js";
-import { AbiCoder, Interface, JsonRpcProvider, MaxUint256, Transaction as EvmTx, formatEther, formatUnits, getAddress, getBytes, hexlify, isHexString, toQuantity, toUtf8String, type HDNodeWallet, type Wallet } from "ethers";
+import { AbiCoder, Interface, JsonRpcProvider, MaxUint256, Transaction as EvmTx, formatEther, formatUnits, getAddress, getBytes, hexlify, isHexString, toQuantity, toUtf8String, TypedDataEncoder, type HDNodeWallet, type Wallet } from "ethers";
 import { DEFAULT_RPC, EVM_CHAIN_ID, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { record } from "./ledger.js";
@@ -55,6 +55,33 @@ export function solanaWarnings(vtx: VersionedTransaction): string[] {
   return [...out];
 }
 
+/** Characters that can make text read differently than it is (direction overrides, invisible marks). */
+const SNEAKY = /[\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufeff\u{e0000}-\u{e007f}]/gu;
+/** Shows hidden characters as [U+XXXX] and says so. */
+export function plainText(t: string): { text: string; warnings: string[] } {
+  if (!new RegExp(SNEAKY.source, "u").test(t)) return { text: t, warnings: [] }; // no g flag: .test() on a /g regex keeps state
+  return { text: t.replace(SNEAKY, (c) => `[U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}]`), warnings: ["the message has hidden characters that change how it reads. They're shown as [U+…]."] };
+}
+/** Sign-In with Ethereum / Solana (EIP-4361, CAIP-122): the first line names the site the login is for. Warn when it isn't this site. */
+export function signInWarning(text: string, host: string): string[] {
+  const m = /^\s*([^\s]+) wants you to sign in with your (?:Ethereum|Solana) account/.exec(text);
+  if (!m) return [];
+  let named = m[1]!;
+  try { named = new URL(named.includes("://") ? named : `https://${named}`).host; } catch { /* keep it */ }
+  return named.toLowerCase() === host.toLowerCase() ? [] : [`this sign-in message is for ${named.slice(0, 80)}, not ${host}. Signing it could log this site into your account there.`];
+}
+/** Requests are capped per site; subdomains of one site share the cap. */
+// Hosts where unrelated sites share the last two labels (country second-level domains and shared hosting).
+const SHARED = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.jp", "co.kr", "co.nz", "co.in", "com.br", "com.cn", "com.mx", "com.tr", "com.sg", "com.hk",
+  "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "web.app", "firebaseapp.com", "herokuapp.com", "onrender.com", "fly.dev", "replit.app", "glitch.me", "surge.sh", "azurewebsites.net", "cloudfront.net", "amplifyapp.com", "ipfs.io", "eth.limo"]);
+const siteGroup = (origin: string) => {
+  const h = new URL(origin).hostname;
+  if (/^[\d.]+$/.test(h)) return h;
+  const parts = h.split("."), two = parts.slice(-2).join(".");
+  return SHARED.has(two) ? parts.slice(-3).join(".") : two;
+};
+const warned = (w: string[]) => (w.length ? "\n\nWarning: " + w.join(" ") : "");
+
 export function normalOrigin(o: string): string {
   let u: URL;
   try { u = new URL(o); } catch { throw new RpcError(4100, "Unknown site."); }
@@ -72,11 +99,14 @@ export class DappBridge {
   private file: string;
   private codes = new Map<string, number>();
   private wrongCodes = 0;
+  /** After a Deny, that site waits a moment before it can ask again, so a page can't flood the owner. */
+  private cooldown = new Map<string, number>();
   private jobs = new Map<string, { status: "pending" | "done" | "error"; result?: unknown; error?: { code: number; message: string }; at: number; origin?: string }>();
   constructor(private o: { evm: string; solana: string; keys: () => Keys; chains: () => Chain[]; dir?: string; rpc?: Partial<Record<Chain, string>>;
     approve: (text: string) => Promise<Decision>;
     /** Tests: replace network calls. */ evmRpc?: (chain: "base" | "ethereum", method: string, params: unknown[]) => Promise<unknown>;
-    solConn?: Pick<Connection, "simulateTransaction" | "sendRawTransaction" | "getBalance" | "getParsedTokenAccountsByOwner">; sendEvm?: (chain: "base" | "ethereum", tx: EvmTx | Record<string, unknown>, keys: Keys) => Promise<string> }) {
+    solConn?: Pick<Connection, "simulateTransaction" | "sendRawTransaction" | "getBalance" | "getParsedTokenAccountsByOwner">; sendEvm?: (chain: "base" | "ethereum", tx: EvmTx | Record<string, unknown>, keys: Keys) => Promise<string>;
+    /** Tests: how long a site waits after a Deny (default 3 s). */ rejectCooldownMs?: number }) {
     this.file = path.join(walletHome(o.dir), "extension.json");
   }
 
@@ -131,7 +161,9 @@ export class DappBridge {
     const p = Array.isArray(params) ? params : params === undefined || params === null ? [] : [params];
     const quick = await this.quick(origin, method, p);
     if (quick.done) return { result: quick.result };
-    const waiting = [...this.jobs.values()].filter((j) => j.status === "pending" && j.origin === origin).length;
+    if ((this.cooldown.get(origin) ?? 0) > Date.now()) throw rejected();
+    const g = siteGroup(origin);
+    const waiting = [...this.jobs.values()].filter((j) => j.status === "pending" && j.origin !== undefined && siteGroup(j.origin) === g).length;
     if (waiting >= 3) throw new RpcError(4001, "This site already has requests waiting in Tollkit. Answer those first.");
     if ([...this.jobs.values()].filter((j) => j.status === "pending").length >= 10) throw new RpcError(4001, "Too many requests are waiting in Tollkit. Answer those first.");
     const id = randomUUID();
@@ -282,7 +314,11 @@ export class DappBridge {
     } catch { return { text: "Check: couldn't simulate it, so the changes can't be shown. Only approve if you trust this site.", warnings }; }
   }
 
-  private async ask(text: string) { if ((await this.o.approve(text)) !== "approved") throw rejected(); }
+  private async ask(origin: string, text: string) {
+    if ((await this.o.approve(text)) === "approved") return;
+    this.cooldown.set(origin, Date.now() + (this.o.rejectCooldownMs ?? 3000));
+    throw rejected();
+  }
 
   private async slow(origin: string, method: string, p: unknown[]): Promise<unknown> {
     const host = new URL(origin).host;
@@ -290,12 +326,12 @@ export class DappBridge {
     switch (method) {
       case "eth_requestAccounts": case "wallet_requestPermissions":
         if (!this.evmOk()) throw new RpcError(4900, "Base and Ethereum are turned off in Tollkit's settings.");
-        await this.ask(`${host} wants to connect to your wallet.\nIt will see your Base/Ethereum address ${this.o.evm} and can ask you to sign or send. Each request comes here for your OK.`);
+        await this.ask(origin, `${host} wants to connect to your wallet.\nIt will see your Base/Ethereum address ${this.o.evm} and can ask you to sign or send. Each request comes here for your OK.`);
         this.setSite(origin, { evm: true });
         return method === "eth_requestAccounts" ? [this.o.evm] : [{ parentCapability: "eth_accounts", invoker: origin }];
       case "sol_connect":
         if (!this.o.chains().includes("solana")) throw new RpcError(4900, "Solana is turned off in Tollkit's settings.");
-        await this.ask(`${host} wants to connect to your wallet.\nIt will see your Solana address ${this.o.solana} and can ask you to sign or send. Each request comes here for your OK.`);
+        await this.ask(origin, `${host} wants to connect to your wallet.\nIt will see your Solana address ${this.o.solana} and can ask you to sign or send. Each request comes here for your OK.`);
         this.setSite(origin, { solana: true });
         return this.solAccount();
       case "personal_sign": {
@@ -303,7 +339,8 @@ export class DappBridge {
         if (!isHexString(data) && typeof data !== "string") throw new RpcError(-32602, "Bad message.");
         if (addr && String(addr).toLowerCase() !== this.o.evm.toLowerCase()) throw unauthorized();
         const bytes = isHexString(data) ? getBytes(data) : new TextEncoder().encode(data);
-        await this.ask(`${host} asks you to sign a message:\n\n${shown(readable(bytes))}`);
+        const pt = plainText(readable(bytes));
+        await this.ask(origin, `${host} asks you to sign a message:\n\n${shown(pt.text)}${warned([...signInWarning(pt.text, host), ...pt.warnings])}`);
         return keys.evm.signMessage(bytes);
       }
       case "eth_signTypedData_v4": {
@@ -312,10 +349,19 @@ export class DappBridge {
         let td: any;
         try { td = typeof json === "string" ? JSON.parse(json) : json; } catch { throw new RpcError(-32602, "Bad typed data."); }
         const { EIP712Domain: _d, ...types } = td?.types ?? {};
+        // ethers signs the type that the type list implies, whatever primaryType says, so show (and check) that one.
+        let primary = "";
+        try { primary = TypedDataEncoder.getPrimaryType(types); } catch { throw new RpcError(-32602, "Bad typed data."); }
+        if (td?.primaryType !== undefined && td.primaryType !== primary) throw new RpcError(-32602, `The data says it's a ${String(td.primaryType).slice(0, 40)} but is built as a ${primary.slice(0, 40)}. Tollkit won't sign it.`);
         const cid = td?.domain?.chainId !== undefined ? Number(td.domain.chainId) : null;
         const vc = td?.domain?.verifyingContract ? String(td.domain.verifyingContract) : null;
-        const permit = /permit|order|approval/i.test(String(td?.primaryType ?? ""));
-        await this.ask(`${host} asks you to sign data${td?.domain?.name ? ` for ${String(td.domain.name).slice(0, 60)}` : ""}:\nType: ${String(td?.primaryType ?? "").slice(0, 60)}${cid ? `\nChain: ${cid}` : ""}${vc ? `\nContract: ${vc}` : ""}\n\n${shown(JSON.stringify(td?.message ?? {}, null, 1), 4000)}${permit ? "\n\nWarning: signatures like this can let someone move your tokens without another prompt. Only approve if you started this." : ""}`);
+        const siteChain = EVM_CHAIN_ID[this.chainOf(origin)];
+        const w: string[] = [];
+        if (/permit|order|approv|allowance|delegat/i.test(primary) || (td?.message && typeof td.message === "object" && ("spender" in td.message || "operator" in td.message))) w.push("signatures like this can let someone move your tokens without another prompt. Only approve if you started this.");
+        if (cid === null) w.push("it isn't tied to a chain, so the signature could be used on any chain.");
+        else if (cid !== siteChain) w.push(`it's for chain ${cid}, but this site is on ${siteChain === 1 ? "Ethereum" : "Base"} (${siteChain}). It could be used on that other chain.`);
+        const dn = plainText(String(td?.domain?.name ?? "").slice(0, 60)), body = plainText(JSON.stringify(td?.message ?? {}, null, 1));
+        await this.ask(origin, `${host} asks you to sign data${dn.text ? ` for ${dn.text}` : ""}:\nType: ${primary.slice(0, 60)}${cid !== null ? `\nChain: ${cid}` : ""}${vc ? `\nContract: ${vc}` : ""}\n\n${shown(body.text, 4000)}${warned([...w, ...new Set([...dn.warnings, ...body.warnings])])}`);
         return keys.evm.signTypedData(td.domain ?? {}, types, td.message ?? {});
       }
       case "eth_sendTransaction": {
@@ -329,7 +375,7 @@ export class DappBridge {
         try { await this.rpc(chain, "eth_estimateGas", [{ from: this.o.evm, to, value: toQuantity(value), data }]); sim = "Check: should go through."; }
         catch (e) { sim = `Check: would fail (${(e as Error).message.slice(0, 120)}).`; }
         const what = await this.describeEvmCall(chain, to, String(data));
-        await this.ask(`${host} asks you to send a transaction on ${chain === "base" ? "Base" : "Ethereum"}:\nTo ${to ?? "(new contract)"}\nValue ${formatEther(value)} ETH\n${what}\n${sim}`);
+        await this.ask(origin, `${host} asks you to send a transaction on ${chain === "base" ? "Base" : "Ethereum"}:\nTo ${to ?? "(new contract)"}\nValue ${formatEther(value)} ETH\n${what}\n${sim}`);
         const req: Record<string, unknown> = { to, value, data, chainId: EVM_CHAIN_ID[chain] };
         if (t.gas ?? t.gasLimit) req.gasLimit = BigInt(t.gas ?? t.gasLimit);
         const hash = this.o.sendEvm ? await this.o.sendEvm(chain, req, keys) : (await keys.evm.connect(new JsonRpcProvider(this.o.rpc?.[chain] ?? DEFAULT_RPC[chain], EVM_CHAIN_ID[chain], { staticNetwork: true })).sendTransaction(req)).hash;
@@ -347,9 +393,13 @@ export class DappBridge {
         const progs = [...new Set(vtx.message.compiledInstructions.map((ix) => keysAll[ix.programIdIndex]?.toBase58() ?? "?"))].map((id) => PROGRAMS[id] ?? `${id.slice(0, 4)}…${id.slice(-4)}`);
         const simr = await this.simulateSolana(vtx, me);
         const sim = simr.text;
-        const warn = [...new Set([...solanaWarnings(vtx), ...simr.warnings])];
+        const unknown = progs.filter((n) => !Object.values(PROGRAMS).includes(n));
+        const extra: string[] = [];
+        if (unknown.length) extra.push(`it runs programs Tollkit can't read (${unknown.slice(0, 4).join(", ")}). They can do things the balance check doesn't show. Only approve if you trust this site.`);
+        if (progs.includes("Stake")) extra.push("it changes a stake account. Check who will control that stake afterwards.");
+        const warn = [...new Set([...solanaWarnings(vtx), ...simr.warnings, ...extra])];
         const send = method === "sol_signAndSendTransaction";
-        await this.ask(`${host} asks you to ${send ? "sign and send" : "sign"} a Solana transaction:\n${vtx.message.compiledInstructions.length} instruction(s) using ${progs.join(", ")}\n${signerIdx === 0 ? "You pay the network fee." : "Another account pays the network fee."}\n${sim}${warn.length ? "\n\nWarning: " + warn.join(" ") : ""}`);
+        await this.ask(origin, `${host} asks you to ${send ? "sign and send" : "sign"} a Solana transaction:\n${vtx.message.compiledInstructions.length} instruction(s) using ${progs.join(", ")}\n${signerIdx === 0 ? "You pay the network fee." : "Another account pays the network fee."}\n${sim}${warn.length ? "\n\nWarning: " + warn.join(" ") : ""}`);
         vtx.sign([keys.solana]);
         if (!send) return { signedTransaction: Buffer.from(vtx.serialize()).toString("base64") };
         const sig = await this.sol().sendRawTransaction(vtx.serialize(), { skipPreflight: !!(p[0] as any)?.options?.skipPreflight, maxRetries: 3 });
@@ -363,7 +413,8 @@ export class DappBridge {
         let text = "";
         try { text = new TextDecoder("utf-8", { fatal: true }).decode(msg); } catch { text = "\u0000"; }
         if (!msg.length || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw new RpcError(4200, "Tollkit only signs text messages on Solana.");
-        await this.ask(`${host} asks you to sign a message with your Solana key:\n\n${shown(text, 2000)}`);
+        const pt = plainText(text);
+        await this.ask(origin, `${host} asks you to sign a message with your Solana key:\n\n${shown(pt.text, 2000)}${warned([...signInWarning(pt.text, host), ...pt.warnings])}`);
         const seed = Buffer.from(keys.solana.secretKey.slice(0, 32));
         const key = createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]), format: "der", type: "pkcs8" });
         return { signature: edSign(null, msg, key).toString("base64"), signedMessage: msg.toString("base64") };

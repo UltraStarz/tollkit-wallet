@@ -1,5 +1,6 @@
 /** AgentKit provider, ElizaOS plugin and MCP server all expose the same actions, inside the same limits. Fake quotes; no network. */
 import { mkdtempSync } from "node:fs";
+import { zxData } from "./fixtures/zx.js";
 import os from "node:os";
 import path from "node:path";
 import { createKeystore } from "../src/keystore.js";
@@ -15,7 +16,7 @@ const PW = "correct horse battery";
 const dir = mkdtempSync(path.join(os.tmpdir(), "twpl-"));
 await createKeystore(PW, { dir, scrypt: { N: 1 << 10, r: 8, p: 1 } });
 const quotes = (async (u: string) => { const url = new URL(u); const sell = url.searchParams.get("sellAmount")!;
-  return Response.json({ sellAmount: sell, buyAmount: "4000000000000000", minBuyAmount: "3960000000000000", fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: "0x1", value: "0" } }); }) as unknown as typeof fetch;
+  return Response.json({ sellAmount: sell, buyAmount: "4000000000000000", minBuyAmount: "3960000000000000", fees: { integratorFee: { amount: String(BigInt(sell) * 50n / 10000n) } }, transaction: { to: ALLOWANCE_HOLDER, data: zxData(url, "3960000000000000"), value: "0" } }); }) as unknown as typeof fetch;
 const sent: string[] = [];
 const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.example", approve: null, execute: async (q) => { sent.push(q.sell_amount); return "0xswap"; } });
 

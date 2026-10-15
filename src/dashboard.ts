@@ -25,6 +25,9 @@ import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLin
 import { AiAssistant } from "./ai.js";
 import { Holdings, priceChart, coinId, erc20Info, type ChartRange } from "./holdings.js";
 import { KNOWN } from "./tokens.js";
+import { checkToken, findListed, isCoreToken, loadExtraLists, searchEvm, searchSolana, solanaInfo } from "./tokenlist.js";
+import { buildBot, maybeShare, setShare, shareSettings, summarize, TEMPLATES } from "./bots.js";
+import { DEFAULT_PROXY } from "./swap.js";
 import { buyLink, BUY_ASSETS } from "./buy.js";
 import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.js";
 
@@ -44,12 +47,21 @@ function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<any> {
 const send = (res: ServerResponse, code: number, body: unknown, type = "application/json") => {
   res.writeHead(code, {
     "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer",
-    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   });
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 };
 
-export async function startDashboard(w: TollkitWallet, password: string, o: { port?: number; host?: string; watch?: boolean; autopilot?: boolean; connectApps?: boolean; ai?: AiAssistant | false; holdings?: Holdings | false } = {}): Promise<DashboardHandle> {
+/** A connector address that AI apps add by URL; Tollkit's server relays their requests to this wallet. */
+export interface RemoteConnect {
+  view(): { on: boolean; url: string | null; online: boolean };
+  /** on: make an address (or keep the current one). new: replace it (the old one stops working). off: stop. */
+  act(action: "on" | "new" | "off"): Promise<void>;
+}
+
+export async function startDashboard(w: TollkitWallet, password: string, o: { port?: number; host?: string; watch?: boolean; autopilot?: boolean; connectApps?: boolean; ai?: AiAssistant | false; holdings?: Holdings | false;
+  /** Connect your AI through a hosted address instead of app settings files (the browser extension). */
+  remote?: RemoteConnect } = {}): Promise<DashboardHandle> {
   const watcher = o.watch === false ? null : new Watcher(w);
   watcher?.start();
   const prices = o.watch === false ? null : new PriceFeed();
@@ -60,6 +72,20 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // The Autopilot tab's AI chat and scheduled check-ins (runs while the dashboard is open).
   const ai = o.ai === false ? null : o.ai ?? new AiAssistant(w, { dir: w.dir });
   const aiTimer = ai ? setInterval(() => void ai.tick().catch(() => {}), 60_000) : null;
+  // Bots: Tollkit's public board (other people's shared results), refreshed hourly; this wallet's own share, daily if on.
+  const proxy = (w as any).o?.proxy ?? DEFAULT_PROXY, wf: typeof fetch = (w as any).f ?? fetch;
+  let board: unknown = null;
+  const symbolOf = (chain: Chain, token: string): string | null => {
+    const k = Object.entries(KNOWN[chain]).find(([sym, t]) => sym.toUpperCase() === token.toUpperCase() || t.address.toLowerCase() === token.toLowerCase());
+    if (k) return k[0];
+    return chain === "solana" ? null : findListed(chain, token)?.symbol ?? null;
+  };
+  const botsBeat = async () => {
+    try { const r = await wf(`${proxy}/bots/leaderboard`, { signal: AbortSignal.timeout(15_000) }); if (r.ok) board = await r.json(); } catch { /* optional */ }
+    await maybeShare(w.dir, summarize(w.rules().list()), symbolOf, { fetch: wf, proxy }).catch(() => false);
+  };
+  const botsTimer = o.watch === false ? null : setInterval(() => void botsBeat(), 3600_000);
+  if (botsTimer) void botsBeat();
   // Every token held, priced (refreshes each minute). Off in tests unless one is passed in.
   const holdings = o.holdings === false || (o.holdings === undefined && o.watch === false) ? null : o.holdings ?? new Holdings({ evm: w.addresses.evm, solana: w.addresses.solana, chains: () => w.policy.chains, dir: w.dir });
   holdings?.start();
@@ -111,8 +137,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           live: watcher ? { events: watcher.events(), balances: watcher.balances(), heads: watcher.heads() } : null,
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
+          bots: summarize(w.rules().list()), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board,
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
-          connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir) },
+          connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
           ai: ai ? ai.view() : null,
           backup: { kind: backupKind(w.dir), done: backupDone(w.dir) },
           ext: { paired: w.dapps().paired(), sites: w.dapps().sites() },
@@ -168,12 +195,47 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         for (const x of parsed as any[]) made.push(await w.rules().add(x.data, "owner", false));
         return send(res, 200, { rules: made.map((r) => ({ ...r, description: describeRule(r) })) });
       }
+      // Bots (src/bots.ts): preview a template at today's price, start it, pause/resume/stop it, share results.
+      if (p === "/api/bots/preview" || p === "/api/bots/start") {
+        const chain = String(b.chain) as Chain, token = String(b.token ?? "").trim();
+        if (!CHAINS.includes(chain) || !token) return send(res, 400, { error: "Pick a network and a token." });
+        if (!w.policy.chains.includes(chain)) return send(res, 400, { error: `${chain} is turned off in your limits.` });
+        if (chain !== "solana") await loadExtraLists(wf);
+        let tok;
+        try { tok = await resolveToken(chain, token); } catch (e) { return send(res, 400, { error: (e as Error).message }); }
+        const known = isCoreToken(chain, tok.address) || (holdings?.list.list()[chain] ?? []).some((a) => a.toLowerCase() === tok.address.toLowerCase())
+          || (chain === "solana" ? (await solanaInfo([tok.address], wf).catch(() => new Map())).get(tok.address)?.trust === "listed" : !!findListed(chain, tok.address));
+        if (!known) return send(res, 400, { error: "Add this token on Home first (Add a token runs Tollkit's scam check), then make a bot for it." });
+        const price = priceOf(tok.symbol) ?? (autopilot ? await autopilot.price(chain, tok).catch(() => undefined) : undefined);
+        let built;
+        try { built = buildBot(String(b.template ?? ""), tok.symbol && /^[A-Z0-9.]{2,12}$/i.test(tok.symbol) && isCoreToken(chain, tok.address) ? tok.symbol : tok.address, chain, (b.params ?? {}) as Record<string, unknown>, price); }
+        catch (e) { return send(res, 400, { error: (e as Error).message }); }
+        if (p === "/api/bots/preview") return send(res, 200, { name: built.name, price: price ?? null, rules: built.rules.map((r) => ({ description: describeRule(r) })) });
+        const made = await w.rules().addBot(built.rules, "owner", false);
+        void autopilot?.tick();
+        return send(res, 200, { bot: built.bot, rules: made.map((r) => r.id) });
+      }
+      if (p === "/api/bots/status") {
+        const st = String(b.status), id = String(b.bot ?? "");
+        if (!["active", "paused", "cancelled"].includes(st)) return send(res, 400, { error: "status must be active, paused or cancelled" });
+        const rs = w.rules().list().filter((r) => (r.bot ?? `rule-${r.id}`) === id && !["done", "cancelled", "expired"].includes(r.status));
+        if (!rs.length) return send(res, 400, { error: "That bot has nothing left to change." });
+        for (const r of rs) await w.rules().setStatus(r.id, st as "active" | "paused" | "cancelled");
+        void autopilot?.tick();
+        return send(res, 200, { ok: true });
+      }
+      if (p === "/api/bots/share") { setShare(b.on === true, w.dir); if (b.on === true) void botsBeat(); return send(res, 200, { share: b.on === true }); }
       if (p === "/api/rules/status") {
         const st = String(b.status);
         if (!["active", "paused", "cancelled"].includes(st)) return send(res, 400, { error: "status must be active, paused or cancelled" });
         const r = await w.rules().setStatus(String(b.id ?? ""), st as "active" | "paused" | "cancelled");
         void autopilot?.tick();
         return send(res, 200, { rule: { ...r, description: describeRule(r) } });
+      }
+      // Turning the connector address off only takes access away, so it doesn't need the password.
+      if (p === "/api/connect/remote" && b.action === "off") {
+        if (!o.remote) return send(res, 400, { error: "Not available here." });
+        await o.remote.act("off"); return send(res, 200, { remote: o.remote.view() });
       }
       // Removing an AI app only takes access away, so it doesn't need the password.
       if (p === "/api/connect" && b.action === "remove") {
@@ -182,17 +244,29 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (o.connectApps === false) return send(res, 400, { error: "Turned off here." });
         return send(res, 200, { message: await removeApp(app) });
       }
-      // Show a token held on Base/Ethereum that the wallet didn't find on its own (display only).
-      if (p === "/api/tokens/add" || p === "/api/tokens/hide") {
+      // Tokens: search the wallet's list (Jupiter on Solana), check one, add one. Adding is display only; a token
+      // with warnings needs a second, explicit "add anyway".
+      if (p === "/api/tokens/search") {
+        const chain = String(b.chain) as Chain, q = String(b.q ?? "").slice(0, 80);
+        if (!CHAINS.includes(chain)) return send(res, 400, { error: "Pick a network." });
+        if (chain !== "solana") await loadExtraLists((w as any).f ?? fetch);
+        const tokens = chain === "solana" ? await searchSolana(q, (w as any).f ?? fetch) : searchEvm(chain, q);
+        return send(res, 200, { tokens, source: chain === "solana" ? "Jupiter" : "Superchain and Uniswap token lists" });
+      }
+      if (p === "/api/tokens/check" || p === "/api/tokens/add" || p === "/api/tokens/hide") {
         const chain = String(b.chain) as Chain, addr = String(b.address ?? "").trim();
-        if (chain !== "base" && chain !== "ethereum") return send(res, 400, { error: "Solana tokens show up on their own; add Base or Ethereum tokens here." });
-        if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return send(res, 400, { error: "Paste the token's contract address (0x…)." });
+        if (!CHAINS.includes(chain)) return send(res, 400, { error: "Pick a network." });
+        if (chain === "solana" ? !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr) : !/^0x[0-9a-fA-F]{40}$/.test(addr)) return send(res, 400, { error: chain === "solana" ? "Paste the token's mint address." : "Paste the token's contract address (0x…)." });
         if (!holdings) return send(res, 400, { error: "Token list is off here." });
         if (p === "/api/tokens/hide") { holdings.list.remove(chain, addr); void holdings.refresh(); return send(res, 200, { ok: true }); }
-        const info = await erc20Info(chain, addr).catch(() => null);
-        if (!info) return send(res, 400, { error: `That address isn't a token on ${chain === "base" ? "Base" : "Ethereum"}.` });
+        let check;
+        try { check = await checkToken(chain, addr, { fetch: (w as any).f ?? fetch, proxy: (w as any).o?.proxy }); }
+        catch (e) { return send(res, 400, { error: (e as Error).message }); }
+        if (p === "/api/tokens/check") return send(res, 200, { check });
+        if (check.decimals === null) return send(res, 400, { error: `That address isn't a token on ${chain[0]!.toUpperCase() + chain.slice(1)}.` });
+        if (check.warnings.length && b.confirm !== true) return send(res, 200, { needs_confirm: true, check });
         holdings.list.add(chain, addr); await holdings.refresh();
-        return send(res, 200, { ok: true, token: info });
+        return send(res, 200, { ok: true, token: { symbol: check.symbol ?? addr.slice(0, 6) }, check });
       }
       // Buy with a card or bank: a single-use Coinbase checkout link for this wallet's address.
       if (p === "/api/buy") {
@@ -242,6 +316,11 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       if (p === "/api/backup/reveal") return send(res, 200, await revealBackup(password, w.dir));
       if (p === "/api/ai/password") { savePasswordFile(password, w.dir); return send(res, 200, { ok: true }); }
       // Connect your AI: writes the AI app's own settings (and the password file) on this computer.
+      if (p === "/api/connect/remote") {
+        if (!o.remote) return send(res, 400, { error: "Not available here." });
+        if (b.action !== "on" && b.action !== "new") return send(res, 400, { error: "Unknown action." });
+        await o.remote.act(b.action); return send(res, 200, { remote: o.remote.view() });
+      }
       if (p === "/api/connect") {
         const app = String(b.app ?? "") as AppId;
         if (!["claude", "claude-code", "cursor", "codex", "gemini"].includes(app)) return send(res, 400, { error: "Unknown app." });
@@ -282,7 +361,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); if (aiTimer) clearInterval(aiTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); if (aiTimer) clearInterval(aiTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 

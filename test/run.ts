@@ -129,15 +129,20 @@ const PW = "correct horse battery";
 // --- seller check
 {
   const ok = (async () => Response.json({ offers: [{ pay_to: "0xAbC" }], signals: [{ code: "payer_history", level: "caution", detail: "x" }] })) as unknown as typeof fetch;
-  const v = await checkSeller("https://s.example/x", "0xabc", ok);
+  const v = await checkSeller("https://s.example/a", "0xabc", ok);
   check(v.ok && v.cautions.length === 1, "matching pay-to with cautions passes", v);
-  const w = await checkSeller("https://s.example/x", "0xEVIL", ok);
+  const w = await checkSeller("https://s.example/a", "0xEVIL", ok);
   check(!w.ok && w.warnings[0]!.code === "pay_to_mismatch", "pay-to that differs from the seller's quote is a warning");
   const bad = (async () => Response.json({ offers: [], signals: [{ code: "pay_to_differs_from_listing", level: "warning", detail: "x" }] })) as unknown as typeof fetch;
-  check(!(await checkSeller("https://s.example/x", "0x1", bad)).ok, "seller warnings block");
+  check(!(await checkSeller("https://s.example/b", "0x1", bad)).ok, "seller warnings block");
   const down = (async () => new Response("", { status: 503 })) as unknown as typeof fetch;
-  const d = await checkSeller("https://s.example/x", "0x1", down);
+  const d = await checkSeller("https://s.example/c", "0x1", down);
   check(d.ok && !d.checked, "check service down: advisory, doesn't block");
+  let n = 0;
+  const counted = (async () => { n++; return Response.json({ offers: [{ pay_to: "0xAbC" }], signals: [] }); }) as unknown as typeof fetch;
+  await checkSeller("https://s.example/y", "0xabc", counted); await checkSeller("https://s.example/y", "0xabc", counted);
+  const again = await checkSeller("https://s.example/y", "0xEVIL", counted);
+  check(n === 1 && !again.ok, "a seller is checked once per 10 minutes; the pay-to is still compared every time", n);
 }
 
 

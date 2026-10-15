@@ -10,6 +10,7 @@ import { Contract, JsonRpcProvider, formatUnits, parseUnits } from "ethers";
 import { DEFAULT_RPC, EVM_CHAIN_ID, STABLES, SWAP_FEE_BPS, WSOL, NATIVE_EVM, type Chain } from "./chains.js";
 import { addresses, unlock, type Keys } from "./keystore.js";
 import { TokenList } from "./holdings.js";
+import { findListed, isCoreToken, loadExtraLists, solanaInfo } from "./tokenlist.js";
 import { entries, exportCsv, LimitError, record, reserve, settle, spentToday, type Entry } from "./ledger.js";
 import { payFetch, type PayResult } from "./pay.js";
 import { loadPolicy, savePolicy, type Policy } from "./policy.js";
@@ -220,15 +221,25 @@ export class TollkitWallet {
     return { ok: true, quote: strip(r.q), ...(warning ? { warning } : {}) };
   }
 
+  /** Core, listed (Superchain list on Base/Ethereum, Jupiter-verified on Solana) or added by the owner. */
+  private async knownToken(chain: Chain, token: string): Promise<boolean> {
+    if (token === NATIVE_EVM || token === WSOL || isCoreToken(chain, token)) return true;
+    if ((new TokenList(this.o.dir).list()[chain] ?? []).some((a) => a.toLowerCase() === token.toLowerCase())) return true;
+    if (chain !== "solana") { await loadExtraLists(this.f); return !!findListed(chain, token); }
+    try { return (await solanaInfo([token], this.f)).get(token)?.trust === "listed"; } catch { return false; }
+  }
+
   private async priced(req: SwapRequest, forTrade = true): Promise<{ q: SwapQuote } | SwapResult> {
     const refuse = (code: string, reason: string): SwapResult => ({ ok: false, refused: { code, reason } });
     if (!this.policy.chains.includes(req.chain)) return refuse("chain_off", `Trading on ${req.chain} is turned off.`);
     if (req.slippage_bps > this.policy.max_slippage_bps) return refuse("slippage", `Slippage ${req.slippage_bps / 100}% is over your maximum of ${this.policy.max_slippage_bps / 100}%.`);
     if (req.sell_token.toLowerCase() === req.buy_token.toLowerCase()) return refuse("same_token", "Sell and buy tokens are the same.");
+    // Buying a token the wallet doesn't know: only after the owner added it (which runs Tollkit's token check).
+    if (forTrade && !(await this.knownToken(req.chain, req.buy_token))) return refuse("unchecked_token", `${req.buy_token} isn't on the wallet's token list and you haven't added it. Add it on Home (Add a token) first; that runs Tollkit's scam check.`);
     let q: SwapQuote;
     try { q = await getQuote(req, this.taker(req.chain), { fetch: this.f, proxy: this.o.proxy ?? DEFAULT_PROXY }); }
     catch (e) { return refuse("no_quote", (e as Error).message); }
-    const bad = vetQuote(q, req);
+    const bad = vetQuote(q, req, req.chain === "solana" ? undefined : this.taker(req.chain));
     // A quote without a transaction is still a price; only trading needs one.
     if (bad && (forTrade || !/no transaction/.test(bad))) {
       const w = balanceWarning(q);

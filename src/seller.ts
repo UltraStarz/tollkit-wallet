@@ -8,12 +8,22 @@ type Fetch = typeof fetch;
 export interface SellerSignal { code: string; level: "info" | "caution" | "warning"; detail: string }
 export interface SellerVerdict { ok: boolean; warnings: SellerSignal[]; cautions: SellerSignal[]; quoted_pay_to: string[]; checked: boolean }
 
+/** A seller's check result is reused for 10 minutes, so a run of small payments to one seller checks it once. */
+const CHECK_TTL_MS = 10 * 60_000;
+const cache = new Map<string, { at: number; d: unknown }>();
+
 export async function checkSeller(url: string, payTo: string, f: Fetch = fetch, base = "https://api.tollkit.dev"): Promise<SellerVerdict> {
   let d: any;
+  const key = `${base} ${url}`, hit = cache.get(key);
   try {
-    const r = await f(`${base}/check?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20_000) });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    d = await r.json();
+    if (hit && Date.now() - hit.at < CHECK_TTL_MS) d = hit.d;
+    else {
+      const r = await f(`${base}/check?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20_000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      d = await r.json();
+      if (cache.size > 500) cache.clear();
+      cache.set(key, { at: Date.now(), d });
+    }
   } catch {
     // The check is advisory; if Weigh Station is down we say so and don't block.
     return { ok: true, warnings: [], cautions: [{ code: "check_unavailable", level: "caution", detail: "Seller check could not run." }], quoted_pay_to: [], checked: false };

@@ -15,6 +15,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
+import { evmBalances, evmList, findListed, loadExtraLists, solanaInfo } from "./tokenlist.js";
 import { Contract, JsonRpcProvider, formatUnits, getAddress } from "ethers";
 import { DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
 import { KNOWN } from "./tokens.js";
@@ -28,7 +29,11 @@ const LLAMA_CHAIN: Record<Chain, string> = { base: "base", ethereum: "ethereum",
 const NATIVE_COIN: Record<Chain, string> = { base: "coingecko:ethereum", ethereum: "coingecko:ethereum", solana: "coingecko:solana" };
 const ERC20 = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)", "function symbol() view returns (string)", "function name() view returns (string)"];
 
-export interface Holding { chain: Chain; address: string; symbol: string; name?: string; decimals: number; amount: string; price?: number; usd?: number; change_24h?: number; icon?: string; coin: string }
+export interface Holding { chain: Chain; address: string; symbol: string; name?: string; decimals: number; amount: string; price?: number; usd?: number; change_24h?: number; icon?: string; coin: string;
+  /** listed: on the wallet's token list (or Jupiter-verified on Solana); unlisted: anything else. */
+  trust?: "core" | "listed" | "unlisted";
+  /** The owner added it, so it shows even at zero. */
+  watched?: boolean }
 
 /** The DefiLlama id for a token: chain:address, or the coin itself for native ETH/SOL. */
 export function coinId(chain: Chain, address: string): string {
@@ -44,8 +49,8 @@ export class TokenList {
   constructor(dir?: string) { this.file = path.join(walletHome(dir), "tokens.json"); }
   list(): Partial<Record<Chain, string[]>> { try { return existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : {}; } catch { return {}; } }
   add(chain: Chain, address: string) {
-    if (chain === "solana" || isCore(chain, address)) return; // Solana is found automatically; core tokens are always shown
-    const l = this.list(), a = getAddress(address);
+    if (isCore(chain, address)) return; // core tokens are always shown
+    const l = this.list(), a = chain === "solana" ? address : getAddress(address);
     if ((l[chain] ?? []).some((x) => x.toLowerCase() === a.toLowerCase())) return;
     l[chain] = [...(l[chain] ?? []), a];
     const t = `${this.file}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify(l, null, 2)); renameSync(t, this.file);
@@ -111,10 +116,18 @@ export class Holdings {
       try {
         const c = new Contract(a, ERC20, p);
         const [bal, decimals, symbol] = await Promise.all([c.balanceOf!(this.o.evm), c.decimals!(), c.symbol!()]);
-        if (BigInt(bal) > 0n) out.push({ chain, address: a, symbol: String(symbol), decimals: Number(decimals), amount: formatUnits(BigInt(bal), Number(decimals)) });
+        out.push({ chain, address: a, symbol: String(symbol), decimals: Number(decimals), amount: formatUnits(BigInt(bal), Number(decimals)), watched: true });
       } catch { /* skip a token that doesn't answer */ }
     }));
     return out;
+  }
+
+  /** Listed tokens this wallet holds, in one Multicall3 call per chain. */
+  private async listed(chain: Chain): Promise<Omit<Holding, "coin">[]> {
+    await loadExtraLists(this.f);
+    const list = evmList(chain).filter((t) => t.trust === "listed");
+    const bals = await evmBalances(chain, this.o.evm, list.map((t) => t.address), this.rpc(chain));
+    return list.filter((t) => bals.has(t.address)).map((t) => ({ chain, address: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, amount: formatUnits(bals.get(t.address)!, t.decimals), icon: t.logo, trust: "listed" as const }));
   }
 
   /** Finds holdings on the enabled chains and prices them. */
@@ -124,8 +137,17 @@ export class Holdings {
     const add = (rows: Omit<Holding, "coin">[]) => { for (const r of rows) if (!found.some((x) => x.chain === r.chain && x.address.toLowerCase() === r.address.toLowerCase())) found.push(r); };
     await Promise.all(chains.map(async (c) => {
       try {
-        if (c === "solana") add(await this.solana());
+        if (c === "solana") {
+          const held = await this.solana();
+          const watched = (this.list.list().solana ?? []).filter((m) => !held.some((h) => h.address === m));
+          const rows = [...held, ...watched.map((m) => ({ chain: "solana" as Chain, address: m, symbol: "", decimals: 0, amount: "0", watched: true }))];
+          const info = await solanaInfo(rows.map((r) => r.address), this.f).catch(() => new Map());
+          for (const r of rows) { const t = info.get(r.address); if (t) Object.assign(r, { symbol: r.symbol || t.symbol, name: t.name, icon: t.logo, trust: t.trust, ...(r.watched ? { decimals: t.decimals } : {}) }); }
+          for (const r of rows) if ((this.list.list().solana ?? []).includes(r.address)) (r as any).watched = true;
+          add(rows);
+        }
         else {
+          try { add(await this.listed(c)); } catch (e) { errors.push(`${c} list: ${(e as Error).message}`); }
           if (c === "ethereum") { try { add(await this.ethereumIndex()); } catch (e) { errors.push(`ethereum index: ${(e as Error).message}`); } }
           add(await this.tracked(c));
         }
@@ -148,7 +170,10 @@ export class Holdings {
       const price = p?.price && p.price > 0 ? p.price : undefined;
       return { ...h, coin, symbol: h.symbol || (p?.symbol ? String(p.symbol).toUpperCase() : `${h.address.slice(0, 4)}…`), price, usd: price !== undefined ? price * Number(h.amount) : undefined, ...(typeof pct[coin] === "number" ? { change_24h: pct[coin] / 100 } : {}) };
     });
-    const shown = tokens.filter((t) => t.price !== undefined).sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
+    for (const t of tokens) if (!t.trust) t.trust = findListed(t.chain, t.address) ? "listed" : "unlisted";
+    for (const t of tokens) if (!t.icon) t.icon = findListed(t.chain, t.address)?.logo;
+    // Shown: anything with a price, and tokens the owner added. Unpriced tokens nobody added (often airdropped spam) stay hidden.
+    const shown = tokens.filter((t) => t.price !== undefined || t.watched).sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
     this.snap = { tokens: shown, hidden: tokens.length - shown.length, at: new Date().toISOString(), errors };
   }
 

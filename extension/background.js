@@ -66,7 +66,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     if (m.type === "pair") {
       const code = String(m.code || "").trim().toUpperCase();
       const port = Number((/^(\d{2,5})-/.exec(code) || [])[1]);
-      if (!port) return reply({ error: "Paste the whole code from Tollkit's Settings, like 7420-AB12-CD34." });
+      if (!port) return reply({ error: "Paste the whole code shown in Tollkit's Settings (numbers, then two groups of four)." });
       try {
         const r = await fetch(`http://127.0.0.1:${port}/api/ext/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
         const j = await r.json().catch(() => ({}));

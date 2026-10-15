@@ -124,7 +124,7 @@ export async function gate(offer: Offer, url: string, deps: PayDeps): Promise<st
   for (const r of offer.recipients) {
     if (await deps.sanctions.isSanctioned(r)) throw new Refusal("sanctioned", `The recipient ${r} is on the OFAC sanctions list.`);
   }
-  const verdict = await deps.checkSeller(url, offer.recipients[0]);
+  const verdict = await deps.checkSeller(url, offer.recipients[0] ?? "");
   let needApproval = offer.usd > p.approval_above_usd;
   let why = needApproval ? `over your approval threshold of ${money(p.approval_above_usd)}` : "";
   if (!verdict.ok) {

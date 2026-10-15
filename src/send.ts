@@ -3,7 +3,8 @@
  * Only reachable with the password (CLI / dashboard), never through the
  * agent tools. Recipients are screened against the OFAC list.
  */
-import { Connection, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction, type Keypair } from "@solana/web3.js";
+import { Connection, PublicKey, SystemProgram, Transaction, type Keypair } from "@solana/web3.js";
+import { sendAndConfirm } from "./solconfirm.js";
 import { Contract, JsonRpcProvider, getAddress, isAddress, type HDNodeWallet, type Wallet } from "ethers";
 import { DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
 import type { Token } from "./tokens.js";
@@ -37,7 +38,7 @@ export async function sendTokens(r: SendRequest, keys: { evm: Wallet | HDNodeWal
       tx.add(createAssociatedTokenAccountIdempotentInstruction(from, dst, to, mint)); // we pay the recipient's account rent if it's new
       tx.add(createTransferCheckedInstruction(src, mint, dst, from, BigInt(r.amount), r.token.decimals));
     }
-    return sendAndConfirmTransaction(conn, tx, [keys.solana]);
+    return sendAndConfirm(conn, tx, [keys.solana]);
   }
   const p = new JsonRpcProvider(rpc ?? DEFAULT_RPC[r.chain], EVM_CHAIN_ID[r.chain], { staticNetwork: true });
   const signer = keys.evm.connect(p);

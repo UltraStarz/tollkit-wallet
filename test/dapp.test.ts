@@ -8,7 +8,7 @@ import { AbiCoder, Interface, MaxUint256, verifyMessage, verifyTypedData } from 
 import { createKeystore } from "../src/keystore.js";
 import { TollkitWallet } from "../src/wallet.js";
 import { startDashboard } from "../src/dashboard.js";
-import { normalOrigin, solanaWarnings } from "../src/dapp.js";
+import { DappBridge, normalOrigin, plainText, signInWarning, solanaWarnings } from "../src/dapp.js";
 const USDC_ACCT = Keypair.generate().publicKey;
 let OWNER: Buffer = Buffer.alloc(32), DELEGATE: Buffer | null = null;
 const usdcData = (amt: bigint) => { const b = Buffer.alloc(165); OWNER.copy(b, 32); b.writeBigUInt64LE(amt, 64); if (DELEGATE) { b.writeUInt32LE(1, 72); DELEGATE.copy(b, 76); } return b.toString("base64"); };
@@ -24,6 +24,7 @@ const rpcCalls: any[] = [];
 const sentEvm: any[] = [];
 let simErr: unknown = null;
 const w = await TollkitWallet.open(PW, { dir, dapp: {
+  rejectCooldownMs: 0,
   approve: async (t) => { asked.push(t); if (hold) return new Promise(() => {}); return answer; },
   evmRpc: async (chain, method, params: any) => { rpcCalls.push({ chain, method, params }); if (method === "eth_call" && params[0]?.data === "0x95d89b41") return AbiCoder.defaultAbiCoder().encode(["string"], ["USDC"]); if (method === "eth_call" && params[0]?.data === "0x313ce567") return AbiCoder.defaultAbiCoder().encode(["uint8"], [6]); return method === "eth_blockNumber" ? "0x10" : "0x5208"; },
   sendEvm: async (chain, tx) => { sentEvm.push({ chain, tx }); return "0xhash"; },
@@ -90,6 +91,11 @@ const raw = Buffer.from(new VersionedTransaction(msg).serialize()).toString("bas
 const st = await run(APP, "sol_signTransaction", { transaction: raw });
 const signed = VersionedTransaction.deserialize(Buffer.from(st.result.signedTransaction, "base64"));
 check(signed.signatures[0]!.some((b) => b !== 0) && /using System/.test(asked.at(-1)!) && /SOL -0.010005, USDC -7.5/.test(asked.at(-1)!) && /You pay the network fee/.test(asked.at(-1)!), "sign: shows programs and the simulated SOL change; returns it signed", asked.at(-1));
+check(!/can't read/.test(asked.at(-1)!), "known programs only: no unknown-program warning");
+const odd = Keypair.generate().publicKey;
+const oddMsg = new TransactionMessage({ payerKey: me, recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions: [{ programId: odd, keys: [{ pubkey: me, isSigner: true, isWritable: true }], data: Buffer.from([1]) }] }).compileToV0Message();
+await run(APP, "sol_signTransaction", { transaction: Buffer.from(new VersionedTransaction(oddMsg).serialize()).toString("base64") });
+check(new RegExp(`runs programs Tollkit can't read \\(${odd.toBase58().slice(0, 4)}`).test(asked.at(-1)!), "a program Tollkit can't read gets a warning", asked.at(-1));
 DELEGATE = Keypair.generate().publicKey.toBuffer();
 await run(APP, "sol_signTransaction", { transaction: raw });
 check(/Warning: .*spend your USDC later/.test(asked.at(-1)!), "a hidden token approval (seen in the simulated account) gets a warning", asked.at(-1));
@@ -154,6 +160,41 @@ check((await call("/api/extmgr/sites", { dash: true })).j.sites.length === 0, "d
 await call("/api/extmgr/unpair", { body: {}, dash: true });
 check((await call("/api/ext/state", { ext: pr.j.token })).status === 401, "unpair: the extension's token stops working");
 await dash.close();
+
+await run(APP, "eth_requestAccounts");
+// ---- warnings carried over from the Chrome extension's review ----------------------------------------
+check(signInWarning("evil.example wants you to sign in with your Ethereum account:\n0xabc", "app.example.com").length === 1 && signInWarning("app.example.com wants you to sign in with your Ethereum account:\n0xabc", "app.example.com").length === 0, "sign-in messages for another site are flagged; this site's are not");
+const pt = plainText("Send 1 USDC‮0001 ot");
+check(pt.text.includes("[U+202E]") && pt.warnings.length === 1 && plainText("plain words").warnings.length === 0, "hidden direction characters are shown and flagged");
+await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x2105" }]);
+const siwe = await run(APP, "personal_sign", ["0x" + Buffer.from("evil.example wants you to sign in with your Ethereum account:\n" + w.addresses.evm).toString("hex"), w.addresses.evm]);
+check(!!siwe.result && /this sign-in message is for evil.example, not app.example.com/.test(asked.at(-1)!), "personal_sign: a sign-in for another site carries a warning");
+const mismatch = await run(APP, "eth_signTypedData_v4", [w.addresses.evm, JSON.stringify({ types: { EIP712Domain: [], Permit: [{ name: "spender", type: "address" }] }, primaryType: "Mail", domain: { chainId: 8453 }, message: { spender: w.addresses.evm } })]);
+check(mismatch.error?.code === -32602 && /won't sign/.test(mismatch.error.message), "typed data whose primaryType doesn't match its types is refused", mismatch);
+const onlyMail = (chainId?: number) => JSON.stringify({ types: { EIP712Domain: [], Mail: [{ name: "to", type: "address" }] }, primaryType: "Mail", domain: { name: "X", ...(chainId === undefined ? {} : { chainId }) }, message: { to: w.addresses.evm } });
+await run(APP, "eth_signTypedData_v4", [w.addresses.evm, onlyMail(1)]);
+check(/it's for chain 1, but this site is on Base \(8453\)/.test(asked.at(-1)!), "typed data for another chain than the site's is flagged");
+await run(APP, "eth_signTypedData_v4", [w.addresses.evm, onlyMail()]);
+check(/isn't tied to a chain/.test(asked.at(-1)!), "typed data with no chain is flagged");
+await run(APP, "eth_signTypedData_v4", [w.addresses.evm, onlyMail(8453)]);
+check(!/Warning:/.test(asked.at(-1)!), "plain typed data on the site's chain has no warning");
+// a Deny makes that site wait before asking again (cooldown), and subdomains share the waiting cap
+const cd = new DappBridge({ evm: w.addresses.evm, solana: w.addresses.solana, keys: () => ({}) as any, chains: () => ["base"], dir, approve: async () => "denied", rejectCooldownMs: 60_000 });
+const sub = async (o: string, m: string) => { try { const r: any = await cd.submit(o, m, []); if ("result" in r) return "result"; for (;;) { const j = cd.job(r.id); if (j.status !== "pending") return j.status === "error" ? j.error!.code : "done"; await new Promise((x) => setTimeout(x, 5)); } } catch (e) { return (e as any).code; } };
+const dc = await sub("https://pest.example", "eth_requestAccounts");
+check(dc === 4001, "denied connect", dc);
+let threw: unknown = null; try { await cd.submit("https://pest.example", "eth_requestAccounts", []); } catch (e) { threw = (e as any).code; }
+check(threw === 4001, "right after a Deny the same site is refused without asking");
+const held = new DappBridge({ evm: w.addresses.evm, solana: w.addresses.solana, keys: () => ({}) as any, chains: () => ["base"], dir, approve: () => new Promise(() => {}) });
+for (const h of ["a", "b", "c"]) await held.submit(`https://${h}.spam.example`, "eth_requestAccounts", []);
+let capped: unknown = null; try { await held.submit("https://d.spam.example", "eth_requestAccounts", []); } catch (e) { capped = (e as any).message; }
+const shared = new DappBridge({ evm: w.addresses.evm, solana: w.addresses.solana, keys: () => ({}) as any, chains: () => ["base"], dir, approve: () => new Promise(() => {}) });
+for (const h of ["a", "b", "c"]) await shared.submit(`https://${h}.vercel.app`, "eth_requestAccounts", []);
+let sharedErr: unknown = null; try { await shared.submit("https://other-project.vercel.app", "eth_requestAccounts", []); } catch (e) { sharedErr = e; }
+check(sharedErr === null, "different sites on a shared host (vercel.app) don't share a cap");
+await run(APP, "eth_signTypedData_v4", [w.addresses.evm, JSON.stringify({ types: { EIP712Domain: [], Mail: [{ name: "to", type: "string" }] }, primaryType: "Mail", domain: { name: "Pay\u202eX", chainId: 8453 }, message: { to: "a\u200bb" } })]);
+check(/\[U\+202E\]/.test(asked.at(-1)!) && /\[U\+200B\]/.test(asked.at(-1)!) && /hidden characters/.test(asked.at(-1)!), "typed data shows hidden characters in its name and message");
+check(/already has requests waiting/.test(String(capped)), "subdomains of one site share the 3-request cap", capped);
 
 console.log(`\ndapp: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -19,7 +19,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { sendAndConfirm } from "./solconfirm.js";
 import { AbiCoder, Contract, Interface, JsonRpcProvider, ZeroAddress, ZeroHash, concat, getAddress, getBytes, hexlify, toUtf8Bytes, zeroPadBytes, zeroPadValue, type HDNodeWallet, type Wallet } from "ethers";
 import { DEFAULT_RPC, EVM_CHAIN_ID, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
@@ -255,7 +256,7 @@ export class Mover {
     const feeAtaExists = !!feeAta && !!(await conn.getAccountInfo(feeAta));
     const tx = await this.solanaBurnTx(q, owner, cfg, event, feeAtaExists);
     if (this.o.sendSolana) return this.o.sendSolana(tx, [keys.solana, event]);
-    return sendAndConfirmTransaction(new Connection(this.rpc("solana"), "confirmed"), tx, [keys.solana, event]);
+    return sendAndConfirm(new Connection(this.rpc("solana"), "confirmed"), tx, [keys.solana, event]);
   }
 
   list(): MoveRecord[] {

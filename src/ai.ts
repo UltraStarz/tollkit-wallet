@@ -43,7 +43,7 @@ What you can do, through the tollkit-wallet tools:
 - see their rules (autopilot_rules) and suggest new ones (autopilot_propose)
 You cannot trade, pay, withdraw or change limits, and you can't turn rules on. Every rule you suggest waits on a card under your message for the owner to tap "Turn on". Never say a rule is on or that you placed a trade.
 
-Rule kinds: limit_buy, limit_sell, stop_loss, take_profit, trailing_stop, dca (recurring buy). Assets trade against USDC on Base or Solana (Ethereum only if the owner enabled it). Use exact \`rules\` in autopilot_propose, not text. Give every rule a one- or two-sentence plain \`reason\`. To change an existing rule, propose the new one with \`replaces: <old rule id>\`; turning it on cancels the old one. A take-profit and stop-loss for the same position should share a \`group\` so one cancels the other.
+Rule kinds: limit_buy, limit_sell, stop_loss, take_profit, trailing_stop, dca (recurring buy), grid (buys amount_usd at each of \`levels\` prices from lower_price to upper_price and sells each a level higher). Assets trade against USDC on Base or Solana (Ethereum only if the owner enabled it). Use exact \`rules\` in autopilot_propose, not text. Give every rule a one- or two-sentence plain \`reason\`. To change an existing rule, propose the new one with \`replaces: <old rule id>\`; turning it on cancels the old one. A take-profit and stop-loss for the same position should share a \`group\` so one cancels the other.
 
 Before suggesting: check balances (don't plan to sell what they don't hold or spend more USDC than they have), keep each buy within their per-trade limit, and use recent prices to pick sensible triggers. If what they ask is unclear or risky (all-in, no stop), say so briefly and suggest a safer version; they decide.
 
@@ -80,7 +80,9 @@ export class AiAssistant {
   private file: string;
   busy: { kind: "chat" | "checkin"; since: string } | null = null;
   private approving = false;
-  constructor(private readonly w: TollkitWallet, private readonly o: { dir?: string; runner?: Runner; exe?: string | null; now?: () => number; fetch?: typeof fetch } = {}) {
+  constructor(private readonly w: TollkitWallet, private readonly o: { dir?: string; runner?: Runner; exe?: string | null; now?: () => number; fetch?: typeof fetch;
+    /** Who answers, when it isn't Claude Code on this computer (the browser extension uses Claude through Tollkit's server). */
+    provider?: { id: string; name: string; note: string; setup?: string } } = {}) {
     this.file = path.join(walletHome(o.dir), "ai", "chat.json");
   }
   private now() { return this.o.now?.() ?? Date.now(); }
@@ -101,7 +103,7 @@ export class AiAssistant {
     const c = this.load(), every = c.checkin.every_hours;
     const next = every && c.checkin.last ? new Date(Date.parse(c.checkin.last) + every * 3600_000).toISOString() : every ? new Date(this.now()).toISOString() : null;
     return {
-      provider: this.runner() ? { id: "claude-code", name: "Claude" } : null,
+      provider: this.runner() ? (this.o.provider ?? { id: "claude-code", name: "Claude" }) : null,
       ready: existsSync(passwordFile(this.o.dir)),
       busy: this.busy, messages: c.messages.slice(-60), checkin: { every_hours: every, last: c.checkin.last ?? null, next },
     };

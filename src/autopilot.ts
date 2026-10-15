@@ -14,7 +14,7 @@ import path from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { DEFAULT_RPC, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
-import { BUY_KINDS, nextRun, RuleStore, type Rule } from "./rules.js";
+import { BUY_KINDS, gridLevels, nextRun, RuleStore, type Rule } from "./rules.js";
 import { KNOWN, resolveToken, toAtomic, type Token } from "./tokens.js";
 import type { Price } from "./prices.js";
 import type { SwapRequest } from "./swap.js";
@@ -113,9 +113,16 @@ export class Autopilot {
       // DCA waits for its schedule; a failed attempt waits for its retry time.
       if (r.kind === "dca" || r.state.failures > 0) return;
     }
+    if (r.after) {
+      // Part of a bot: waits for an earlier step (e.g. take profit only after the dip buy filled).
+      const prev = this.store.get(r.after);
+      if (!prev || ["cancelled", "expired", "error"].includes(prev.status)) { await this.finishAs(r.id, "cancelled", "Cancelled because the step before it didn't happen."); return; }
+      if (prev.status !== "done") return;
+    }
     const t = await this.token(r.chain, r.token);
     const p = await this.price(r.chain, t);
     if (p === undefined) { await this.record(r.id, { checked: true }); return; }
+    if (r.kind === "grid") { await this.record(r.id, { price: p, checked: true }); await this.grid(r, t, p); return; }
     let high = r.state.high;
     if (r.kind === "trailing_stop") high = Math.max(high ?? p, p);
     const hit =
@@ -144,7 +151,8 @@ export class Autopilot {
     } else {
       let bal = await this.exec.balance(r.chain, t);
       if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
-      let amt = r.sell_percent !== undefined ? (bal * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : BigInt(toAtomic(r.sell_amount!, t.decimals));
+      const from = r.sell_from ? this.store.get(r.sell_from) : undefined;
+      let amt = from ? BigInt(from.state.bought_atomic ?? "0") : r.sell_percent !== undefined ? (bal * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : BigInt(toAtomic(r.sell_amount!, t.decimals));
       if (amt > bal) amt = bal;
       if (amt <= 0n) { await this.fail(r, "insufficient_balance", `No ${t.symbol} to sell.`); return; }
       req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps };
@@ -161,9 +169,14 @@ export class Autopilot {
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
     const usd = res.quote?.usd_value ?? undefined;
     const now = new Date(this.now());
+    const buy = BUY_KINDS.includes(r.kind);
+    const units = buy ? Number(res.quote?.buy_amount ?? 0) / 10 ** t.decimals : Number(req.sell_amount) / 10 ** t.decimals;
     const updated = await this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id)!;
-      x.state.fills.push({ ts: now.toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper" });
+      x.state.fills.push({ ts: now.toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: buy ? "buy" : "sell", units });
+      x.state.fills = x.state.fills.slice(-50);
+      tally(x, buy ? "buy" : "sell", usd, units);
+      if (buy) x.state.bought_atomic = (BigInt(x.state.bought_atomic ?? "0") + BigInt(String(res.quote?.buy_amount ?? "0"))).toString();
       x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined;
       if (x.kind === "dca") {
         x.state.next_run = nextRun(x, now).toISOString();
@@ -177,13 +190,66 @@ export class Autopilot {
     this.o.onEvent?.({ type: "filled", rule: updated, detail: `${this.exec.mode === "paper" ? "Paper fill" : "Filled"} at about $${price}${usd ? ` for $${usd.toFixed(2)}` : ""}${res.tx ? ` (${res.tx})` : ""}` });
   }
 
+  /**
+   * Grid: levels L0 < L1 < ... from lower_price to upper_price. Slot i buys amount_usd at L(i) and sells those
+   * units at L(i+1), then can buy again. One trade per check: sells first (a filled slot whose sell level is
+   * reached), then the level the price has just come down to. Below the range it doesn't buy.
+   */
+  private async grid(r: Rule, t: Token, p: number) {
+    const L = gridLevels(r), g = r.state.grid ?? { units: Array(L.length - 1).fill(null), cost: Array(L.length - 1).fill(null), atomic: Array(L.length - 1).fill(null) };
+    if (r.state.next_run && Date.parse(r.state.next_run) > this.now()) return; // backing off after a failure
+    const usdc = KNOWN[r.chain].USDC!;
+    const sellAt = g.atomic.findIndex((a, i) => a !== null && p >= L[i + 1]!);
+    if (sellAt >= 0) {
+      const req: SwapRequest = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: g.atomic[sellAt]!, slippage_bps: this.exec.slippageBps };
+      const res = await this.exec.swap(req);
+      if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
+      const usd = res.quote?.usd_value ?? undefined, units = Number(req.sell_amount) / 10 ** t.decimals;
+      const updated = await this.store.mutate((rs) => {
+        const x = rs.find((y) => y.id === r.id)!, gg = x.state.grid!;
+        const profit = usd !== undefined && gg.cost[sellAt] != null ? usd - gg.cost[sellAt]! : 0;
+        gg.units[sellAt] = null; gg.cost[sellAt] = null; gg.atomic[sellAt] = null;
+        x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: "sell", units });
+        x.state.fills = x.state.fills.slice(-50);
+        tally(x, "sell", usd, units);
+        x.state.round_trips = (x.state.round_trips ?? 0) + 1; x.state.grid_profit_usd = (x.state.grid_profit_usd ?? 0) + profit;
+        x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined; x.state.next_run = undefined;
+        return { ...x };
+      });
+      this.o.onEvent?.({ type: "filled", rule: updated, detail: `Grid sold level ${sellAt + 1} at about $${p}${usd ? ` for $${usd.toFixed(2)}` : ""}` });
+      return;
+    }
+    if (p < L[0]!) return;
+    // Buy the level the price has just reached: at or below it, but less than one step below (lower levels wait
+    // for the price to get there; levels above today's price were never reached on the way down).
+    const step = L[1]! - L[0]!;
+    let buyAt = -1;
+    for (let i = L.length - 2; i >= 0; i--) if (g.atomic[i] === null && p <= L[i]! && L[i]! - p < step) { buyAt = i; break; }
+    if (buyAt < 0) return;
+    const req: SwapRequest = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.exec.slippageBps };
+    const res = await this.exec.swap(req);
+    if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
+    const usd = res.quote?.usd_value ?? undefined, atomic = String(res.quote?.buy_amount ?? "0"), units = Number(atomic) / 10 ** t.decimals;
+    const updated = await this.store.mutate((rs) => {
+      const x = rs.find((y) => y.id === r.id)!;
+      x.state.grid ??= { units: Array(L.length - 1).fill(null), cost: Array(L.length - 1).fill(null), atomic: Array(L.length - 1).fill(null) };
+      x.state.grid.units[buyAt] = units; x.state.grid.cost[buyAt] = usd ?? r.amount_usd!; x.state.grid.atomic[buyAt] = atomic;
+      x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: "buy", units });
+      x.state.fills = x.state.fills.slice(-50);
+      tally(x, "buy", usd, units);
+      x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined; x.state.next_run = undefined;
+      return { ...x };
+    });
+    this.o.onEvent?.({ type: "filled", rule: updated, detail: `Grid bought level ${buyAt + 1} at about $${p}${usd ? ` for $${usd.toFixed(2)}` : ""}` });
+  }
+
   /** Back off after a failure. Stops retry fast; anything else slows down and stops after 5 tries. */
   private async fail(r: Rule, code: string, reason: string) {
     const urgent = r.kind === "stop_loss" || r.kind === "trailing_stop";
     const wait = code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
     const updated = await this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id)!;
-      x.state.failures += 1; x.state.last_error = reason;
+      x.state.failures += 1; x.state.last_error = reason; x.state.fail_count = (x.state.fail_count ?? 0) + 1;
       x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: false, reason });
       x.state.fills = x.state.fills.slice(-50);
       if (code === "denied") { x.status = "paused"; x.state.last_error = "You denied this trade, so the rule is paused."; }
@@ -192,6 +258,11 @@ export class Autopilot {
       return { ...x };
     });
     this.o.onEvent?.({ type: "failed", rule: updated, detail: reason });
+  }
+
+  private async finishAs(id: string, status: "cancelled", why: string) {
+    const r = await this.store.mutate((rs) => { const x = rs.find((y) => y.id === id)!; x.status = status; x.state.last_error = why; return { ...x }; });
+    this.o.onEvent?.({ type: "cancelled", rule: r, detail: why });
   }
 
   private async finish(id: string, status: "expired", why: string) {
@@ -208,6 +279,13 @@ export class Autopilot {
       if (u.error) x.state.last_error = u.error;
     });
   }
+}
+
+/** Running totals for a rule's trades. */
+function tally(x: Rule, side: "buy" | "sell", usd: number | undefined, units: number) {
+  x.state.ok_count = (x.state.ok_count ?? 0) + 1;
+  if (side === "buy") { x.state.spent_usd = (x.state.spent_usd ?? 0) + (usd ?? 0); x.state.bought_units = (x.state.bought_units ?? 0) + units; }
+  else { x.state.received_usd = (x.state.received_usd ?? 0) + (usd ?? 0); x.state.sold_units = (x.state.sold_units ?? 0) + units; }
 }
 
 /** Token balances for live sells (native coin or token), straight from public RPCs. */
