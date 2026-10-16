@@ -326,7 +326,7 @@ export class TollkitWallet {
     const f = opts.publicOnly ? publicFetch(this.f) : this.f;
     return payFetch(url, init, this.keys, {
       dir: this.o.dir, policy: this.policy, fetch: f, sanctions: this.sanctions,
-      checkSeller: (u, payTo) => checkSeller(u, payTo, f), approve: this.approver, solanaRpc: this.o.rpc?.solana, prefer: opts.prefer,
+      checkSeller: (u, payTo) => checkSeller(u, payTo, f), approve: this.approver, solanaRpc: this.rpc("solana"), prefer: opts.prefer, // the same RPC as everything else (the public one refuses browser extensions)
     });
   }
 

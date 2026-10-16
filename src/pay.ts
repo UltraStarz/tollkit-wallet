@@ -12,7 +12,8 @@
 import { wrapFetchWithPayment, x402Client, decodePaymentResponseHeader, type PaymentRequirements } from "@x402/fetch";
 import { decodePaymentRequiredHeader } from "@x402/core/http";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
-import { registerExactSvmScheme } from "@x402/svm/exact/client";
+import { ExactSvmScheme } from "@x402/svm/exact/client";
+import { ExactSvmSchemeV1 } from "@x402/svm/exact/v1/client";
 import { Mppx, evm as mppEvm } from "mppx/client";
 import { Receipt, evm as mppEvmAssets } from "mppx";
 import { solana as mppSolana, resolveStablecoinMint } from "@solana/mpp/client";
@@ -186,7 +187,13 @@ async function payX402(url: string, init: RequestInit | undefined, first: Respon
   const client = new x402Client();
   const evmNets = deps.policy.chains.filter((c) => c !== "solana").map((c) => (c === "base" ? "eip155:8453" : "eip155:1")) as `${string}:${string}`[];
   if (evmNets.length) registerExactEvmScheme(client, { signer: evmAccount, networks: evmNets });
-  if (deps.policy.chains.includes("solana")) registerExactSvmScheme(client, { signer: solSigner, networks: [SOLANA_MAINNET], ...(deps.solanaRpc ? { rpcUrl: deps.solanaRpc } : {}) } as any);
+  if (deps.policy.chains.includes("solana")) {
+    // registerExactSvmScheme drops rpcUrl (@x402/svm 2.28 builds its schemes with the signer only), which leaves the
+    // public mainnet RPC, and that one refuses browser extensions (HTTP 403). Register the schemes with ours.
+    const cfg = deps.solanaRpc ? { rpcUrl: deps.solanaRpc } : undefined;
+    client.register(SOLANA_MAINNET, new ExactSvmScheme(solSigner, cfg));
+    client.registerV1("solana", new ExactSvmSchemeV1(solSigner, cfg));
+  }
   // Our own limits replace the library's $1 default cap (they are checked in gate()).
   client.setSpendControls(false);
   // Prefer an offer we can actually pay: allowed chain + known stablecoin, cheapest first.
@@ -223,7 +230,7 @@ async function payX402(url: string, init: RequestInit | undefined, first: Respon
   if (!settled && res.status === 402) {
     try { const pr = decodePaymentRequiredHeader(res.headers.get("payment-required") ?? ""); why = pr.error; } catch { /* no header */ }
     if (!why) { try { const j = JSON.parse(await res.clone().text()); why = j?.error ?? j?.message; } catch { /* not json */ } }
-    if (why && /execution reverted|insufficient/i.test(why)) why += ` (usually: not enough ${offer ? "stablecoin on " + offer.chain : "funds"} in this wallet)`;
+    if (why && /execution reverted|insufficient|InvalidAccountData/i.test(why)) why += ` (usually: not enough ${offer ? "stablecoin on " + offer.chain : "funds"} in this wallet)`;
     if (why === "Payment required") why += " (the seller didn't accept a payment on this request; check the HTTP method and body the tool expects)";
   }
   if (receipt) {
