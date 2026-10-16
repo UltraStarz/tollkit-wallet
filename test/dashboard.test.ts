@@ -90,7 +90,13 @@ check(c1 && c1.ready === false && c1.password_file === path.join(dir, "password"
 writeFileSync(path.join(dir, "password"), PW, { mode: 0o600 });
 const c2 = (await j("/api/state")).connect;
 check(c2.ready === true && !JSON.stringify(c2).includes(PW), "connect: ready once the file exists; password never sent to the page", c2);
+// First run: AI trading or Python trading
+check((await j("/api/state")).trade_mode === null, "trade mode: not picked on a new wallet");
+const tm = await j("/api/trade-mode", { method: "POST", body: { mode: "python" } });
+check(tm.status === 200 && tm.trade_mode === "python" && (await j("/api/state")).trade_mode === "python", "trade mode: picking Python is saved");
+check((await j("/api/trade-mode", { method: "POST", body: { mode: "rocket" } })).status === 400, "trade mode: only ai or python");
 const page = await raw(`/?t=${tok}`, { token: null });
+check(page.body.includes("How do you want to trade?") && page.body.includes("pip install tollkit-wallet") && page.body.includes("Python bots"), "page has the AI-or-Python choice and the Python bots setup");
 check(page.body.includes("Connect your AI") && page.body.includes("cursor://anysphere.cursor-deeplink/mcp/install") && page.body.includes("Do it by hand"), "page has the Connect your AI picker");
 const noPw = await raw("/api/connect", { method: "POST", body: { app: "cursor", action: "add", password: "nope" } });
 check(noPw.status === 403, "connect: adding an app needs the wallet password");

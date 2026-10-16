@@ -23,6 +23,7 @@ export interface Entry {
   tool?: string;        // what was bought / "swap"
   detail?: string;      // e.g. "100 USDC -> 0.03 ETH"
   tx?: string;
+  fee_tx?: string;      // Tollkit's fee, when it was sent on its own (Solana pairs Jupiter can't take it from)
   reason?: string;      // why it failed
 }
 

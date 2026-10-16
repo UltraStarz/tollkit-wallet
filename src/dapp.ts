@@ -11,6 +11,7 @@
  * permissions, EIP-191 personal_sign, EIP-712 eth_signTypedData_v4; Solana Wallet Standard features
  * standard:connect, solana:signTransaction / signAndSendTransaction / signMessage (@solana/wallet-standard-features 1.5.0).
  */
+import { sendingProvider } from "./evmsend.js";
 import { createHash, createPrivateKey, randomBytes, randomUUID, sign as edSign, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -102,7 +103,7 @@ export class DappBridge {
   /** After a Deny, that site waits a moment before it can ask again, so a page can't flood the owner. */
   private cooldown = new Map<string, number>();
   private jobs = new Map<string, { status: "pending" | "done" | "error"; result?: unknown; error?: { code: number; message: string }; at: number; origin?: string }>();
-  constructor(private o: { evm: string; solana: string; keys: () => Keys; chains: () => Chain[]; dir?: string; rpc?: Partial<Record<Chain, string>>;
+  constructor(private o: { evm: string; solana: string; keys: () => Keys; chains: () => Chain[]; dir?: string; rpc?: Partial<Record<Chain, string>>; proxy?: string;
     approve: (text: string) => Promise<Decision>;
     /** Tests: replace network calls. */ evmRpc?: (chain: "base" | "ethereum", method: string, params: unknown[]) => Promise<unknown>;
     solConn?: Pick<Connection, "simulateTransaction" | "sendRawTransaction" | "getBalance" | "getParsedTokenAccountsByOwner">; sendEvm?: (chain: "base" | "ethereum", tx: EvmTx | Record<string, unknown>, keys: Keys) => Promise<string>;
@@ -378,7 +379,7 @@ export class DappBridge {
         await this.ask(origin, `${host} asks you to send a transaction on ${chain === "base" ? "Base" : "Ethereum"}:\nTo ${to ?? "(new contract)"}\nValue ${formatEther(value)} ETH\n${what}\n${sim}`);
         const req: Record<string, unknown> = { to, value, data, chainId: EVM_CHAIN_ID[chain] };
         if (t.gas ?? t.gasLimit) req.gasLimit = BigInt(t.gas ?? t.gasLimit);
-        const hash = this.o.sendEvm ? await this.o.sendEvm(chain, req, keys) : (await keys.evm.connect(new JsonRpcProvider(this.o.rpc?.[chain] ?? DEFAULT_RPC[chain], EVM_CHAIN_ID[chain], { staticNetwork: true })).sendTransaction(req)).hash;
+        const hash = this.o.sendEvm ? await this.o.sendEvm(chain, req, keys) : (await keys.evm.connect(sendingProvider(chain, { rpc: this.o.rpc, proxy: this.o.proxy })).sendTransaction(req)).hash; // Ethereum: via Flashbots Protect
         record({ id: randomUUID(), ts: new Date().toISOString(), kind: "dapp", status: "done", usd: 0, chain, seller: host, tool: "send", detail: `${formatEther(value)} ETH -> ${to ?? "new contract"} (from ${host})`, tx: hash }, this.o.dir);
         return hash;
       }

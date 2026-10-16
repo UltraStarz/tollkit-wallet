@@ -54,6 +54,8 @@ export interface PayDeps {
   approve: ((text: string) => Promise<Decision>) | null;
   /** Solana RPC for building x402 / MPP Solana payments. */
   solanaRpc?: string;
+  /** Chains to pay on first when the seller offers several (e.g. where the wallet holds the stablecoin). */
+  prefer?: Chain[];
 }
 
 export interface PayResult {
@@ -190,7 +192,8 @@ async function payX402(url: string, init: RequestInit | undefined, first: Respon
   // Prefer an offer we can actually pay: allowed chain + known stablecoin, cheapest first.
   client.registerPolicy((_v, reqs) => {
     const ok = reqs.filter((r) => { try { offerFromX402(r as any, url); return true; } catch { return false; } });
-    return ok.sort((a, b) => offerFromX402(a as any, url).usd - offerFromX402(b as any, url).usd);
+    const rank = (c: Chain) => { const i = (deps.prefer ?? []).indexOf(c); return i < 0 ? 99 : i; };
+    return ok.sort((a, b) => { const oa = offerFromX402(a as any, url), ob = offerFromX402(b as any, url); return rank(oa.chain) - rank(ob.chain) || oa.usd - ob.usd; });
   });
   let offer: Offer | undefined, receipt: string | undefined, refusal: Refusal | undefined;
   client.onBeforePaymentCreation(async ({ selectedRequirements }) => {

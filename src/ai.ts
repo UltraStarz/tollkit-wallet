@@ -27,7 +27,15 @@ import { launchConfig, which } from "./connect.js";
 import { passwordFile, walletHome } from "./paths.js";
 import { describeRule } from "./rules.js";
 
-export interface ChatMsg { id: string; role: "you" | "ai"; text: string; ts: string; rules?: string[]; checkin?: boolean; error?: boolean; quiet?: boolean }
+/** A swap that would pay for the AI's steps: `usd` of the chain's own coin into USDC. */
+export interface FuelPlan { chain: "base" | "solana"; sell: "ETH" | "SOL"; usd: number }
+/** Paying for the AI with the wallet's own USDC, topped up from SOL or ETH (the browser extension's Claude). */
+export interface FuelCtl {
+  mode(): "ask" | "auto";
+  setMode(m: "ask" | "auto"): void;
+  topUp(plan: FuelPlan): Promise<{ ok: boolean; reason?: string; tx?: string }>;
+}
+export interface ChatMsg { id: string; role: "you" | "ai"; text: string; ts: string; rules?: string[]; checkin?: boolean; error?: boolean; quiet?: boolean; fuel?: FuelPlan }
 interface ChatFile { session_id?: string; messages: ChatMsg[]; checkin: { every_hours: number; last?: string } }
 export interface RunOpts { sessionId?: string; cwd: string; mcpConfig: string; system: string }
 export type Runner = (prompt: string, o: RunOpts) => Promise<{ text: string; sessionId?: string }>;
@@ -78,11 +86,12 @@ export function claudeRunner(exe: string, timeoutMs = 240_000): Runner {
 
 export class AiAssistant {
   private file: string;
-  busy: { kind: "chat" | "checkin"; since: string } | null = null;
+  busy: { kind: "chat" | "checkin"; since: string; note?: string } | null = null;
   private approving = false;
   constructor(private readonly w: TollkitWallet, private readonly o: { dir?: string; runner?: Runner; exe?: string | null; now?: () => number; fetch?: typeof fetch;
     /** Who answers, when it isn't Claude Code on this computer (the browser extension uses Claude through Tollkit's server). */
-    provider?: { id: string; name: string; note: string; setup?: string } } = {}) {
+    provider?: { id: string; name: string; note: string; setup?: string };
+    fuel?: FuelCtl } = {}) {
     this.file = path.join(walletHome(o.dir), "ai", "chat.json");
   }
   private now() { return this.o.now?.() ?? Date.now(); }
@@ -106,6 +115,7 @@ export class AiAssistant {
       provider: this.runner() ? (this.o.provider ?? { id: "claude-code", name: "Claude" }) : null,
       ready: existsSync(passwordFile(this.o.dir)),
       busy: this.busy, messages: c.messages.slice(-60), checkin: { every_hours: every, last: c.checkin.last ?? null, next },
+      fuel: this.o.fuel ? { mode: this.o.fuel.mode() } : null,
     };
   }
 
@@ -126,14 +136,14 @@ export class AiAssistant {
   }
 
   /** Sends one message (or runs a check-in) and waits for the answer. */
-  async send(text: string, kind: "chat" | "checkin" = "chat"): Promise<ChatMsg> {
+  async send(text: string, kind: "chat" | "checkin" = "chat", opts: { again?: boolean } = {}): Promise<ChatMsg> {
     const bad = this.precheck(text);
     if (bad) throw Object.assign(new Error(bad.message), { code: bad.code });
     const run = this.runner()!;
     const t = text.trim().slice(0, 4000);
     this.busy = { kind, since: new Date(this.now()).toISOString() };
     const c = this.load();
-    if (kind === "chat") { c.messages.push({ id: randomUUID().slice(0, 8), role: "you", text: t, ts: new Date(this.now()).toISOString() }); this.save(c); }
+    if (kind === "chat" && !opts.again) { c.messages.push({ id: randomUUID().slice(0, 8), role: "you", text: t, ts: new Date(this.now()).toISOString() }); this.save(c); }
     const before = new Set(this.w.rules().list().map((r) => r.id));
     const cwd = path.join(walletHome(this.o.dir), "ai"); mkdirSync(cwd, { recursive: true, mode: 0o700 });
     const l = launchConfig(this.o.dir);
@@ -154,12 +164,44 @@ export class AiAssistant {
       if (kind === "checkin" && made.length) void this.askOnTelegram(made);
     } catch (e) {
       const fresh = this.load();
-      msg = { id: randomUUID().slice(0, 8), role: "ai", text: (e as Error).message, ts: new Date(this.now()).toISOString(), error: true, ...(kind === "checkin" ? { checkin: true } : {}) };
+      const fuel: FuelPlan | undefined = kind === "chat" && this.o.fuel ? (e as any).fuel ?? undefined : undefined;
+      msg = { id: randomUUID().slice(0, 8), role: "ai", text: (e as Error).message, ts: new Date(this.now()).toISOString(), error: true, ...(kind === "checkin" ? { checkin: true } : {}), ...(fuel ? { fuel } : {}) };
       fresh.messages.push(msg);
       if (kind === "checkin") fresh.checkin.last = new Date(this.now()).toISOString(); // don't retry every tick
       this.save(fresh);
     } finally { this.busy = null; }
     return msg;
+  }
+
+  setFuelMode(m: string) {
+    if (!this.o.fuel) throw new Error("Top-ups aren't used here.");
+    if (m !== "ask" && m !== "auto") throw new Error("Pick ask or auto.");
+    this.o.fuel.setMode(m);
+  }
+
+  /** The top-up a failed message offers, or why it can't be done now. */
+  fuelFor(id: string): { plan?: FuelPlan; error?: string } {
+    if (!this.o.fuel) return { error: "Top-ups aren't used here." };
+    if (this.busy) return { error: "The AI is still working on the last message." };
+    const m = this.load().messages.find((x) => x.id === id);
+    return m?.error && m.fuel ? { plan: m.fuel } : { error: "That message has nothing to top up." };
+  }
+
+  /** Swaps a little SOL or ETH to USDC (inside the trading limits), then sends the owner's message again. */
+  async topUpAndRetry(id: string, auto: boolean): Promise<ChatMsg | null> {
+    const f = this.o.fuel, got = this.fuelFor(id);
+    if (!f || !got.plan) throw new Error(got.error ?? "Nothing to top up.");
+    const plan = got.plan;
+    if (auto) f.setMode("auto");
+    this.busy = { kind: "chat", since: new Date(this.now()).toISOString(), note: `Swapping $${plan.usd} of ${plan.sell} to USDC…` };
+    let r: { ok: boolean; reason?: string };
+    try { r = await f.topUp(plan); } catch (e) { r = { ok: false, reason: (e as Error).message }; } finally { this.busy = null; }
+    const c = this.load(), i = c.messages.findIndex((m) => m.id === id);
+    if (i < 0) return null;
+    if (!r.ok) { c.messages[i] = { ...c.messages[i]!, text: `The swap to USDC didn't go through: ${r.reason ?? "unknown error"}` }; this.save(c); return c.messages[i]!; }
+    const you = c.messages.slice(0, i).reverse().find((m) => m.role === "you");
+    c.messages.splice(i, 1); this.save(c);
+    return you ? this.send(you.text, "chat", { again: true }) : null;
   }
 
   /** Called by the dashboard's timer. Runs a check-in when one is due. */

@@ -41,7 +41,7 @@ export const RuleInput = z.object({
   /** USD price per token that triggers the rule. */
   trigger_price: z.number().positive().optional(),
   /** Trailing stop: sell when the price falls this % from the highest price seen. */
-  trail_pct: z.number().min(0.5).max(90).optional(),
+  trail_pct: z.number().min(0.5).max(99).optional(),
   /** DCA schedule. */
   every: z.enum(["hour", "day", "week"]).optional(),
   weekday: z.number().int().min(0).max(6).optional().describe("DCA weekly: 0=Sunday … 6=Saturday"),

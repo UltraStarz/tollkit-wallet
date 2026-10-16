@@ -26,7 +26,7 @@ async function fresh(over: any = {}) {
   const quotes = (async (u: string) => {
     const url = new URL(u);
     if (url.pathname.endsWith("/swap/solana/order")) {
-      return Response.json({ inAmount: url.searchParams.get("amount"), outAmount: "92000000", otherAmountThreshold: "91000000", feeBps: 50, transaction: "AAAA", requestId: "r1", swapUsdValue: 9.99 });
+      return Response.json({ inAmount: url.searchParams.get("amount"), outAmount: "92000000", otherAmountThreshold: "91000000", feeBps: 50, platformFee: { feeBps: 50, feeMint: WSOL }, referralAccount: "GaezRGEobGTMVrisPn9oXqPpXawXEBhaSGTWpWZwn1g4", transaction: "AAAA", requestId: "r1", swapUsdValue: 9.99 });
     }
     const sell = url.searchParams.get("sellAmount")!; const buyTok = url.searchParams.get("buyToken")!;
     const isUsdcOut = buyTok.toLowerCase() === USDC.toLowerCase();

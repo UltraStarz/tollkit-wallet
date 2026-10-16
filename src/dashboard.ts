@@ -27,6 +27,7 @@ import { Holdings, priceChart, coinId, erc20Info, type ChartRange } from "./hold
 import { KNOWN } from "./tokens.js";
 import { checkToken, findListed, isCoreToken, loadExtraLists, searchEvm, searchSolana, solanaInfo } from "./tokenlist.js";
 import { buildBot, maybeShare, setShare, shareSettings, summarize, TEMPLATES } from "./bots.js";
+import { setTradeMode, tradeMode } from "./trademode.js";
 import { DEFAULT_PROXY } from "./swap.js";
 import { buyLink, BUY_ASSETS } from "./buy.js";
 import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.js";
@@ -54,7 +55,8 @@ const send = (res: ServerResponse, code: number, body: unknown, type = "applicat
 
 /** A connector address that AI apps add by URL; Tollkit's server relays their requests to this wallet. */
 export interface RemoteConnect {
-  view(): { on: boolean; url: string | null; online: boolean };
+  /** used: when an AI app last reached the wallet through this address (ms), or null if none has yet. */
+  view(): { on: boolean; url: string | null; online: boolean; used?: number | null };
   /** on: make an address (or keep the current one). new: replace it (the old one stops working). off: stop. */
   act(action: "on" | "new" | "off"): Promise<void>;
 }
@@ -137,7 +139,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           live: watcher ? { events: watcher.events(), balances: watcher.balances(), heads: watcher.heads() } : null,
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
-          bots: summarize(w.rules().list()), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board,
+          bots: summarize(w.rules().list()), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
           ai: ai ? ai.view() : null,
@@ -224,6 +226,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         void autopilot?.tick();
         return send(res, 200, { ok: true });
       }
+      if (p === "/api/trade-mode") { try { return send(res, 200, { trade_mode: setTradeMode(b.mode, w.dir) }); } catch (e) { return send(res, 400, { error: (e as Error).message }); } }
       if (p === "/api/bots/share") { setShare(b.on === true, w.dir); if (b.on === true) void botsBeat(); return send(res, 200, { share: b.on === true }); }
       if (p === "/api/rules/status") {
         const st = String(b.status);
@@ -298,6 +301,15 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         return send(res, 200, { ok: true });
       }
       if (p === "/api/ai/checkin") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); ai.setCheckin(Number(b.hours)); return send(res, 200, { ok: true }); }
+      // Claude through Tollkit is paid in USDC: swap a little SOL or ETH (trading limits apply), then send again.
+      if (p === "/api/ai/topup") {
+        if (!ai) return send(res, 400, { error: "AI chat is off here." });
+        const id = String(b.id ?? ""), got = ai.fuelFor(id);
+        if (!got.plan) return send(res, 400, { error: got.error });
+        void ai.topUpAndRetry(id, b.auto === true).catch(() => {});
+        return send(res, 200, { ok: true });
+      }
+      if (p === "/api/ai/fuel") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); ai.setFuelMode(String(b.mode)); return send(res, 200, { ok: true }); }
       if (p === "/api/ai/new") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); if (ai.busy) return send(res, 409, { error: "Wait for the AI to finish." }); ai.newChat(); return send(res, 200, { ok: true }); }
       // Everything below changes money rules or moves funds: password again, every time.
       if (typeof b.password !== "string" || b.password !== password) return send(res, 403, { error: "Wrong password." });

@@ -16,6 +16,7 @@
  * Moves stay inside this wallet (same owner on both networks), so they don't count against spending limits,
  * but they need the password every time and agents can't reach them.
  */
+import { sendingProvider } from "./evmsend.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -196,7 +197,7 @@ export class Mover {
 
   private async evmSend(from: Chain, t: { to: string; data: string; value?: bigint }, keys: Keys): Promise<string> {
     if (this.o.sendEvm) return this.o.sendEvm(from, t, keys);
-    const p = new JsonRpcProvider(this.rpc(from), EVM_CHAIN_ID[from as "base" | "ethereum"], { staticNetwork: true });
+    const p = sendingProvider(from, { rpc: this.o.rpc, proxy: this.o.proxy, fetch: this.o.fetch });
     const sent = await keys.evm.connect(p).sendTransaction({ to: t.to, data: t.data, value: t.value ?? 0n });
     const rc = await sent.wait();
     if (!rc || rc.status !== 1) throw new Error(`Transaction ${sent.hash} failed.`);
@@ -205,7 +206,7 @@ export class Mover {
 
   private async evmRead(from: Chain, what: "usdc" | "eth" | "allowance"): Promise<bigint> {
     if (this.o.evmRead) return this.o.evmRead(from, what);
-    const p = new JsonRpcProvider(this.rpc(from), EVM_CHAIN_ID[from as "base" | "ethereum"], { staticNetwork: true });
+    const p = sendingProvider(from, { rpc: this.o.rpc, proxy: this.o.proxy, fetch: this.o.fetch });
     if (what === "eth") return p.getBalance(this.o.evm);
     const c = new Contract(USDC[from], ["function balanceOf(address) view returns (uint256)", "function allowance(address,address) view returns (uint256)"], p) as any;
     return what === "usdc" ? c.balanceOf(this.o.evm) : c.allowance(this.o.evm, TOKEN_MESSENGER_V2);

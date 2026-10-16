@@ -37,6 +37,12 @@ check(grid.rules[0]!.lower_price === 2250 && grid.rules[0]!.upper_price === 2750
 check(/needs a bigger gain/.test(err(() => buildBot("ladder", "ETH", "base", { step1: 30, step2: 20, step3: 50 }, 2500))), "ladder steps must climb");
 check(/price/.test(err(() => buildBot("dip", "ETH", "base", {}, undefined))), "price-based bots need a price");
 check(/from 1/.test(err(() => buildBot("grid", "ETH", "base", { amount_usd: 0 }, 2500))), "fields are range-checked");
+{
+  const pctMax = (k: string) => TEMPLATES.flatMap((t) => t.fields).filter((f) => f.key === k).map((f) => (f as any).max);
+  check(["drop_pct", "stop_pct", "trail_pct"].every((k) => pctMax(k).every((m) => m === 99)) && pctMax("sell_percent").every((m) => m === 100), "falls go up to 99%, shares of a holding up to 100%");
+  check(["profit_pct", "step1", "step2", "step3"].every((k) => pctMax(k).every((m) => m === 1000)), "gains go up to 1000%");
+  check(buildBot("dip", "ETH", "base", { drop_pct: 99, profit_pct: 1000 }, 2500).rules.length === 2 && /to 99/.test(err(() => buildBot("dip", "ETH", "base", { drop_pct: 100 }, 2500))) && /to 100/.test(err(() => buildBot("protect", "ETH", "base", { sell_percent: 101 }, 2500))), "the limits are enforced, not just shown");
+}
 check(/too close/.test(err(() => buildBot("grid", "ETH", "base", { range_pct: 1, levels: 40 }, 2500))), "a grid whose levels are too close is refused");
 const prot = buildBot("protect", "ETH", "base", {}, 2000);
 check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group && prot.rules[0]!.trigger_price === 1800 && prot.rules[1]!.trigger_price === 2400, "protect: stop and take-profit cancel each other");
@@ -57,6 +63,14 @@ check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group &
   check(m.state.swaps.length === 2 && BigInt(m.state.swaps[1]!.sell_amount) === bought && s.get(tp!.id)!.status === "done", "then it sells exactly what it bought", [String(bought), m.state.swaps[1]?.sell_amount]);
   const sum = summarize(s.list())[0]!;
   check(sum.trades_ok === 2 && sum.trades_failed === 0 && sum.success_rate === 100 && sum.status === "done" && sum.result_usd !== null && sum.result_usd > 4 && sum.result_usd < 6, "status board: two trades, profit about $5", sum);
+}
+
+// --- the widest settings are accepted by the rule store too
+{
+  const s = new RuleStore(tmp());
+  let added: number | string = 0;
+  try { for (const [t, p] of [["trail", { trail_pct: 99 }], ["grid", { range_pct: 90, levels: 3 }], ["dip", { drop_pct: 99, profit_pct: 1000 }]] as const) added = (added as number) + (await s.addBot(buildBot(t, "ETH", "base", p, 2500).rules, "owner", false)).length; } catch (e) { added = (e as Error).message; }
+  check(added === 4, "a 99% trailing stop, a ±90% grid and a 99% dip are saved", added);
 }
 
 // --- a cancelled first step cancels the next

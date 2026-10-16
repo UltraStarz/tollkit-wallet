@@ -49,6 +49,23 @@ const deps = (over: Partial<PayDeps> = {}): PayDeps => ({
   const e = entries(d.dir);
   check(e.length === 1 && e[0]!.status === "done" && e[0]!.usd === 0.01 && e[0]!.tx === "0xtxhash" && e[0]!.seller === "seller.example", "x402: receipt written as done", e);
 }
+// --- a seller offering two networks: the wallet's preferred one first (where it holds the stablecoin)
+{
+  const two = () => {
+    const pr = { x402Version: 2, resource: { url: URL_, description: "t", mimeType: "application/json" }, accepts: [
+      { scheme: "exact", network: "eip155:8453", asset: USDC, amount: "20000", payTo: SELLER, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } },
+      { scheme: "exact", network: "eip155:1", asset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount: "20000", payTo: SELLER, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }] };
+    return (async (input: any, init?: any) => {
+      const req = new Request(input, init);
+      if (!req.headers.get("payment-signature")) return new Response("{}", { status: 402, headers: { "payment-required": encodePaymentRequiredHeader(pr as any) } });
+      return Response.json({ ok: true }, { headers: { "payment-response": encodePaymentResponseHeader({ success: true, transaction: "0xtx2", network: "eip155:1" } as any) } });
+    }) as unknown as typeof fetch;
+  };
+  const policy = { ...DEFAULT_POLICY, chains: ["base", "ethereum"] as any };
+  const r1 = await payFetch(URL_, undefined, keys, deps({ fetch: two(), policy }));
+  const r2 = await payFetch(URL_, undefined, keys, deps({ fetch: two(), policy, prefer: ["ethereum"] }));
+  check(r1.paid && r1.offer?.chain === "base" && r2.paid && r2.offer?.chain === "ethereum", "two networks offered: pays on the preferred one when asked, else the first", [r1.offer?.chain, r2.offer?.chain]);
+}
 // --- free endpoint passes through
 {
   const f = (async () => Response.json({ free: true })) as unknown as typeof fetch;

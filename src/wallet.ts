@@ -5,7 +5,9 @@
  * server, the dashboard and the framework plugins.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { sendAndConfirm } from "./solconfirm.js";
+import { PriceFeed } from "./prices.js";
 import { Contract, JsonRpcProvider, formatUnits, parseUnits } from "ethers";
 import { DEFAULT_RPC, EVM_CHAIN_ID, STABLES, SWAP_FEE_BPS, WSOL, NATIVE_EVM, type Chain } from "./chains.js";
 import { addresses, unlock, type Keys } from "./keystore.js";
@@ -17,7 +19,7 @@ import { loadPolicy, savePolicy, type Policy } from "./policy.js";
 import { files, walletHome } from "./paths.js";
 import { Sanctions } from "./sanctions.js";
 import { checkSeller } from "./seller.js";
-import { executeSwap, getQuote, vetQuote, DEFAULT_PROXY, type SwapQuote, type SwapRequest } from "./swap.js";
+import { executeSwap, getQuote, solFeeLamports, vetQuote, DEFAULT_PROXY, type SwapQuote, type SwapRequest } from "./swap.js";
 import { requestApproval, type Decision, type TelegramConfig } from "./telegram.js";
 import { balanceAtomic, checkDestination, sendTokens, type SendRequest } from "./send.js";
 import { dashboardOpen, requestLocal } from "./approvals.js";
@@ -51,6 +53,8 @@ export interface WalletOptions {
   dapp?: Partial<ConstructorParameters<typeof DappBridge>[0]>;
   /** Override for tests / other channels. Default: Telegram if configured. */
   approve?: ((text: string) => Promise<Decision>) | null;
+  /** Override for tests: Tollkit's separately-sent Solana fee (recipient, SOL price, balance and sender). */
+  solFee?: { recipient?: string; solUsd?: number; balance?: () => Promise<bigint>; send?: (lamports: bigint, to: string) => Promise<string> };
 }
 
 export interface SwapResult {
@@ -213,6 +217,27 @@ export class TollkitWallet {
     } catch { return null; }
   }
 
+  /** Where and how much Tollkit's separately-sent Solana fee is. */
+  private async separateFee(q: SwapQuote): Promise<{ lamports: bigint; to: string }> {
+    let to = this.o.solFee?.recipient ?? q.raw?.build?.tollkit_fee?.recipient;
+    if (!to) {
+      const r = await this.f(`${this.o.proxy ?? DEFAULT_PROXY}/bridge/config`, { signal: AbortSignal.timeout(15_000) });
+      const j: any = r.ok ? await r.json().catch(() => null) : null;
+      to = String(j?.fee_recipient?.solana ?? "");
+    }
+    try { to = new PublicKey(to).toBase58(); } catch { throw new Error("Tollkit's fee address isn't available right now. Try again in a minute."); }
+    let solUsd = this.o.solFee?.solUsd ?? null;
+    if (solUsd === null && q.sell_token !== WSOL && q.buy_token !== WSOL) { const pf = new PriceFeed({ fetch: this.f }); await pf.refresh(); solUsd = pf.snapshot().prices.SOL?.usd ?? null; }
+    return { lamports: solFeeLamports(q, q.usd_value, solUsd), to };
+  }
+
+  private async sendSolFee(fee: { lamports: bigint; to: string }): Promise<string> {
+    if (this.o.solFee?.send) return this.o.solFee.send(fee.lamports, fee.to);
+    const conn = new Connection(this.rpc("solana"), "confirmed");
+    const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: this.keys.solana.publicKey, toPubkey: new PublicKey(fee.to), lamports: fee.lamports }));
+    return sendAndConfirm(conn, tx, [this.keys.solana]);
+  }
+
   /** A priced, checked quote. Nothing is signed. */
   async quote(req: SwapRequest): Promise<SwapResult> {
     const r = await this.priced(req, false);
@@ -265,12 +290,28 @@ export class TollkitWallet {
       const d = await ask(`Swap ${money(usd)} on ${q.chain} (${q.venue})?\nSell ${describeAmount(q.chain, q.sell_token, q.sell_amount)}\nGet at least ${describeAmount(q.chain, q.buy_token, q.min_buy_amount)}\nTollkit fee ${q.fee_bps / 100}% (${money(q.fee_usd ?? 0)})${q.venue_fee_bps ? `, venue fee ${q.venue_fee_bps / 100}%` : ""}`);
       if (d !== "approved") return { ok: false, quote: strip(q), refused: { code: d === "denied" ? "denied" : "approval_timeout", reason: d === "denied" ? "You denied this trade." : "No approval in time, so it wasn't traded." } };
     }
+    // Solana pairs whose route can't carry Tollkit's 0.5%: built so the fee (in SOL) is inside the swap's own
+    // transaction (fee_inline), or, when that path isn't available, sent on its own right after (fee_separate).
+    let fee: { lamports: bigint; to: string } | null = null;
+    if ((q.fee_separate || q.fee_inline) && q.fee_bps > 0) {
+      try { fee = await this.separateFee(q); }
+      catch (e) { return { ok: false, quote: strip(q), refused: { code: "no_quote", reason: (e as Error).message } }; }
+      const have = await (this.o.solFee?.balance ?? (() => liveBalance(this.addresses, "solana", KNOWN.solana.SOL!, this.rpc("solana"), this.f)))();
+      const need = fee.lamports + 15_000n + (q.sell_token === WSOL ? BigInt(q.sell_amount) : 0n);
+      if (have < need) return { ok: false, quote: strip(q), refused: { code: "insufficient_balance", reason: `On this pair Tollkit's 0.5% fee is paid in SOL (${formatUnits(fee.lamports, 9)} SOL), and the wallet doesn't have enough SOL for it. Add a little SOL and try again.` } };
+      if (q.fee_inline) { q.raw.fee = { lamports: fee.lamports.toString(), to: fee.to }; fee = null; } // goes in the swap itself
+    }
     let id: string;
     try { id = await reserve(p, "trade", usd, { chain: q.chain, seller: q.venue, tool: "swap", fee_usd: q.fee_usd ?? undefined, detail: `${describeAmount(q.chain, q.sell_token, q.sell_amount)} -> at least ${describeAmount(q.chain, q.buy_token, q.min_buy_amount)}` }, this.o.dir); }
     catch (e) { if (e instanceof LimitError) return { ok: false, quote: strip(q), refused: { code: e.code, reason: e.message } }; throw e; }
     try {
       const tx = await (this.o.execute ?? ((qq, k) => executeSwap(qq, k, { fetch: this.f, proxy: this.o.proxy, rpc: this.o.rpc })))(q, this.keys);
-      settle(id, { status: "done", tx }, this.o.dir);
+      let feeNote: { fee_tx?: string; reason?: string } = {};
+      if (fee) {
+        try { feeNote = { fee_tx: await this.sendSolFee(fee) }; }
+        catch (e) { feeNote = { reason: `The swap went through, but Tollkit's fee wasn't sent: ${(e as Error).message.slice(0, 200)}` }; }
+      }
+      settle(id, { status: "done", tx, ...feeNote }, this.o.dir);
       if (q.chain !== "solana" && q.buy_token !== NATIVE_EVM) try { new TokenList(this.o.dir).add(q.chain, q.buy_token); } catch { /* display only */ }
       return { ok: true, quote: strip(q), tx, receipt_id: id };
     } catch (e) {
@@ -280,13 +321,18 @@ export class TollkitWallet {
   }
 
   /** Fetch a URL, paying through x402 or MPP if it asks, within the owner's rules. */
-  async pay(url: string, init?: RequestInit, opts: { publicOnly?: boolean } = {}): Promise<PayResult> {
+  async pay(url: string, init?: RequestInit, opts: { publicOnly?: boolean; prefer?: Chain[] } = {}): Promise<PayResult> {
     // Agents only reach the public internet (not this computer or the local network), redirects included.
     const f = opts.publicOnly ? publicFetch(this.f) : this.f;
     return payFetch(url, init, this.keys, {
       dir: this.o.dir, policy: this.policy, fetch: f, sanctions: this.sanctions,
-      checkSeller: (u, payTo) => checkSeller(u, payTo, f), approve: this.approver, solanaRpc: this.o.rpc?.solana,
+      checkSeller: (u, payTo) => checkSeller(u, payTo, f), approve: this.approver, solanaRpc: this.o.rpc?.solana, prefer: opts.prefer,
     });
+  }
+
+  /** One token's balance on one chain, in atomic units (live, from the chain). */
+  async balanceOf(chain: Chain, t: Token): Promise<bigint> {
+    return liveBalance(this.addresses, chain, t, this.rpc(chain), this.f);
   }
 
   /**
@@ -392,7 +438,7 @@ export class TollkitWallet {
 
   /** Websites using this wallet through the Tollkit browser extension. Approvals happen in the dashboard. */
   dapps(): DappBridge {
-    return this.dp ??= new DappBridge({ evm: this.addresses.evm, solana: this.addresses.solana, keys: () => this.keys, chains: () => this.policy.chains, dir: this.o.dir, rpc: this.o.rpc,
+    return this.dp ??= new DappBridge({ evm: this.addresses.evm, solana: this.addresses.solana, keys: () => this.keys, chains: () => this.policy.chains, dir: this.o.dir, rpc: this.o.rpc, proxy: this.o.proxy,
       approve: (text) => requestLocal(this.o.dir, text, { timeoutMs: 5 * 60_000 }), ...(this.o.dapp ?? {}) });
   }
   private dp?: DappBridge;
