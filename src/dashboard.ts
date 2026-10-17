@@ -277,7 +277,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!w.policy.chains.includes(chain)) return send(res, 400, { error: `${chain} is turned off in your limits.` });
         const amt = b.amount_usd === undefined || b.amount_usd === "" ? undefined : Number(b.amount_usd);
         if (amt !== undefined && !(amt >= 5 && amt <= 10_000)) return send(res, 400, { error: "Pick an amount from $5 to $10,000." });
-        return send(res, 200, await buyLink(w.addresses, { chain, asset: String(b.asset ?? "").toUpperCase(), amount_usd: amt, sandbox: b.sandbox === true }, { proxy: (w as any).o?.proxy }));
+        return send(res, 200, await buyLink(w.addresses, { chain, asset: String(b.asset ?? "").toUpperCase(), amount_usd: amt, sandbox: b.sandbox === true }, { proxy: (w as any).o?.proxy, sign: (n, a) => w.rampAuth("onramp", n, a) }));
       }
       // Browser extension: a one-time pairing code, disconnecting a site, unpairing every browser.
       if (p === "/api/extmgr/code") return send(res, 200, { code: w.dapps().newCode(port) });

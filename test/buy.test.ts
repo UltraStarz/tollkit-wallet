@@ -9,6 +9,8 @@ const r = await buyLink(A, { chain: "solana", asset: "SOL", amount_usd: 40 }, { 
 check(r.url.startsWith("https://pay.coinbase.com/") && sent.u === "https://p.example/wallet/onramp" && JSON.stringify(sent.body) === JSON.stringify({ address: A.solana, network: "solana", asset: "SOL", amount_usd: 40 }), "asks for a link for the Solana address; sends nothing else", sent);
 await buyLink(A, { chain: "base", asset: "USDC", sandbox: true }, { proxy: "https://p.example/wallet", fetch: f });
 check(sent.body.address === A.evm && sent.body.sandbox === true && !("amount_usd" in sent.body), "Base uses the EVM address; test mode passed through");
+await buyLink(A, { chain: "base", asset: "ETH" }, { fetch: f, sign: async (n, a) => ({ ts: 1, nonce: "ab".repeat(8), sig: `sig:${n}:${a}` }) });
+check(sent.body.ts === 1 && sent.body.nonce === "ab".repeat(8) && sent.body.sig === `sig:base:${A.evm}`, "with a signer, the request carries the wallet's signature for that address", sent.body);
 let e = ""; try { await buyLink(A, { chain: "base", asset: "SOL" }, { fetch: f }); } catch (x) { e = (x as Error).message; } check(/USDC or ETH/.test(e), "SOL on Base refused before any request", e);
 reply = { status: 503, body: { message: "Buying with a card isn't enabled on this server yet." } };
 e = ""; try { await buyLink(A, { chain: "base", asset: "ETH" }, { fetch: f }); } catch (x) { e = (x as Error).message; } check(/isn't enabled/.test(e), "server's reason shown", e);

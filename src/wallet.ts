@@ -30,6 +30,7 @@ import { PaperBook } from "./paper.js";
 import { liveBalance, type Executor } from "./autopilot.js";
 import { Staking, type StakingOptions } from "./stake.js";
 import { Sales, SEND_WINDOW_MS } from "./sell.js";
+import { signRamp, type RampAuth, type RampKind } from "./rampauth.js";
 import { DappBridge } from "./dapp.js";
 import { publicFetch } from "./netguard.js";
 import { Mover, canMove, fmtAmount, type MoveAsset, type MoverOptions, type MoveQuote } from "./bridge.js";
@@ -444,7 +445,14 @@ export class TollkitWallet {
   private dp?: DappBridge;
 
   /** Cash-out sales started from the dashboard. */
-  sales(): Sales { return this.sl ??= new Sales({ dir: this.o.dir, proxy: this.o.proxy, fetch: this.o.fetch }); }
+  sales(): Sales { return this.sl ??= new Sales({ dir: this.o.dir, proxy: this.o.proxy, fetch: this.o.fetch, sign: (kind, network, address) => this.rampAuth(kind, network, address) }); }
+
+  /** Signs a buy or cash-out request for one of this wallet's own addresses (Tollkit's server checks it). */
+  rampAuth(kind: RampKind, network: Chain, address: string): Promise<RampAuth> {
+    const own = network === "solana" ? this.addresses.solana : this.addresses.evm;
+    if (network === "solana" ? address !== own : address.toLowerCase() !== own.toLowerCase()) return Promise.reject(new Error("That isn't this wallet's address."));
+    return signRamp(this.keys, kind, network, own);
+  }
   private sl?: Sales;
 
   /**

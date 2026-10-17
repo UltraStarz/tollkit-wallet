@@ -29,6 +29,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: fakeFetch, proxy: "https://
 const s1 = await w.sales().start(w.addresses.evm, "base", "USDC", "25.5");
 check(posts[0].address === w.addresses.evm && posts[0].network === "base" && posts[0].asset === "USDC" && posts[0].amount === "25.5" && s1.url === url, "asks Tollkit's server for a Coinbase sell link with only the public address, network, coin and amount");
 check(w.sales().get(s1.ref)?.state === "open", "the sale is saved, waiting for Coinbase");
+check(posts.at(-1)?.address === w.addresses.evm && Number.isInteger(posts.at(-1)?.ts) && /^[0-9a-f]{32}$/.test(posts.at(-1)?.nonce) && /^0x[0-9a-f]{130}$/.test(posts.at(-1)?.sig), "cash-out requests are signed by the wallet's own key", posts.at(-1));
 check(/On base you can cash out/.test(await err(() => w.sales().start(w.addresses.evm, "base", "SOL"))), "SOL on Base refused");
 url = "https://evil.example/sell";
 check(/Didn't get a Coinbase sell link/.test(await err(() => w.sales().start(w.addresses.evm, "base", "USDC", "5"))), "only a pay.coinbase.com sell link is accepted");
