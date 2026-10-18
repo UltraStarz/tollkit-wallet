@@ -33,7 +33,9 @@ export interface PriceSource { snapshot(): { prices: Record<string, Price> } }
 const GAS_RESERVE: Record<Chain, bigint> = { base: 50_000_000_000_000n /* 0.00005 ETH */, ethereum: 2_000_000_000_000_000n /* 0.002 ETH */, arbitrum: 100_000_000_000_000n /* 0.0001 ETH */, polygon: 100_000_000_000_000_000n /* 0.1 POL */, solana: 10_000_000n /* 0.01 SOL */ };
 const QUOTE_PRICE_TTL = 60_000;
 
-export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () => number; leaseId?: string; resolve?: typeof resolveToken; onEvent?: (e: AutopilotEvent) => void }
+export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () => number; leaseId?: string; resolve?: typeof resolveToken; onEvent?: (e: AutopilotEvent) => void;
+  /** Rules Tollkit's server is running while the app is closed (src/alwayson.ts): the device leaves them alone. */
+  skip?: (id: string) => boolean }
 export interface AutopilotEvent { type: "filled" | "failed" | "skipped" | "expired" | "cancelled"; rule: Rule; detail: string }
 
 export class Autopilot {
@@ -107,6 +109,7 @@ export class Autopilot {
   }
 
   private async consider(r: Rule) {
+    if (this.o.skip?.(r.id)) return;
     const now = this.now();
     if (r.expires_at && Date.parse(r.expires_at) <= now) { await this.finish(r.id, "expired", "Expired before it triggered."); return; }
     if (r.state.next_run && Date.parse(r.state.next_run) > now) {

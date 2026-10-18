@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { KNOWN, type Token } from "./tokens.js";
 import { RuleStore } from "./rules.js";
 import { IdeaStore } from "./ideas.js";
+import { AlwaysOn } from "./alwayson.js";
 import { PaperBook } from "./paper.js";
 import { liveBalance, type Executor } from "./autopilot.js";
 import { Staking, type StakingOptions } from "./stake.js";
@@ -42,6 +43,8 @@ export interface WalletOptions {
   dir?: string;
   fetch?: Fetch;
   proxy?: string;
+  /** Tests: the ETH price "Keep running when closed" bases its floors on. */
+  alwaysPrice?: (sym: string) => Promise<number | undefined>;
   rpc?: Partial<Record<Chain, string>>;
   /** Override for tests: send a withdrawal. */
   send?: (r: SendRequest, keys: Keys) => Promise<string>;
@@ -441,6 +444,17 @@ export class TollkitWallet {
       throw e;
     }
   }
+
+  /** "Keep running when closed": rules Tollkit's server places under slips this device signs (src/alwayson.ts). */
+  always(): AlwaysOn {
+    return this.ao ??= new AlwaysOn({
+      key: () => this.keys.evm as any, address: this.addresses.evm, dir: this.o.dir, rpc: (c) => this.rpc(c), fetch: this.f,
+      proxy: this.o.proxy ?? DEFAULT_PROXY, rules: () => this.rules(),
+      price: this.o.alwaysPrice ?? (async (sym) => { const f = new PriceFeed({ fetch: this.f }); await f.refresh(); return f.snapshot().prices[sym]?.usd; }),
+      balance: (c, t) => liveBalance(this.addresses, c, Object.values(KNOWN[c]).find((k) => k.address.toLowerCase() === t.toLowerCase()) ?? { address: t, symbol: "?", decimals: 18 }, this.rpc(c), this.f),
+    });
+  }
+  private ao?: AlwaysOn;
 
   /** Websites using this wallet through the Tollkit browser extension. Approvals happen in the dashboard. */
   dapps(): DappBridge {

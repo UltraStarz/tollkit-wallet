@@ -69,8 +69,15 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const prices = o.watch === false ? null : new PriceFeed();
   prices?.start();
   // The autopilot runs while the dashboard is open (live money; paper mode is `tollkit-wallet autopilot --paper`).
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir }) : null;
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) }) : null;
   autopilot?.start();
+  // "Keep running when closed": hand the switched-on rules to Tollkit's server and bring back what it traded.
+  const alwaysSync = async () => {
+    if (!w.always().anyOn()) return;
+    try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
+  };
+  const alwaysTimer = o.watch === false ? null : setInterval(() => void alwaysSync(), 5 * 60_000);
+  if (alwaysTimer) setTimeout(() => { void w.always().config().then(() => alwaysSync()).catch(() => {}); }, 3_000);
   // The Autopilot tab's AI chat and scheduled check-ins (runs while the dashboard is open).
   const ai = o.ai === false ? null : o.ai ?? new AiAssistant(w, { dir: w.dir });
   const aiTimer = ai ? setInterval(() => void ai.tick().catch(() => {}), 60_000) : null;
@@ -140,6 +147,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
           ideas: w.ideas().list().slice(-60),
+          always: w.always().view(),
           bots: summarize(w.rules().list()), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
@@ -215,7 +223,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         catch (e) { return send(res, 400, { error: (e as Error).message }); }
         if (p === "/api/bots/preview") return send(res, 200, { name: built.name, price: price ?? null, rules: built.rules.map((r) => ({ description: describeRule(r) })) });
         const made = await w.rules().addBot(built.rules, "owner", false);
-        void autopilot?.tick();
+        void autopilot?.tick(); void alwaysSync();
         return send(res, 200, { bot: built.bot, rules: made.map((r) => r.id) });
       }
       if (p === "/api/bots/status") {
@@ -224,7 +232,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         const rs = w.rules().list().filter((r) => (r.bot ?? `rule-${r.id}`) === id && !["done", "cancelled", "expired"].includes(r.status));
         if (!rs.length) return send(res, 400, { error: "That bot has nothing left to change." });
         for (const r of rs) await w.rules().setStatus(r.id, st as "active" | "paused" | "cancelled");
-        void autopilot?.tick();
+        void autopilot?.tick(); void alwaysSync();
         return send(res, 200, { ok: true });
       }
       if (p === "/api/trade-mode") { try { return send(res, 200, { trade_mode: setTradeMode(b.mode, w.dir) }); } catch (e) { return send(res, 400, { error: (e as Error).message }); } }
@@ -236,11 +244,22 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         try { return send(res, 200, { idea: act === "approve" ? await w.ideas().approve(id, w) : await w.ideas().dismiss(id) }); }
         catch (e) { return send(res, 400, { error: (e as Error).message }); }
       }
+      // "Keep running when closed": the switch on a rule, how much it may use, and turning it all off.
+      if (p === "/api/always") {
+        try {
+          if (b.action === "off") { await w.always().off(); return send(res, 200, { always: w.always().view() }); }
+          const cfg = await w.always().config();
+          if (b.on === true && !cfg?.enabled) return send(res, 400, { error: cfg ? cfg.reason ?? "Not available yet." : "Can't reach Tollkit's server right now." });
+          w.always().set(String(b.id ?? ""), b.on === true, b.budget_usd === undefined ? undefined : Number(b.budget_usd));
+          await alwaysSync();
+          return send(res, 200, { always: w.always().view() });
+        } catch (e) { return send(res, 400, { error: (e as Error).message }); }
+      }
       if (p === "/api/rules/status") {
         const st = String(b.status);
         if (!["active", "paused", "cancelled"].includes(st)) return send(res, 400, { error: "status must be active, paused or cancelled" });
         const r = await w.rules().setStatus(String(b.id ?? ""), st as "active" | "paused" | "cancelled");
-        void autopilot?.tick();
+        void autopilot?.tick(); void alwaysSync();
         return send(res, 200, { rule: { ...r, description: describeRule(r) } });
       }
       // Turning the connector address off only takes access away, so it doesn't need the password.
@@ -381,7 +400,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); if (aiTimer) clearInterval(aiTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 

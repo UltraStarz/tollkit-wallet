@@ -1,5 +1,5 @@
 /**
- * The Claude tab's AI: the owner chats with their own AI (Claude Code,
+ * The AI tab's assistant: the owner chats with their own AI (Claude Code,
  * signed in on this computer, so it runs on their plan) and it can check in
  * on a schedule.
  *
@@ -43,7 +43,7 @@ export type Runner = (prompt: string, o: RunOpts) => Promise<{ text: string; ses
 export const CHECKIN_HOURS = [0, 1, 4, 12, 24];
 const MAX_MSGS = 200;
 
-export const SYSTEM = `You are Claude, inside the owner's Tollkit Wallet, on its Claude tab. The owner talks to you about their own money: what they hold, what prices are doing, one-off trades, and autopilot rules.
+export const SYSTEM = `You are the AI assistant inside the owner's Tollkit Wallet, on its AI tab. The owner talks to you about their own money: what they hold, what prices are doing, one-off trades, and autopilot rules. If they ask what AI or model you are, say plainly that you run on Claude, made by Anthropic.
 
 What you can do, through the tollkit-wallet tools:
 - read their balances, limits and recent trades (wallet_balances, wallet_status, receipts)
@@ -115,7 +115,7 @@ export class AiAssistant {
     const c = this.load(), every = c.checkin.every_hours;
     const next = every && c.checkin.last ? new Date(Date.parse(c.checkin.last) + every * 3600_000).toISOString() : every ? new Date(this.now()).toISOString() : null;
     return {
-      provider: this.runner() ? (this.o.provider ?? { id: "claude-code", name: "Claude" }) : null,
+      provider: this.runner() ? (this.o.provider ?? { id: "claude-code", name: "Claude Code" }) : null,
       ready: existsSync(passwordFile(this.o.dir)),
       busy: this.busy, messages: c.messages.slice(-60), checkin: { every_hours: every, last: c.checkin.last ?? null, next },
       fuel: this.o.fuel ? { mode: this.o.fuel.mode() } : null,
