@@ -641,7 +641,7 @@ var prop=R.filter(function(r){return r.status==="proposed"&&!inChat[r.id]}),act=
 var pv=PV?'<div class="ap" style="margin-top:10px"><div class="sm mut" style="margin-bottom:6px">Preview: nothing runs until you turn it on</div>'+(PV.rules.length?PV.rules.map(function(r){return '<div style="margin:4px 0">• '+esc(r.description)+(r.problem?' <span class="bad sm">('+esc(r.problem)+')</span>':"")+'</div>'}).join(""):'<div class="bad">No rules understood.</div>')+(PV.unparsed.length?'<div class="sm warn" style="margin-top:6px">Not understood: '+esc(PV.unparsed.join(" · "))+'</div>':"")+'<div class="btns"><button class="b g" onclick="PV=null;render()">Discard</button><button class="b ok"'+(PV.rules.length&&!PV.rules.some(function(r){return r.problem})?"":" disabled")+' onclick="addRules()">Turn on</button></div></div>':"";
 var manualOpen=CH.manual||!S.ai||!(S.ai||{}).provider;
 return '<div class="sm">'+st+'</div><div class="sm mut" style="margin-top:3px">Every fill follows your limits and approvals, with the same 0.5% fee as any swap.</div>'+msg()+
-(S.trade_mode==="python"?pyCard():"")+botsHtml()+'<h3>Ask Claude</h3>'+
+(S.trade_mode==="python"?pyCard():"")+botsHtml()+(S.ai?'<h3>Ask Claude</h3>':'')+
 chatBox()+
 (prop.length?'<h3>Waiting for you</h3>'+prop.map(ruleCard).join(""):"")+
 '<h3>Your rules</h3>'+(act.length?act.map(ruleCard).join(""):'<div class="mut sm">No rules on yet.</div>')+
