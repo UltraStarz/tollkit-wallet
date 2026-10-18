@@ -181,6 +181,13 @@ check(mismatch.error?.code === -32602 && /won't sign/.test(mismatch.error.messag
 const onlyMail = (chainId?: number) => JSON.stringify({ types: { EIP712Domain: [], Mail: [{ name: "to", type: "address" }] }, primaryType: "Mail", domain: { name: "X", ...(chainId === undefined ? {} : { chainId }) }, message: { to: w.addresses.evm } });
 await run(APP, "eth_signTypedData_v4", [w.addresses.evm, onlyMail(1)]);
 check(/it's for chain 1, but this site is on Base \(8453\)/.test(asked.at(-1)!), "typed data for another chain than the site's is flagged");
+const chainsBefore = w.policy.chains;
+await w.setPolicy(PW, { ...w.policy, chains: [...chainsBefore, "arbitrum"] });
+await run(APP, "wallet_switchEthereumChain", [{ chainId: "0xa4b1" }]);
+await run(APP, "eth_signTypedData_v4", [w.addresses.evm, onlyMail(8453)]);
+check(/it.s for chain 8453, but this site is on Arbitrum \(42161\)/.test(asked.at(-1)!), "the warning names the site's network (Arbitrum), not Base", asked.at(-1));
+await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x2105" }]);
+await w.setPolicy(PW, { ...w.policy, chains: chainsBefore });
 await run(APP, "eth_signTypedData_v4", [w.addresses.evm, onlyMail()]);
 check(/isn't tied to a chain/.test(asked.at(-1)!), "typed data with no chain is flagged");
 await run(APP, "eth_signTypedData_v4", [w.addresses.evm, onlyMail(8453)]);

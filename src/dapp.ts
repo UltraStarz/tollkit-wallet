@@ -360,7 +360,7 @@ export class DappBridge {
         const w: string[] = [];
         if (/permit|order|approv|allowance|delegat/i.test(primary) || (td?.message && typeof td.message === "object" && ("spender" in td.message || "operator" in td.message))) w.push("signatures like this can let someone move your tokens without another prompt. Only approve if you started this.");
         if (cid === null) w.push("it isn't tied to a chain, so the signature could be used on any chain.");
-        else if (cid !== siteChain) w.push(`it's for chain ${cid}, but this site is on ${siteChain === 1 ? "Ethereum" : "Base"} (${siteChain}). It could be used on that other chain.`);
+        else if (cid !== siteChain) w.push(`it's for chain ${cid}, but this site is on ${chainName(this.chainOf(origin))} (${siteChain}). It could be used on that other chain.`);
         const dn = plainText(String(td?.domain?.name ?? "").slice(0, 60)), body = plainText(JSON.stringify(td?.message ?? {}, null, 1));
         await this.ask(origin, `${host} asks you to sign data${dn.text ? ` for ${dn.text}` : ""}:\nType: ${primary.slice(0, 60)}${cid !== null ? `\nChain: ${cid}` : ""}${vc ? `\nContract: ${vc}` : ""}\n\n${shown(body.text, 4000)}${warned([...w, ...new Set([...dn.warnings, ...body.warnings])])}`);
         return keys.evm.signTypedData(td.domain ?? {}, types, td.message ?? {});
