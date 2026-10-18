@@ -13,6 +13,7 @@ import { decide, heartbeat, pending } from "./approvals.js";
 import { PolicySchema } from "./policy.js";
 import { resolveToken, toAtomic } from "./tokens.js";
 import { PAGE } from "./ui.js";
+import { qrSvg } from "./qr.js";
 import { Watcher } from "./watch.js";
 import { PriceFeed } from "./prices.js";
 import { Autopilot } from "./autopilot.js";
@@ -157,6 +158,11 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           holdings: holdings ? holdings.snapshot() : null, coins });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
+      // Receive: this wallet's own addresses, each with a QR code to scan from another wallet or an exchange.
+      if (req.method === "GET" && p === "/api/receive") {
+        const evm = w.addresses.evm, sol = w.addresses.solana;
+        return send(res, 200, { evm: { address: evm, qr: qrSvg(evm, "QR code of " + evm) }, solana: { address: sol, qr: qrSvg(sol, "QR code of " + sol) }, chains: w.policy.chains });
+      }
       // SOL staking: the owner's stake accounts, the epoch clock and the minimums (all read live).
       if (req.method === "GET" && p === "/api/stake") {
         if (!w.policy.chains.includes("solana")) return send(res, 400, { error: "Solana is turned off in your settings." });

@@ -19,3 +19,7 @@ The Claude, Cursor, GitHub Copilot and Gemini logos in the dashboard's "Connect 
 ## Wallet Standard (extension/inpage.js)
 
 The Solana wallet registration in `extension/inpage.js` follows `registerWallet` from `@wallet-standard/wallet` (https://github.com/wallet-standard/wallet-standard), Apache License 2.0. The feature names and shapes come from `@wallet-standard/features` and `@solana/wallet-standard-features` (Apache License 2.0).
+
+## QR Code Generator for JavaScript
+
+The Receive screen's QR codes (`src/qr.ts`) are encoded with `qrcode-generator` 2.0.4 (https://github.com/kazuhikoarase/qrcode-generator), Copyright (c) 2009 Kazuhiko Arase, released under the MIT License (the same terms as quoted for web3icons above). The word "QR Code" is a registered trademark of DENSO WAVE INCORPORATED.

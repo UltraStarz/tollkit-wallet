@@ -1,6 +1,6 @@
 {
   "name": "tollkit-wallet",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Non-custodial wallet for AI trading agents: swaps on Base, Ethereum and Solana, x402 and MPP payments, budgets that hold, Telegram approvals, receipts.",
   "type": "module",
   "license": "MIT",
@@ -27,6 +27,7 @@
     "@x402/svm": "2.28.0",
     "ethers": "^6.17.0",
     "mppx": "^0.13.4",
+    "qrcode-generator": "2.0.4",
     "viem": "^2.57.5",
     "zod": "^3.25.76"
   },

@@ -19,7 +19,7 @@ header{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:
 .cp{margin-left:auto;flex:none;border:0;background:var(--surf2);color:var(--tx);border-radius:9px;padding:6px 10px;font:600 12px inherit;cursor:pointer;display:flex;align-items:center;gap:5px}
 .cp svg{width:14px;height:14px}.cp.done{color:var(--ok)}header .pill{margin-left:auto;white-space:nowrap;font-size:11px;padding:4px 9px;border-radius:99px;background:var(--surf);color:var(--mut)}
 main{flex:1;min-height:0;padding:16px;overflow:auto;overscroll-behavior:contain}
-nav{flex:none;display:grid;grid-template-columns:repeat(7,1fr);border-top:1px solid var(--line);background:var(--card)}
+nav{flex:none;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);background:var(--card)}
 nav button{background:none;border:0;color:var(--mut);padding:10px 0 12px;font:inherit;font-size:11px;cursor:pointer;position:relative}
 nav button svg{display:block;margin:0 auto 3px;width:20px;height:20px}
 nav button.on{color:var(--acc)}
@@ -103,7 +103,7 @@ nav{background:transparent}
 .m .b:not(.g):not(.no):hover{box-shadow:0 10px 30px -10px rgba(var(--glow),.7)}
 .m .b.ok:hover{box-shadow:0 10px 30px -10px rgba(60,207,145,.7)}
 nav{position:relative}
-.ind{position:absolute;top:-1px;left:0;width:14.2857%;height:2px;display:flex;justify-content:center;pointer-events:none;transition:transform .55s var(--ease)}
+.ind{position:absolute;top:-1px;left:0;width:25%;height:2px;display:flex;justify-content:center;pointer-events:none;transition:transform .55s var(--ease)}
 .ind::before{content:"";width:34px;height:2px;border-radius:2px;background:var(--acc);box-shadow:0 0 14px 1px rgba(var(--glow),.85)}
 nav button svg{transition:transform .45s var(--ease)}nav button.on svg{transform:translateY(-2px) scale(1.1)}
 nav button:not(.on):hover{color:var(--tx)}
@@ -313,10 +313,25 @@ nav button .emo{display:block;margin:0 auto 3px;width:20px;height:20px;font-size
 .bseg .bsb:not(:has(.ic)){padding:7px 14px}
 .bsb.on{border-color:var(--acc);background:var(--surf2)}
 .bcust{width:90px;background:var(--surf);border:1px solid var(--line);color:var(--tx);border-radius:12px;padding:7px 10px;font:inherit;font-size:13.5px}
+
+header{position:relative;z-index:5}header .pill{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.hb{flex:none;position:relative;width:34px;height:34px;border-radius:10px;border:0;background:var(--surf);color:var(--tx);display:grid;place-items:center;cursor:pointer;padding:0}
+.hb svg{width:18px;height:18px}.hb:hover{background:var(--surf2)}.hb.on{color:var(--acc)}
+.hb .badge{top:-5px;left:auto;right:-5px}.hb .badge.dot{top:-2px;right:-2px;left:auto}
+.hb.attn .badge{background:var(--hi,var(--acc));color:#fff}.hb.attn-bad{--hi:var(--bad)}.hb.attn-warn{--hi:var(--warn)}.hb.attn-warn .badge{color:#1a1206}.hb.attn-acc{--hi:var(--acc)}.hb.attn-ok{--hi:var(--ok)}
+.mnu{position:absolute;right:12px;top:calc(100% - 4px);min-width:200px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px;box-shadow:0 18px 40px -12px rgba(0,0,0,.45)}
+.mnu[hidden]{display:none}
+.mnu button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;color:var(--tx);font:inherit;font-size:14px;padding:10px 12px;border-radius:10px;cursor:pointer;text-align:left}
+.mnu button:hover,.mnu button:focus-visible{background:var(--surf)}.mnu svg{width:18px;height:18px;flex:none;color:var(--mut)}
+.mnu .why{margin-left:auto;font-size:11px;color:var(--warn);white-space:nowrap}
+.pgbar{margin:-6px 0 6px}.pgbar button{background:none;border:0;color:var(--acc);font:inherit;font-size:13px;padding:4px 0;cursor:pointer}
+.rcv-qr{width:220px;max-width:72%;margin:14px auto 4px;padding:8px;background:#fff;border-radius:16px;min-height:120px;display:grid;place-items:center}
+.rcv-qr svg{display:block;width:100%;height:auto}.rcv-qr .empty{color:#555}
+.rcv-addr{font:500 14px ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;text-align:center;padding:12px;background:var(--surf);border-radius:12px;margin-top:12px;line-height:1.55}
 </style></head><body>
 <div class="aur" aria-hidden="true"><div class="drift"><i></i><i></i><i></i></div></div>
 <div class="wrap"><div class="card">
-<header><svg style="--i:0" class="logo" viewBox="0 0 100 100" aria-hidden="true"><rect x="1.5" y="1.5" width="97" height="97" rx="20" fill="#0a0a0a" stroke="#2f3442" stroke-width="3"/><text x="50" y="68" font-family="ui-monospace,SFMono-Regular,monospace" font-size="56" font-weight="700" fill="#4a8eff" text-anchor="middle">t</text></svg><span class="brand" style="--i:1">Toll<span class="dot">kit</span></span><span class="pill" style="--i:2" id="appr">…</span></header>
+<header><svg style="--i:0" class="logo" viewBox="0 0 100 100" aria-hidden="true"><rect x="1.5" y="1.5" width="97" height="97" rx="20" fill="#0a0a0a" stroke="#2f3442" stroke-width="3"/><text x="50" y="68" font-family="ui-monospace,SFMono-Regular,monospace" font-size="56" font-weight="700" fill="#4a8eff" text-anchor="middle">t</text></svg><span class="brand" style="--i:1">Toll<span class="dot">kit</span></span><span class="pill" style="--i:2" id="appr">…</span><button class="hb" style="--i:3" id="bell" onclick="go('approvals')" aria-label="Approvals" title="Approvals"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button><button class="hb" style="--i:4" id="menub" onclick="menuT(event)" aria-label="Menu" title="Menu" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><div class="mnu" id="mnu" role="menu" hidden></div></header>
 <div id="toasts" aria-live="polite"></div><main id="main"><div class="empty">Loading…</div></main>
 <nav id="nav"></nav>
 </div><p class="mut sm" style="text-align:center">Running on this computer only. Keys never leave it.</p></div>
@@ -417,10 +432,21 @@ var BUY={o:null,chain:null,asset:"USDC",amt:"50",custom:"",test:false,err:null,b
 var BUYA={base:["USDC","ETH"],ethereum:["USDC","ETH"],solana:["USDC","SOL"]};
 // Coinbase buy and cash out: Base, Ethereum and Solana (Arbitrum and Polygon wait for Coinbase's network names to be confirmed).
 function rampChains(){var ch=((S.policy&&S.policy.chains)||["base"]).filter(function(c){return BUYA[c]});return ch.length?ch:["base"]}
-var WICO={buy:'<path d="M12 5v14M5 12h14"/>',receive:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>',stake:'<path d="M4 17l6-6 4 4 6-6M14 9h6v6"/>',move:'<path d="M7 7h12l-3-3M17 17H5l3 3"/>',sell:'<path d="M12 3v18M16.5 7.5c0-1.7-2-2.8-4.5-2.8S7.5 5.8 7.5 7.5s2 2.5 4.5 3 4.5 1.3 4.5 3.2-2 3-4.5 3-4.5-1.1-4.5-2.9"/>'};
+var WICO={withdraw:'<path d="M12 20V8m0 0l-5 5m5-5l5 5M5 4h14"/>',buy:'<path d="M12 5v14M5 12h14"/>',receive:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>',stake:'<path d="M4 17l6-6 4 4 6-6M14 9h6v6"/>',move:'<path d="M7 7h12l-3-3M17 17H5l3 3"/>',sell:'<path d="M12 3v18M16.5 7.5c0-1.7-2-2.8-4.5-2.8S7.5 5.8 7.5 7.5s2 2.5 4.5 3 4.5 1.3 4.5 3.2-2 3-4.5 3-4.5-1.1-4.5-2.9"/>'};
 function wTile(k,label,fn){return '<button class="wtile" onclick="'+fn+'"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+WICO[k]+'</svg></i>'+label+'</button>'}
-function walletActions(){var ch=(S.policy&&S.policy.chains)||[];return '<div class="wact">'+wTile("buy","Buy","openBuy()")+wTile("sell","Sell","openSell()")+wTile("receive","Receive","goReceive()")+(ch.length>1?wTile("move","Move","openMove()"):"")+(ch.indexOf("solana")>=0?wTile("stake","Stake","openStake()"):"")+'</div>'}
-function goReceive(){var h=[].slice.call(document.querySelectorAll("#main h3")).filter(function(x){return /Deposit/.test(x.textContent)})[0];if(h)h.scrollIntoView({behavior:"smooth",block:"start"})}
+function walletActions(){var ch=(S.policy&&S.policy.chains)||[];return '<div class="wact">'+wTile("buy","Buy","openBuy()")+wTile("sell","Sell","openSell()")+wTile("receive","Receive","goReceive()")+(ch.length>1?wTile("move","Move","openMove()"):"")+(ch.indexOf("solana")>=0?wTile("stake","Stake","openStake()"):"")+wTile("withdraw","Withdraw","go('withdraw')")+'</div>'}
+function goReceive(){go("receive")}
+function pgBack(){var n=LASTTAB==="ai"?"AI":LASTTAB==="autopilot"?"Bots":LASTTAB[0].toUpperCase()+LASTTAB.slice(1);return '<div class="pgbar"><button onclick="go(LASTTAB)">‹ Back to '+n+'</button></div>'}
+// Receive: pick the network you're sending on, then scan the QR code or copy the full address.
+var RCV={net:null,d:null,busy:false,err:null};
+function receive(){var on=netsOn();if(!RCV.net||on.indexOf(RCV.net)<0)RCV.net=on.indexOf("base")>=0?"base":on[0];
+if(!RCV.d&&!RCV.busy){RCV.busy=true;RCV.err=null;api("/receive").then(function(d){RCV.d=d;RCV.busy=false;if(tab==="receive")render()}).catch(function(e){RCV.busy=false;RCV.err=e.message;if(tab==="receive")render()})}
+var sol=RCV.net==="solana",a=sol?S.addresses.solana:S.addresses.evm,qr=RCV.d?(sol?RCV.d.solana.qr:RCV.d.evm.qr):"",nm=esc(CHAIN_NAMES[RCV.net]||RCV.net);
+var h='<h3>Receive</h3><div class="sm mut">Which network are you sending on?</div><div class="bseg" role="group" aria-label="Network">'+on.map(function(c){return '<button class="bsb'+(c===RCV.net?" on":"")+'" aria-pressed="'+(c===RCV.net)+'" onclick="RCV.net=\''+c+'\';render()">'+chainIcon(c)+esc(CHAIN_NAMES[c]||c)+'</button>'}).join("")+'</div>';
+h+='<div class="rcv-qr">'+(qr||'<div class="empty sm">'+(RCV.err?esc(RCV.err):"Making the QR code…")+'</div>')+'</div>';
+h+='<div class="rcv-addr" id="rcvaddr">'+esc(a)+'</div><div style="display:flex;justify-content:center;margin-top:10px">'+cpBtn(a).replace('class="cp"','class="cp" style="margin:0"')+'</div>';
+h+='<div class="stnote">'+(sol?"This address is for Solana only. In the app you\'re sending from, pick Solana as the network.":"This one address works on "+EVMNAMES+". In the app you\'re sending from, pick "+nm+" as the network.")+'</div>';
+return h}
 function openBuy(){var ch=rampChains();BUY.chain=BUY.chain&&ch.indexOf(BUY.chain)>=0?BUY.chain:ch[0];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.err=null;BUY.done=null;BUY.busy=false;if(!BUY.o){BUY.o=document.createElement("div");BUY.o.className="aio";BUY.o.innerHTML='<div class="aidlg" role="dialog" aria-modal="true" aria-label="Buy crypto"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';BUY.o.addEventListener("mousedown",function(e){if(e.target===BUY.o)closeBuy()});BUY.o.addEventListener("click",buyClick);document.body.appendChild(BUY.o)}buyRender()}
 var STK={o:null,data:null,vals:null,err:null,ok:null,busy:null,amt:"",vote:"",pw:""};
 function openStake(){STK.err=null;STK.ok=null;STK.busy=null;STK.pw="";if(!STK.o){STK.o=document.createElement("div");STK.o.className="aio";STK.o.innerHTML='<div class="aidlg" role="dialog" aria-modal="true" aria-label="Stake SOL"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';STK.o.addEventListener("mousedown",function(e){if(e.target===STK.o)closeStake()});STK.o.addEventListener("click",stkClick);document.body.appendChild(STK.o)}stkRender();stkLoad();if(!STK.vals)api("/validators").then(function(r){STK.vals=r.validators;stkRender()}).catch(function(e){STK.err=e.message;stkRender()})}
@@ -766,11 +792,11 @@ function shortWhy(r){r=String(r);var m=/reverted: "([^"]+)"/.exec(r);if(m)r="Tra
 function rowUsd(e){if(Number(e.usd)>0)return usd(e.usd);var m=(e.kind==="stake"?/([\d.]+) (SOL)/:/^([\d.]+) ([A-Za-z]+)/).exec(e.detail||""),p=m&&priceOf(m[2]==="WETH"?"ETH":m[2]);return p&&p.usd?'<span title="at today\'s price">≈'+usd(Number(m[1])*p.usd)+'</span>':usd(e.usd)}
 function usd(n){n=Number(n)||0;return "$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:n<1&&n>0?4:2})}
 function ago(ts){var s=(Date.now()-Date.parse(ts))/1000;if(s<60)return "just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";return new Date(ts).toLocaleDateString()}
-var ICONS={autopilot:'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',activity:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',approvals:'<path d="M5 13l4 4L19 7"/>',settings:'<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',withdraw:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>'};
-var TABS=["home","ai","activity","autopilot","approvals","settings","withdraw"];
+var ICONS={autopilot:'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',activity:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',approvals:'<path d="M5 13l4 4L19 7"/>',settings:'<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',withdraw:'<path d="M12 20V8m0 0l-5 5m5-5l5 5M5 4h14"/>'};
+var TABS=["home","ai","autopilot","activity"],LASTTAB="home",MNU=false;
 function nav(){var el=document.getElementById("nav");if(!el.querySelector("button")){el.innerHTML='<div class="ind" id="ind"></div>'+TABS.map(function(k){return '<button data-k="'+k+'" onclick="go(\''+k+'\')">'+(k==="autopilot"?'<span class="emo" aria-hidden="true">\u{1F916}</span>':k==="ai"?'<span class="nclaude" aria-hidden="true">'+aiMark()+'</span>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+ICONS[k]+'</svg>')+(k==="autopilot"?"Bots":k==="ai"?"AI":k[0].toUpperCase()+k.slice(1))+'</button>'}).join("")}
 el.querySelectorAll("button").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-k")===tab)});
-document.getElementById("ind").style.transform="translateX("+(TABS.indexOf(tab)*100)+"%)";
+var ind=document.getElementById("ind"),ix=TABS.indexOf(tab);ind.style.opacity=ix<0?"0":"1";if(ix>=0)ind.style.transform="translateX("+(ix*100)+"%)";
 navMark(el)}
 // Why a tab is worth a tap. Activity and Home only count what's new since this page opened (or since you last looked).
 var SEEN=null;
@@ -792,11 +818,22 @@ function navMark(el){var w=navWhy();el.querySelectorAll("button").forEach(functi
 var key=r?r.lvl+"|"+(r.n||"")+"|"+r.t:"";if(b.getAttribute("data-why")===key)return;b.setAttribute("data-why",key);
 b.classList.remove("attn","attn-bad","attn-warn","attn-ok","attn-acc");var old=b.querySelector(".badge");if(old)old.remove();
 b.title=r?r.t:"";b.setAttribute("aria-label",r?name+": "+r.t:name);if(!r)return;
+b.classList.add("attn","attn-"+r.lvl);var sp=document.createElement("span");sp.className="badge"+(r.n?"":" dot");sp.textContent=r.n?(r.n>99?"99+":String(r.n)):"";b.appendChild(sp)});hdrMark(w)}
+// The bell (approvals) and the menu (settings, withdraw) live at the top right; they light up the same way the tabs do.
+function hdrMark(w){var bl=document.getElementById("bell"),mb=document.getElementById("menub");if(!bl||!mb)return;bl.classList.toggle("on",tab==="approvals");mb.classList.toggle("on",tab==="settings"||tab==="withdraw");
+[[bl,w.approvals,"Approvals"],[mb,w.settings,"Menu"]].forEach(function(x){var b=x[0],r=x[1],key=r?r.lvl+"|"+(r.n||"")+"|"+r.t:"";if(b.getAttribute("data-why")===key)return;b.setAttribute("data-why",key);
+b.classList.remove("attn","attn-bad","attn-warn","attn-ok","attn-acc");var o=b.querySelector(".badge");if(o)o.remove();b.title=r?r.t:x[2];b.setAttribute("aria-label",r?x[2]+": "+r.t:x[2]);if(!r)return;
 b.classList.add("attn","attn-"+r.lvl);var sp=document.createElement("span");sp.className="badge"+(r.n?"":" dot");sp.textContent=r.n?(r.n>99?"99+":String(r.n)):"";b.appendChild(sp)})}
-function go(k){if(k===tab&&!flash)return;var changed=k!==tab;tab=k;flash=null;render(true);if(changed){var mm=document.getElementById("main");if(mm)mm.scrollTop=0}}
+function menuT(e){if(e)e.stopPropagation();MNU=!MNU;menuR()}
+function menuR(){var m=document.getElementById("mnu"),b=document.getElementById("menub");if(!m)return;b.setAttribute("aria-expanded",MNU?"true":"false");if(!MNU){m.hidden=true;return}var w=navWhy();
+var it=function(k,label,why){return '<button role="menuitem" onclick="MNU=false;menuR();go(\''+k+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+ICONS[k]+'</svg>'+label+(why?'<span class="why">'+esc(why)+'</span>':"")+'</button>'};
+m.innerHTML=it("settings","Settings",w.settings?"Not backed up":"")+it("approvals","Approvals",w.approvals?w.approvals.n+" waiting":"")+it("withdraw","Withdraw","");m.hidden=false;var f=m.querySelector("button");if(f)f.focus()}
+document.addEventListener("click",function(e){if(MNU&&!e.target.closest("#mnu")&&!e.target.closest("#menub")){MNU=false;menuR()}});
+document.addEventListener("keydown",function(e){if(MNU&&e.key==="Escape"){MNU=false;menuR();var b=document.getElementById("menub");if(b)b.focus()}});
+function go(k){if(k===tab&&!flash)return;var changed=k!==tab;if(TABS.indexOf(tab)>=0)LASTTAB=tab;if(MNU){MNU=false;menuR()}tab=k;flash=null;render(true);if(changed){var mm=document.getElementById("main");if(mm)mm.scrollTop=0}}
 function msg(){return flash?'<div class="msg '+(flash[0]?"okk":"err")+'">'+esc(flash[1])+'</div>':""}
 function render(enter){nav();if(!S)return;if(PYO)pyRender();var a=S.approvals||"none";var ap=document.getElementById("appr");ap.classList.toggle("live",a!=="none"||!!S.live);ap.textContent=(S.live?"Live":"")+(S.live?" · ":"")+(a==="none"?"Approvals off":"Approvals on");ap.title=a==="none"?"Set up Telegram or keep this page open":"Answered via "+a.replace("+"," and ");ap.onclick=function(){go("settings")};ap.style.cursor="pointer";var m=document.getElementById("main");
-if(tab!=="autopilot"&&tab!=="ai")LASTAP=null;if(tab!=="settings"){LIMD={};LIMPW=""}var prevTab=m.dataset.tab;m.dataset.tab=tab;if(tab==="home")m.innerHTML=home();else if(tab==="activity")m.innerHTML=activity();else if(tab==="approvals")m.innerHTML=approvals();else if(tab==="settings")m.innerHTML=settings();else if(tab==="autopilot"||tab==="ai"){var h=tab==="ai"?claudeTab():autopilot();if(!enter&&h===LASTAP&&prevTab===tab){chatAfter();return}m.innerHTML=h;LASTAP=h;chatAfter()}else{m.innerHTML=withdraw();tokOpts()}
+if(tab!=="autopilot"&&tab!=="ai")LASTAP=null;if(tab!=="settings"){LIMD={};LIMPW=""}var prevTab=m.dataset.tab;m.dataset.tab=tab;if(tab==="home")m.innerHTML=home();else if(tab==="activity")m.innerHTML=activity();else if(tab==="approvals")m.innerHTML=pgBack()+approvals();else if(tab==="settings")m.innerHTML=pgBack()+settings();else if(tab==="receive")m.innerHTML=pgBack()+receive();else if(tab==="autopilot"||tab==="ai"){var h=tab==="ai"?claudeTab():autopilot();if(!enter&&h===LASTAP&&prevTab===tab){chatAfter();return}m.innerHTML=h;LASTAP=h;chatAfter()}else{m.innerHTML=pgBack()+withdraw();tokOpts()}
 after(m,enter)}
 var shown=null;
 function after(m,enter){m.querySelectorAll(".row,.ap").forEach(function(r){r.classList.add("spot")});

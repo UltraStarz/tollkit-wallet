@@ -102,6 +102,9 @@ const noPw = await raw("/api/connect", { method: "POST", body: { app: "cursor", 
 check(noPw.status === 403, "connect: adding an app needs the wallet password");
 const rm = await raw("/api/connect", { method: "POST", body: { app: "cursor", action: "remove" } });
 check(rm.status !== 403, "connect: removing an app doesn't need the password", rm.status);
+const rcv = await j("/api/receive");
+check(rcv.evm.address === st.addresses.evm && rcv.solana.address === st.addresses.solana && /^<svg[^>]*viewBox="0 0 \d+ \d+"/.test(rcv.evm.qr) && /<path d="M/.test(rcv.solana.qr) && rcv.evm.qr !== rcv.solana.qr, "receive: both addresses, each with its own QR code");
+check((await raw("/api/receive", { token: null })).status === 401, "receive: refused without the token");
 await d.close();
 console.log(`\ndashboard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
