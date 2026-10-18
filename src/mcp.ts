@@ -15,7 +15,7 @@ import { ACTIONS, SWAP_PROPOSE, proposeRules } from "./actions.js";
 /** The only tools the wallet's built-in AI chat gets: read, look at prices, suggest rules for the owner to turn on, and suggest one-off swaps for the owner to approve. */
 export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_propose", "swap_propose", "paper_status"];
 
-export const VERSION = "0.5.0";
+export const VERSION = "0.5.1";
 
 export function passwordFromEnv(): string {
   const file = process.env.TOLLKIT_WALLET_PASSWORD_FILE;
