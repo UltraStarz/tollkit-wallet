@@ -7,6 +7,7 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { z } from "zod";
+import { CHAIN_ENUM } from "./chains.js";
 import { files, walletHome } from "./paths.js";
 
 export const PolicySchema = z.object({
@@ -17,13 +18,13 @@ export const PolicySchema = z.object({
   per_seller_daily_usd: z.number().positive(),
   approval_above_usd: z.number().nonnegative(),
   max_slippage_bps: z.number().int().min(1).max(1000),
-  chains: z.array(z.enum(["base", "ethereum", "solana"])).min(1),
+  chains: z.array(z.enum(CHAIN_ENUM)).min(1),
   block_seller_warnings: z.boolean(),
   /** Autopilot rules an agent proposes: "propose" waits for the owner to turn each on; "auto" turns them on at once (limits still apply). */
   agent_rules: z.enum(["propose", "auto"]).default("propose"),
   /** The only places the owner can withdraw to. Sealed with the rest, so adding one needs the password. */
   withdraw_addresses: z.array(z.object({
-    chain: z.enum(["base", "ethereum", "solana"]),
+    chain: z.enum(CHAIN_ENUM),
     address: z.string().min(32),
     label: z.string().max(40).default(""),
   })).max(20).default([]),

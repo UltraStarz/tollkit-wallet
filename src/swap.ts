@@ -16,7 +16,7 @@ import { AddressLookupTableAccount, ComputeBudgetProgram, Connection, Keypair, P
 import { AbiCoder, Contract, Interface, JsonRpcProvider, ZeroAddress, type Wallet, type HDNodeWallet } from "ethers";
 import { KNOWN } from "./tokens.js";
 import { sendingProvider, waitMined } from "./evmsend.js";
-import { ALLOWANCE_HOLDER, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, STABLES, SWAP_FEE_BPS, WSOL, isStable, type Chain } from "./chains.js";
+import { ALLOWANCE_HOLDER, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, STABLES, SWAP_FEE_BPS, WSOL, isStable, type Chain, type EvmChain } from "./chains.js";
 
 type Fetch = typeof fetch;
 export const DEFAULT_PROXY = "https://api.tollkit.dev/wallet";
@@ -199,7 +199,7 @@ export interface VerifyDeps {
 export async function verifySwapTx(q: SwapQuote, me: { evm: string; solana: PublicKey }, d: VerifyDeps & ExecDeps = {}): Promise<void> {
   if (q.venue === "0x") {
     const settler = checkZeroExTx(q, me.evm).toLowerCase();
-    const call = d.evmCall ?? ((chain: Chain, to: string, data: string) => new JsonRpcProvider(d.rpc?.[chain] ?? DEFAULT_RPC[chain], EVM_CHAIN_ID[chain as "base" | "ethereum"], { staticNetwork: true }).call({ to, data }));
+    const call = d.evmCall ?? ((chain: Chain, to: string, data: string) => new JsonRpcProvider(d.rpc?.[chain] ?? DEFAULT_RPC[chain], EVM_CHAIN_ID[chain as EvmChain], { staticNetwork: true }).call({ to, data }));
     const reg = async (sel: string) => { try { return String(AbiCoder.defaultAbiCoder().decode(["address"], await call(q.chain, SETTLER_REGISTRY, sel + "0".repeat(63) + "2"))[0]).toLowerCase(); } catch { return ""; } };
     // ownerOf(2) is the current Settler; prev(2) the one before, still used while 0x's API catches up.
     if ((await reg("0x6352211e")) !== settler && (await reg("0xe2603dc2")) !== settler) throw new Error("The swap goes through a contract 0x's registry doesn't list. Not signing it.");

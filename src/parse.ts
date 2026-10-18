@@ -20,12 +20,13 @@ export type PriceLookup = (token: string, chain: Chain) => number | undefined;
 
 const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const num = (s: string) => Number(s.replace(/,/g, ""));
-const TOKEN = String.raw`(eth|weth|sol|[a-z0-9]{2,10}|0x[0-9a-f]{40}|[1-9a-hj-np-z]{32,44})`;
+const TOKEN = String.raw`(eth|weth|sol|pol|[a-z0-9]{2,10}|0x[0-9a-f]{40}|[1-9a-hj-np-z]{32,44})`;
 
 function chainFor(token: string, text: string): Chain {
-  const m = /\bon (base|ethereum|solana|mainnet)\b/i.exec(text);
+  const m = /\bon (base|ethereum|solana|mainnet|arbitrum|polygon)\b/i.exec(text);
   if (m) return (m[1]!.toLowerCase() === "mainnet" ? "ethereum" : m[1]!.toLowerCase()) as Chain;
   if (/^sol$/i.test(token) || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(token)) return "solana";
+  if (/^w?pol$/i.test(token)) return "polygon";
   return "base";
 }
 

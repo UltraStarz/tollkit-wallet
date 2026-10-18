@@ -30,7 +30,7 @@ export interface Executor {
 export interface PriceSource { snapshot(): { prices: Record<string, Price> } }
 
 /** Gas kept back when selling a chain's native coin, so the wallet can still pay fees. */
-const GAS_RESERVE: Record<Chain, bigint> = { base: 50_000_000_000_000n /* 0.00005 ETH */, ethereum: 2_000_000_000_000_000n /* 0.002 ETH */, solana: 10_000_000n /* 0.01 SOL */ };
+const GAS_RESERVE: Record<Chain, bigint> = { base: 50_000_000_000_000n /* 0.00005 ETH */, ethereum: 2_000_000_000_000_000n /* 0.002 ETH */, arbitrum: 100_000_000_000_000n /* 0.0001 ETH */, polygon: 100_000_000_000_000_000n /* 0.1 POL */, solana: 10_000_000n /* 0.01 SOL */ };
 const QUOTE_PRICE_TTL = 60_000;
 
 export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () => number; leaseId?: string; resolve?: typeof resolveToken; onEvent?: (e: AutopilotEvent) => void }

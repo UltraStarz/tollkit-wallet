@@ -2,7 +2,7 @@
 
 A wallet for AI trading agents. It holds its keys on your computer, encrypted with your password, and lets an agent:
 
-- swap tokens on Base and Ethereum (via 0x) and Solana (via Jupiter)
+- swap tokens on Base, Ethereum, Arbitrum and Polygon (via 0x) and Solana (via Jupiter)
 - pay for APIs that charge per call (x402 and MPP, in USDC or USDT)
 
 All of it happens inside limits that you set and the agent can't change.
@@ -24,12 +24,12 @@ Swaps cost a flat 0.5%, shown before every trade. On some Base and Ethereum pair
 
 ```
 npm install -g tollkit-wallet
-tollkit-wallet init                 # choose a password; prints your Base/Ethereum and Solana addresses
+tollkit-wallet init                 # choose a password; prints your EVM (Base, Ethereum, Arbitrum, Polygon) and Solana addresses
 tollkit-wallet budget               # see limits; change with e.g. budget per_trade_usd=100 (or in the dashboard's Settings tab)
 tollkit-wallet telegram <bot-token> <chat-id>   # optional: approvals in Telegram
 ```
 
-Then fund the addresses. Base and Solana are on by default; turn Ethereum on with `tollkit-wallet budget chains=base,solana,ethereum` (its network fees are higher).
+Then fund the addresses. Base and Solana are on by default; turn others on with, for example, `tollkit-wallet budget chains=base,solana,ethereum,arbitrum,polygon` (Ethereum's network fees are higher).
 
 ## Withdrawals
 
@@ -86,7 +86,7 @@ Set `TOLLKIT_WALLET_PASSWORD` (or `TOLLKIT_WALLET_PASSWORD_FILE`) in the agent's
 
 ## Use with websites (browser extension)
 
-The Tollkit extension for Chrome, Brave and Edge lets websites connect to this wallet the way they connect to MetaMask or Phantom: Base and Ethereum apps through the standard Ethereum provider (EIP-1193/EIP-6963), Solana apps through the Wallet Standard.
+The Tollkit extension for Chrome, Brave and Edge lets websites connect to this wallet the way they connect to MetaMask or Phantom: Base, Ethereum, Arbitrum and Polygon apps through the standard Ethereum provider (EIP-1193/EIP-6963), Solana apps through the Wallet Standard.
 
 Keys stay in Tollkit. When a site asks to connect, sign or send, the request shows up in the dashboard's Approvals tab with the site's name and the details. Transactions are checked against the network first. Nothing happens until you approve. Read-only calls go straight through.
 
@@ -104,7 +104,7 @@ const r = await w.pay("https://api.example.com/paid-endpoint");
 
 New wallets (0.2.2 and later) are made from a 12-word recovery phrase. It's shown once when you create the wallet, and you can see it again with `tollkit-wallet backup` or **Back up** in the dashboard (password needed). The dashboard asks you to confirm three of the words before it counts as backed up.
 
-The phrase uses the same derivation paths as MetaMask and Phantom (Base/Ethereum `m/44'/60'/0'/0/0`, Solana `m/44'/501'/0'/0'`), so it restores the same addresses there too.
+The phrase uses the same derivation paths as MetaMask and Phantom (Base, Ethereum, Arbitrum and Polygon `m/44'/60'/0'/0/0`, Solana `m/44'/501'/0'/0'`), so it restores the same addresses there too.
 
 To restore: `tollkit-wallet restore` and type the phrase. Wallets made before 0.2.2 have no phrase; their backup is the two private keys (`tollkit-wallet backup` shows them), restored with `tollkit-wallet restore --keys`. Add `--replace` to restore over an existing wallet; its files are kept, renamed with `.replaced-<time>`.
 
@@ -129,7 +129,7 @@ Tokens with no price (most airdropped spam) are hidden and counted below the lis
 
 ## Move between networks
 
-**Move** on the Home tab sends your own USDC between Base, Ethereum and Solana, or ETH between Base and Ethereum, to this wallet's address on the other network.
+**Move** on the Home tab sends your own USDC between Base, Ethereum, Arbitrum, Polygon and Solana, or ETH between Base and Ethereum, to this wallet's address on the other network.
 
 - USDC uses Circle's own transfer (CCTP): it's burned on one network and minted on the other by Circle, usually in 8 to 20 seconds. Circle's forwarding service pays the network fee on arrival, so you don't need gas there.
 - ETH goes through Across, usually in under a minute.

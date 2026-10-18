@@ -5,13 +5,14 @@
  * the payment and ID checks; the wallet never handles card details.
  */
 import { DEFAULT_PROXY } from "./swap.js";
-import type { Chain } from "./chains.js";
+import { chainName, type Chain } from "./chains.js";
 import type { RampAuth } from "./rampauth.js";
 
-export const BUY_ASSETS: Record<Chain, string[]> = { base: ["USDC", "ETH"], ethereum: ["USDC", "ETH"], solana: ["USDC", "SOL"] };
+/** Arbitrum and Polygon aren't offered yet: Coinbase's network names for them differ between its docs, so they wait for a live check. */
+export const BUY_ASSETS: Partial<Record<Chain, string[]>> = { base: ["USDC", "ETH"], ethereum: ["USDC", "ETH"], solana: ["USDC", "SOL"] };
 
 export async function buyLink(addresses: { evm: string; solana: string }, o: { chain: Chain; asset: string; amount_usd?: number; sandbox?: boolean }, opts: { proxy?: string; fetch?: typeof fetch; sign?: (network: Chain, address: string) => Promise<RampAuth> } = {}): Promise<{ url: string; sandbox: boolean }> {
-  if (!BUY_ASSETS[o.chain]?.includes(o.asset)) throw new Error(`On ${o.chain} you can buy ${(BUY_ASSETS[o.chain] ?? []).join(" or ")}.`);
+  if (!BUY_ASSETS[o.chain]?.includes(o.asset)) throw new Error(BUY_ASSETS[o.chain] ? `On ${chainName(o.chain)} you can buy ${BUY_ASSETS[o.chain]!.join(" or ")}.` : `Buying with Coinbase isn't available on ${chainName(o.chain)} yet. Buy on Base, then move it.`);
   const address = o.chain === "solana" ? addresses.solana : addresses.evm;
   const auth = opts.sign ? await opts.sign(o.chain, address) : {};
   const r = await (opts.fetch ?? fetch)(`${opts.proxy ?? DEFAULT_PROXY}/onramp`, {

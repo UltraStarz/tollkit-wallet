@@ -58,7 +58,14 @@ check((await run(OTHER, "eth_accounts")).result.length === 0, "other sites still
 // read-only calls go to the network for the site's chain
 check((await run(APP, "eth_blockNumber")).result === "0x10" && rpcCalls.at(-1).chain === "base", "read calls go straight to the network");
 check((await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x1" }])).result === null && (await run(APP, "eth_chainId")).result === "0x1", "switch to Ethereum");
-check((await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x89" }])).error?.code === 4902, "unsupported chains: 4902");
+check((await run(APP, "wallet_switchEthereumChain", [{ chainId: "0xa" }])).error?.code === 4902, "unsupported chains (Optimism): 4902");
+{ const r = await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x89" }]); check(r.error?.code === 4901 && /Polygon is turned off/.test(r.error?.message ?? ""), "Polygon while it's off in settings: 4901 with its name", r); }
+await w.setPolicy(PW, { ...w.policy, chains: ["base", "solana", "ethereum", "arbitrum", "polygon"] });
+check((await run(APP, "wallet_switchEthereumChain", [{ chainId: "0xa4b1" }])).result === null && (await run(APP, "eth_chainId")).result === "0xa4b1" && (await run(APP, "net_version")).result === "42161", "switch to Arbitrum");
+check((await run(APP, "eth_blockNumber")).result === "0x10" && rpcCalls.at(-1).chain === "arbitrum", "read calls go to Arbitrum after switching");
+check((await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x89" }])).result === null && (await run(APP, "eth_chainId")).result === "0x89", "switch to Polygon");
+check((await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x1" }])).result === null, "back to Ethereum");
+await w.setPolicy(PW, { ...w.policy, chains: ["base", "solana", "ethereum"] });
 check((await run(APP, "eth_sign", [w.addresses.evm, "0x00"])).error?.code === 4200, "eth_sign refused");
 check((await run(APP, "eth_foo")).error?.code === 4200, "unknown methods: 4200");
 await run(APP, "wallet_switchEthereumChain", [{ chainId: "0x2105" }]);

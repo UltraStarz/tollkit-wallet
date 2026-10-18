@@ -7,7 +7,7 @@
  */
 export interface Price { usd: number; change_24h: number | null }
 
-const PRODUCTS: Record<string, string> = { ETH: "ETH-USD", SOL: "SOL-USD", USDT: "USDT-USD" };
+const PRODUCTS: Record<string, string> = { ETH: "ETH-USD", SOL: "SOL-USD", USDT: "USDT-USD", POL: "POL-USD" };
 const BASE = "https://api.exchange.coinbase.com/products";
 
 export class PriceFeed {
@@ -19,6 +19,7 @@ export class PriceFeed {
   snapshot(): { prices: Record<string, Price>; at: string | null } {
     const p = { ...this.p };
     if (p.ETH) p.WETH = p.ETH;
+    if (p.POL) p.WPOL = p.POL;
     return { prices: p, at: this.at };
   }
 

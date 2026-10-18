@@ -10,7 +10,7 @@ export { isLocalUrl } from "./netguard.js";
 import type { TollkitWallet } from "./wallet.js";
 import { resolveToken, toAtomic } from "./tokens.js";
 import { checkSeller } from "./seller.js";
-import type { Chain } from "./chains.js";
+import { CHAIN_ENUM, type Chain } from "./chains.js";
 import { RuleInput, describeRule, ruleProblem, type Rule } from "./rules.js";
 import { parseStrategy } from "./parse.js";
 import { PriceFeed } from "./prices.js";
@@ -18,8 +18,8 @@ import { PriceFeed } from "./prices.js";
 const MAX_BODY = 50_000;
 
 export const SwapArgs = z.object({
-  chain: z.enum(["base", "ethereum", "solana"]).describe("Chain to trade on"),
-  sell: z.string().describe("Token to sell: symbol (USDC, USDT, ETH, WETH, SOL) or contract/mint address"),
+  chain: z.enum(CHAIN_ENUM).describe("Chain to trade on"),
+  sell: z.string().describe("Token to sell: symbol (USDC, USDT, ETH, WETH, SOL, POL) or contract/mint address"),
   buy: z.string().describe("Token to buy: symbol or contract/mint address"),
   amount: z.string().describe('Amount of the sell token in normal units, e.g. "25" or "0.01"'),
   slippage_bps: z.number().int().min(1).max(1000).optional().describe("Max slippage in basis points (default 50, capped by the owner's limit)"),
@@ -43,7 +43,7 @@ export const ProposeArgs = z.object({
 export const RulesListArgs = z.object({ status: z.enum(["proposed", "active", "paused", "done", "cancelled", "expired", "error"]).optional() });
 export const RuleIdArgs = z.object({ id: z.string().min(4).max(40) });
 export const HistoryArgs = z.object({
-  token: z.enum(["ETH", "WETH", "SOL"]).describe("ETH (also WETH) or SOL; prices from Coinbase Exchange"),
+  token: z.enum(["ETH", "WETH", "SOL", "POL"]).describe("ETH (also WETH), SOL or POL; prices from Coinbase Exchange"),
   interval: z.enum(["15m", "1h", "6h", "1d"]).optional().describe("Candle size (default 1h)"),
   points: z.number().int().min(5).max(200).optional().describe("How many candles, newest last (default 48)"),
 });
@@ -51,7 +51,7 @@ export const HistoryArgs = z.object({
 const GRAN = { "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400 } as const;
 /** Coinbase Exchange public candles: [time, low, high, open, close, volume], newest first, at most 300, no key. */
 export async function priceHistory(a: z.infer<typeof HistoryArgs>, f: typeof fetch = fetch) {
-  const product = a.token === "SOL" ? "SOL-USD" : "ETH-USD", interval = a.interval ?? "1h";
+  const product = a.token === "SOL" ? "SOL-USD" : a.token === "POL" ? "POL-USD" : "ETH-USD", interval = a.interval ?? "1h";
   const r = await f(`https://api.exchange.coinbase.com/products/${product}/candles?granularity=${GRAN[interval]}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
   if (!r.ok) return { ok: false, refused: { code: "unavailable", reason: `Price history isn't available right now (HTTP ${r.status}).` } };
   const rows = ((await r.json()) as number[][]).sort((x, y) => x[0]! - y[0]!).slice(-(a.points ?? 48));

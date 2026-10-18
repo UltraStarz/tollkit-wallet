@@ -18,7 +18,7 @@ import { PriceFeed } from "./prices.js";
 import { Autopilot } from "./autopilot.js";
 import { RuleInput, describeRule, ruleProblem } from "./rules.js";
 import { parseStrategy } from "./parse.js";
-import type { Chain } from "./chains.js";
+import { CHAINS as ALL_CHAINS, chainName, type Chain } from "./chains.js";
 import { existsSync } from "node:fs";
 import { passwordFile } from "./paths.js";
 import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLink, type AppId } from "./connect.js";
@@ -32,7 +32,7 @@ import { DEFAULT_PROXY } from "./swap.js";
 import { buyLink, BUY_ASSETS } from "./buy.js";
 import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.js";
 
-const CHAINS = ["base", "ethereum", "solana"];
+const CHAINS: string[] = ALL_CHAINS;
 
 export interface DashboardHandle { url: string; port: number; close(): Promise<void> }
 
@@ -201,7 +201,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       if (p === "/api/bots/preview" || p === "/api/bots/start") {
         const chain = String(b.chain) as Chain, token = String(b.token ?? "").trim();
         if (!CHAINS.includes(chain) || !token) return send(res, 400, { error: "Pick a network and a token." });
-        if (!w.policy.chains.includes(chain)) return send(res, 400, { error: `${chain} is turned off in your limits.` });
+        if (!w.policy.chains.includes(chain)) return send(res, 400, { error: `${chainName(chain)} is turned off in your limits.` });
         if (chain !== "solana") await loadExtraLists(wf);
         let tok;
         try { tok = await resolveToken(chain, token); } catch (e) { return send(res, 400, { error: (e as Error).message }); }
@@ -274,7 +274,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       // Buy with a card or bank: a single-use Coinbase checkout link for this wallet's address.
       if (p === "/api/buy") {
         const chain = String(b.chain) as Chain;
-        if (!w.policy.chains.includes(chain)) return send(res, 400, { error: `${chain} is turned off in your limits.` });
+        if (!w.policy.chains.includes(chain)) return send(res, 400, { error: `${chainName(chain)} is turned off in your limits.` });
         const amt = b.amount_usd === undefined || b.amount_usd === "" ? undefined : Number(b.amount_usd);
         if (amt !== undefined && !(amt >= 5 && amt <= 10_000)) return send(res, 400, { error: "Pick an amount from $5 to $10,000." });
         return send(res, 200, await buyLink(w.addresses, { chain, asset: String(b.asset ?? "").toUpperCase(), amount_usd: amt, sandbox: b.sandbox === true }, { proxy: (w as any).o?.proxy, sign: (n, a) => w.rampAuth("onramp", n, a) }));

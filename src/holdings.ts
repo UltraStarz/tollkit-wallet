@@ -17,7 +17,7 @@ import path from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { evmBalances, evmList, findListed, loadExtraLists, solanaInfo } from "./tokenlist.js";
 import { Contract, JsonRpcProvider, formatUnits, getAddress } from "ethers";
-import { DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
+import { CHAIN_INFO, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain, type EvmChain } from "./chains.js";
 import { KNOWN } from "./tokens.js";
 import { walletHome } from "./paths.js";
 
@@ -25,8 +25,9 @@ type Fetch = typeof fetch;
 const SPL_TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";      // @solana/spl-token TOKEN_PROGRAM_ID
 const SPL_TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"; // @solana/spl-token TOKEN_2022_PROGRAM_ID
 const LLAMA = "https://coins.llama.fi";
-const LLAMA_CHAIN: Record<Chain, string> = { base: "base", ethereum: "ethereum", solana: "solana" };
-const NATIVE_COIN: Record<Chain, string> = { base: "coingecko:ethereum", ethereum: "coingecko:ethereum", solana: "coingecko:solana" };
+/** DefiLlama chain keys (checked against coins.llama.fi on 2026-10-18). */
+const LLAMA_CHAIN: Record<Chain, string> = { base: "base", ethereum: "ethereum", arbitrum: "arbitrum", polygon: "polygon", solana: "solana" };
+const NATIVE_COIN = (c: Chain) => `coingecko:${CHAIN_INFO[c].coingecko}`;
 const ERC20 = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)", "function symbol() view returns (string)", "function name() view returns (string)"];
 
 export interface Holding { chain: Chain; address: string; symbol: string; name?: string; decimals: number; amount: string; price?: number; usd?: number; change_24h?: number; icon?: string; coin: string;
@@ -37,7 +38,7 @@ export interface Holding { chain: Chain; address: string; symbol: string; name?:
 
 /** The DefiLlama id for a token: chain:address, or the coin itself for native ETH/SOL. */
 export function coinId(chain: Chain, address: string): string {
-  if (address === NATIVE_EVM || address === WSOL) return NATIVE_COIN[chain];
+  if (address === NATIVE_EVM || address === WSOL) return NATIVE_COIN(chain);
   return `${LLAMA_CHAIN[chain]}:${address}`;
 }
 
@@ -63,7 +64,7 @@ export class TokenList {
 
 /** Reads an ERC-20's symbol, name and decimals; throws if the address isn't one. */
 export async function erc20Info(chain: Chain, address: string, rpc = DEFAULT_RPC[chain]) {
-  const c = new Contract(getAddress(address), ERC20, new JsonRpcProvider(rpc, EVM_CHAIN_ID[chain as "base" | "ethereum"], { staticNetwork: true }));
+  const c = new Contract(getAddress(address), ERC20, new JsonRpcProvider(rpc, EVM_CHAIN_ID[chain as EvmChain], { staticNetwork: true }));
   const [symbol, decimals, name] = await Promise.all([c.symbol!(), c.decimals!(), c.name!().catch(() => undefined)]);
   return { symbol: String(symbol), decimals: Number(decimals), name: name ? String(name) : undefined };
 }
@@ -110,7 +111,7 @@ export class Holdings {
 
   private async tracked(chain: Chain): Promise<Omit<Holding, "coin">[]> {
     const addrs = this.list.list()[chain] ?? [];
-    const p = new JsonRpcProvider(this.rpc(chain), EVM_CHAIN_ID[chain as "base" | "ethereum"], { staticNetwork: true });
+    const p = new JsonRpcProvider(this.rpc(chain), EVM_CHAIN_ID[chain as EvmChain], { staticNetwork: true });
     const out: Omit<Holding, "coin">[] = [];
     await Promise.all(addrs.map(async (a) => {
       try {
@@ -186,7 +187,7 @@ export const CHART_RANGES = { "1D": { span: 24, period: "1h" }, "1W": { span: 42
 export type ChartRange = keyof typeof CHART_RANGES;
 
 export async function priceChart(coin: string, range: ChartRange, f: Fetch = fetch): Promise<{ coin: string; symbol?: string; range: ChartRange; points: { t: number; p: number }[] }> {
-  if (!/^(coingecko:[a-z0-9-]+|(base|ethereum|solana):[0-9A-Za-z]{32,44})$/.test(coin)) throw new Error("Unknown coin.");
+  if (!/^(coingecko:[a-z0-9-]+|(base|ethereum|arbitrum|polygon|solana):[0-9A-Za-z]{32,44})$/.test(coin)) throw new Error("Unknown coin.");
   const r = CHART_RANGES[range];
   if (!r) throw new Error("Pick 1D, 1W, 1M or 1Y.");
   const res = await f(`${LLAMA}/chart/${coin}?span=${r.span}&period=${r.period}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(12_000) });

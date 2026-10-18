@@ -12,7 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { formatUnits } from "ethers";
-import { DEFAULT_RPC, STABLES, type Chain } from "./chains.js";
+import { DEFAULT_RPC, STABLES, type Chain, CHAIN_INFO, type EvmChain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import type { TollkitWallet } from "./wallet.js";
 
@@ -33,8 +33,8 @@ export interface LiveEvent {
 }
 export interface Balance { token: string; amount: string }
 
-/** Public RPCs that serve eth_getLogs (mainnet.base.org answers "request limit reached"). */
-export const LOGS_RPC: Record<"base" | "ethereum", string> = { base: "https://base-rpc.publicnode.com", ethereum: "https://ethereum-rpc.publicnode.com" };
+/** Public RPCs that serve eth_getLogs (mainnet.base.org answers "request limit reached"; polygon.drpc.org limits log ranges on its free plan). Checked 2026-10-18. */
+export const LOGS_RPC: Record<EvmChain, string> = { base: "https://base-rpc.publicnode.com", ethereum: "https://ethereum-rpc.publicnode.com", arbitrum: "https://arb1.arbitrum.io/rpc", polygon: "https://polygon-bor-rpc.publicnode.com" };
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 // Program IDs as defined in @solana/spl-token (lib/esm/constants.js: TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID).
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -52,7 +52,7 @@ export class Watcher {
   private receiptBlocks = new Map<string, number | "failed">();
   readonly file: string;
 
-  constructor(private readonly w: TollkitWallet, private readonly o: { rpc?: Partial<Record<Chain, string>>; logsRpc?: Partial<Record<"base" | "ethereum", string>>; intervalMs?: number; fetch?: typeof fetch } = {}) {
+  constructor(private readonly w: TollkitWallet, private readonly o: { rpc?: Partial<Record<Chain, string>>; logsRpc?: Partial<Record<EvmChain, string>>; intervalMs?: number; fetch?: typeof fetch } = {}) {
     this.file = path.join(walletHome(w.dir), "live.json");
     if (existsSync(this.file)) { try { this.ev = JSON.parse(readFileSync(this.file, "utf8")); } catch { this.ev = []; } }
   }
@@ -74,7 +74,7 @@ export class Watcher {
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
   private rpc(c: Chain) { return this.o.rpc?.[c] ?? DEFAULT_RPC[c]; }
-  private sym(c: Chain, k: string) { return k === "native" ? (c === "solana" ? "SOL" : "ETH") : (c === "solana" ? STABLES.solana[k]?.symbol : STABLES[c][k]?.symbol) ?? k.slice(0, 6); }
+  private sym(c: Chain, k: string) { return k === "native" ? CHAIN_INFO[c].native : (c === "solana" ? STABLES.solana[k]?.symbol : STABLES[c][k]?.symbol) ?? k.slice(0, 6); }
   private dec(c: Chain, k: string) { return k === "native" ? (c === "solana" ? 9 : 18) : ((c === "solana" ? STABLES.solana[k]?.decimals : STABLES[c][k]?.decimals) ?? 0); }
   /** Money that arrived as the output of the wallet's own swap isn't a deposit. */
   private ownSwap(c: Chain, tx?: string): boolean {

@@ -11,9 +11,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_PROXY } from "./swap.js";
 import { walletHome } from "./paths.js";
-import type { Chain } from "./chains.js";
+import { chainName, type Chain } from "./chains.js";
 
-export const SELL_ASSETS: Record<Chain, string[]> = { base: ["USDC", "ETH"], ethereum: ["USDC", "ETH"], solana: ["USDC", "SOL"] };
+export const SELL_ASSETS: Partial<Record<Chain, string[]>> = { base: ["USDC", "ETH"], ethereum: ["USDC", "ETH"], solana: ["USDC", "SOL"] };
 /** Coinbase's window after "Cash out now" (docs.cdp.coinbase.com/onramp/offramp/offramp-integration-guide). */
 export const SEND_WINDOW_MS = 30 * 60_000;
 
@@ -36,7 +36,7 @@ export class Sales {
   }
 
   async start(address: string, chain: Chain, asset: string, amount?: string): Promise<{ url: string; ref: string }> {
-    if (!SELL_ASSETS[chain]?.includes(asset)) throw new Error(`On ${chain} you can cash out ${(SELL_ASSETS[chain] ?? []).join(" or ")}.`);
+    if (!SELL_ASSETS[chain]?.includes(asset)) throw new Error(SELL_ASSETS[chain] ? `On ${chainName(chain)} you can cash out ${SELL_ASSETS[chain]!.join(" or ")}.` : `Cashing out with Coinbase isn't available on ${chainName(chain)} yet. Move it to Base first.`);
     if (amount === undefined || !(/^\d+(\.\d+)?$/.test(amount) && Number(amount) > 0)) throw new Error("Enter how much to cash out, like 25 or 0.05.");
     const auth = this.o.sign ? await this.o.sign("offramp", chain, address) : {};
     const r = await this.f(`${this.proxy}/offramp`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(25_000), body: JSON.stringify({ address, network: chain, asset, ...(amount ? { amount } : {}), ...auth }) });

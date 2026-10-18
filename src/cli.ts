@@ -119,7 +119,7 @@ async function main(argv: string[]) {
     case "quote": case "swap": {
       const slip = flag(args, "--slippage");
       const [chain, amount, sellS, buyS] = args as [Chain, string, string, string];
-      if (!chain || !amount || !sellS || !buyS) throw new Error(`Usage: tollkit-wallet ${cmd} <base|ethereum|solana> <amount> <sell> <buy> [--slippage bps]`);
+      if (!chain || !amount || !sellS || !buyS) throw new Error(`Usage: tollkit-wallet ${cmd} <base|ethereum|arbitrum|polygon|solana> <amount> <sell> <buy> [--slippage bps]`);
       const w = await open();
       const [sell, buy] = await Promise.all([resolveToken(chain, sellS), resolveToken(chain, buyS)]);
       const req = { chain, sell_token: sell.address, buy_token: buy.address, sell_amount: toAtomic(amount, sell.decimals), slippage_bps: slip ? Number(slip) : Math.min(50, w.policy.max_slippage_bps) };
@@ -140,7 +140,7 @@ async function main(argv: string[]) {
     }
     case "withdraw": case "send": {
       const [chain, amount, tokenS, to] = args as [Chain, string, string, string];
-      if (!chain || !amount || !tokenS || !to) throw new Error("Usage: tollkit-wallet withdraw <base|ethereum|solana> <amount> <token> <to-address>");
+      if (!chain || !amount || !tokenS || !to) throw new Error("Usage: tollkit-wallet withdraw <base|ethereum|arbitrum|polygon|solana> <amount> <token> <to-address>");
       const pw = await askPassword();
       const w = await TollkitWallet.open(pw);
       const token = await resolveToken(chain, tokenS);

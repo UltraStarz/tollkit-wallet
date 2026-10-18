@@ -6,7 +6,7 @@
  * to watch.
  */
 import { JsonRpcProvider } from "ethers";
-import { DEFAULT_RPC, EVM_CHAIN_ID, type Chain } from "./chains.js";
+import { DEFAULT_RPC, EVM_CHAIN_ID, type Chain, type EvmChain } from "./chains.js";
 
 type Fetch = typeof fetch;
 export const DEFAULT_SEND_PROXY = "https://api.tollkit.dev/wallet";
@@ -26,7 +26,7 @@ export class ProtectedProvider extends JsonRpcProvider {
 export function sendingProvider(chain: Chain, o: { rpc?: Partial<Record<Chain, string>>; proxy?: string; fetch?: Fetch; protect?: boolean } = {}): JsonRpcProvider {
   const url = o.rpc?.[chain] ?? DEFAULT_RPC[chain];
   if (chain === "ethereum" && o.protect !== false) return new ProtectedProvider(url, `${o.proxy ?? DEFAULT_SEND_PROXY}/rpc/ethereum-protect`, o.fetch);
-  return new JsonRpcProvider(url, EVM_CHAIN_ID[chain as "base" | "ethereum"], { staticNetwork: true });
+  return new JsonRpcProvider(url, EVM_CHAIN_ID[chain as EvmChain], { staticNetwork: true });
 }
 
 /** Wait for a sent transaction, but not forever: Flashbots may take a few blocks, and may never include a failing one. */

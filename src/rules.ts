@@ -13,6 +13,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
+import { CHAIN_ENUM } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
 
@@ -30,8 +31,8 @@ export type RuleStatus = "proposed" | "active" | "paused" | "done" | "cancelled"
 /** What an owner or agent asks for. */
 export const RuleInput = z.object({
   kind: z.enum(RULE_KINDS),
-  chain: z.enum(["base", "ethereum", "solana"]),
-  token: z.string().min(2).describe("The asset traded: ETH, WETH, SOL or a token address/mint"),
+  chain: z.enum(CHAIN_ENUM),
+  token: z.string().min(2).describe("The asset traded: ETH, WETH, SOL, POL or a token address/mint"),
   name: z.string().max(60).optional(),
   /** Buys: dollars of USDC to spend each time. */
   amount_usd: z.number().positive().max(1_000_000).optional(),

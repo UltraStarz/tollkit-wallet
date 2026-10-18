@@ -15,7 +15,7 @@
  *    github.com/mds1/multicall; bytecode checked on both chains with eth_getCode on 2026-10-15).
  */
 import { Interface, JsonRpcProvider, getAddress } from "ethers";
-import { DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
+import { CHAIN_BY_ID, EVM_CHAINS, chainName, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain, type EvmChain } from "./chains.js";
 import { KNOWN } from "./tokens.js";
 import { EVM_TOKENS, LOGO_BASE } from "./data/token-list.js";
 import { DEFAULT_PROXY } from "./swap.js";
@@ -31,7 +31,7 @@ export interface ListedToken {
   jupiter?: { verified: boolean; strict: boolean; organic?: number; organicLabel?: string; suspicious?: boolean; mintAuthorityDisabled?: boolean; freezeAuthorityDisabled?: boolean; topHoldersPct?: number; liquidity?: number };
 }
 
-const CHAIN_ID: Record<number, Chain> = { 1: "ethereum", 8453: "base" };
+const CHAIN_ID: Record<number, Chain> = CHAIN_BY_ID;
 const logoUrl = (p: string) => (!p ? undefined : /^https:\/\//.test(p) ? p : LOGO_BASE + p);
 let evmCache: Map<Chain, ListedToken[]> | null = null;
 
@@ -46,7 +46,7 @@ export function loadExtraLists(f: Fetch = fetch): Promise<void> {
       const r = await f(UNISWAP_LIST, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
       if (!r.ok) return;
       const j: any = await r.json();
-      const next = new Map<Chain, ListedToken[]>([["base", []], ["ethereum", []]]);
+      const next = new Map<Chain, ListedToken[]>(EVM_CHAINS.map((c) => [c, []]));
       for (const t of Array.isArray(j?.tokens) ? j.tokens : []) {
         const c = CHAIN_ID[t?.chainId];
         if (!c || typeof t.address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(t.address) || typeof t.symbol !== "string" || !Number.isInteger(t.decimals)) continue;
@@ -72,7 +72,7 @@ export function evmList(chain: Chain): ListedToken[] {
 function bundledList(chain: Chain): ListedToken[] {
   if (chain === "solana") return [];
   if (!evmCache) {
-    evmCache = new Map([["base", []], ["ethereum", []]]);
+    evmCache = new Map(EVM_CHAINS.map((c) => [c, []]));
     for (const [id, address, symbol, name, decimals, logo] of EVM_TOKENS) {
       const c = CHAIN_ID[id]; if (!c) continue;
       evmCache.get(c)!.push({ chain: c, address: getAddress(address), symbol, name, decimals, logo: logoUrl(logo), trust: "listed", source: "superchain" });
@@ -158,7 +158,7 @@ const BAL = new Interface(["function balanceOf(address) view returns (uint256)"]
 /** Non-zero balances of the given tokens for one owner. Tokens that fail to answer are skipped. */
 export async function evmBalances(chain: Chain, owner: string, tokens: string[], rpc = DEFAULT_RPC[chain], call?: (data: string) => Promise<string>): Promise<Map<string, bigint>> {
   const out = new Map<string, bigint>();
-  const p = call ? null : new JsonRpcProvider(rpc, EVM_CHAIN_ID[chain as "base" | "ethereum"], { staticNetwork: true });
+  const p = call ? null : new JsonRpcProvider(rpc, EVM_CHAIN_ID[chain as EvmChain], { staticNetwork: true });
   for (let i = 0; i < tokens.length; i += 400) {
     const part = tokens.slice(i, i + 400);
     const data = MC.encodeFunctionData("aggregate3", [part.map((t) => ({ target: t, allowFailure: true, callData: BAL.encodeFunctionData("balanceOf", [owner]) }))]);
@@ -197,7 +197,8 @@ export async function checkToken(chain: Chain, address: string, o: { fetch?: Fet
   // token they are warnings. Fee setters, pool and authority problems are warnings either way.
   const POWERS = new Set(["upgradeable", "can_mint", "can_pause", "blacklist"]);
   let srv: any = null;
-  try {
+  const covered = SERVER_CHECK.includes(chain);
+  if (covered) try {
     const r = await f(`${o.proxy ?? DEFAULT_PROXY}/token/check?chain=${chain}&token=${encodeURIComponent(address)}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
     const j: any = await r.json().catch(() => null);
     if (r.ok) srv = j;
@@ -219,7 +220,8 @@ export async function checkToken(chain: Chain, address: string, o: { fetch?: Fet
   if (chain !== "solana") facts.push(listed ? (listed.trust === "core" ? "One of the wallet's built-in tokens." : listed.source === "uniswap" ? "On the Uniswap default token list. Being listed isn't a safety review." : "On the Superchain token list (Base's reference list). Being listed isn't a safety review.") : "Not on the wallet's token lists.");
   else if (listed) facts.push(j?.verified ? "Verified by Jupiter." : "Known to Jupiter, not verified.");
   else warnings.push("Jupiter doesn't know this token.");
-  if (!srv) warnings.push("Tollkit's token check couldn't run just now, so contract controls and liquidity weren't checked.");
+  if (!covered) warnings.push(`Tollkit's token check doesn't cover ${chainName(chain)} yet, so contract controls and liquidity weren't checked.`);
+  else if (!srv) warnings.push("Tollkit's token check couldn't run just now, so contract controls and liquidity weren't checked.");
   const v: TokenCheck = {
     chain, address, symbol: srv?.symbol ?? listed?.symbol ?? null, name: srv?.name ?? listed?.name ?? null, decimals: srv?.decimals ?? listed?.decimals ?? null, logo: listed?.logo,
     trust: listed?.trust ?? "unlisted", warnings: [...new Set(warnings)], powers, facts, checked: !!srv,
@@ -228,4 +230,7 @@ export async function checkToken(chain: Chain, address: string, o: { fetch?: Fet
   return v;
 }
 
-export const NATIVE_ADDRESS: Record<Chain, string> = { base: NATIVE_EVM, ethereum: NATIVE_EVM, solana: WSOL };
+/** Networks Tollkit's server can check tokens on (its chain tools: Base, Ethereum; plus Solana). */
+const SERVER_CHECK: Chain[] = ["base", "ethereum", "solana"];
+
+export const NATIVE_ADDRESS: Record<Chain, string> = { base: NATIVE_EVM, ethereum: NATIVE_EVM, arbitrum: NATIVE_EVM, polygon: NATIVE_EVM, solana: WSOL };

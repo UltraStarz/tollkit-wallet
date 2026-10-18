@@ -21,7 +21,7 @@ import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Keypair } from "@solana/web3.js";
 import type { HDNodeWallet, Wallet } from "ethers";
-import { STABLES, type Chain } from "./chains.js";
+import { CHAIN_BY_ID, EVM_CHAINS, EVM_CHAIN_ID, STABLES, chainName, isEvmChain, type Chain } from "./chains.js";
 import { LimitError, reserve, settle, spentToday } from "./ledger.js";
 import type { Policy } from "./policy.js";
 import type { SellerVerdict } from "./seller.js";
@@ -30,9 +30,10 @@ import type { Decision } from "./telegram.js";
 type Fetch = typeof fetch;
 
 export const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
-const CAIP_TO_CHAIN: Record<string, Chain> = { "eip155:8453": "base", "eip155:1": "ethereum", [SOLANA_MAINNET]: "solana" };
-const V1_TO_CHAIN: Record<string, Chain> = { base: "base", ethereum: "ethereum", solana: "solana" };
-const CHAIN_ID_TO_CHAIN: Record<number, Chain> = { 8453: "base", 1: "ethereum" };
+const CAIP_TO_CHAIN: Record<string, Chain> = { ...Object.fromEntries(EVM_CHAINS.map((c) => [`eip155:${EVM_CHAIN_ID[c]}`, c])), [SOLANA_MAINNET]: "solana" };
+/** x402 v1 network names (@x402/evm v1 list: "polygon" is 137; it has no v1 name for Arbitrum). */
+const V1_TO_CHAIN: Record<string, Chain> = { base: "base", ethereum: "ethereum", polygon: "polygon", solana: "solana" };
+const CHAIN_ID_TO_CHAIN: Record<number, Chain> = CHAIN_BY_ID;
 
 /** What a seller is asking for, normalised across protocols. */
 export interface Offer {
@@ -120,7 +121,7 @@ const money = (n: number) => `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}`;
  */
 export async function gate(offer: Offer, url: string, deps: PayDeps): Promise<string> {
   const p = deps.policy;
-  if (!p.chains.includes(offer.chain)) throw new Refusal("chain_off", `Payments on ${offer.chain} are turned off.`);
+  if (!p.chains.includes(offer.chain)) throw new Refusal("chain_off", `Payments on ${chainName(offer.chain)} are turned off.`);
   // Cheap limit check first so we never ask a human about something that can't go through.
   if (offer.usd > p.per_payment_usd) throw new Refusal("over_per_limit", `${money(offer.usd)} is over the per-payment limit of ${money(p.per_payment_usd)}.`);
   if (spentToday("payment", deps.dir) + offer.usd > p.daily_payments_usd) throw new Refusal("over_daily_limit", `This would go over today's payment limit of ${money(p.daily_payments_usd)}.`);
@@ -185,7 +186,7 @@ export async function payFetch(url: string, init: RequestInit | undefined, keys:
 async function payX402(url: string, init: RequestInit | undefined, first: Response, evmAccount: any, solSigner: any, deps: PayDeps): Promise<PayResult> {
   const f = deps.fetch ?? fetch;
   const client = new x402Client();
-  const evmNets = deps.policy.chains.filter((c) => c !== "solana").map((c) => (c === "base" ? "eip155:8453" : "eip155:1")) as `${string}:${string}`[];
+  const evmNets = deps.policy.chains.filter(isEvmChain).map((c) => `eip155:${EVM_CHAIN_ID[c]}`) as `${string}:${string}`[];
   if (evmNets.length) registerExactEvmScheme(client, { signer: evmAccount, networks: evmNets });
   if (deps.policy.chains.includes("solana")) {
     // registerExactSvmScheme drops rpcUrl (@x402/svm 2.28 builds its schemes with the signer only), which leaves the
@@ -250,12 +251,15 @@ async function payX402(url: string, init: RequestInit | undefined, first: Respon
 const MPP_EVM_CURRENCIES = [
   mppEvmAssets.assets.base.USDC,
   mppEvmAssets.assets.define({ address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6, network: "eip155:1", transfer: { type: "eip3009", name: "USD Coin", version: "2" } }),
+  // Native USDC; name and version read from the contracts (name(), version()) on 2026-10-18.
+  mppEvmAssets.assets.define({ address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", decimals: 6, network: "eip155:42161", transfer: { type: "eip3009", name: "USD Coin", version: "2" } }),
+  mppEvmAssets.assets.define({ address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", decimals: 6, network: "eip155:137", transfer: { type: "eip3009", name: "USD Coin", version: "2" } }),
 ];
 
 async function payMpp(url: string, init: RequestInit | undefined, first: Response, evmAccount: any, solSigner: any, deps: PayDeps): Promise<PayResult> {
   const f = deps.fetch ?? fetch;
   const methods: any[] = [];
-  const evmIds = deps.policy.chains.filter((c) => c !== "solana").map((c) => (c === "base" ? 8453 : 1));
+  const evmIds = deps.policy.chains.filter(isEvmChain).map((c) => EVM_CHAIN_ID[c]);
   if (evmIds.length) methods.push(mppEvm.charge({ account: evmAccount, networks: evmIds, currencies: MPP_EVM_CURRENCIES }));
   if (deps.policy.chains.includes("solana")) methods.push(mppSolana.charge({ signer: solSigner, expectedNetwork: "mainnet", ...(deps.solanaRpc ? { rpcUrl: deps.solanaRpc } : {}) }));
   const mppx = Mppx.create({ methods, polyfill: false, fetch: replayFirst(first, f) } as any) as any;

@@ -9,7 +9,7 @@ import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.
 import { sendAndConfirm } from "./solconfirm.js";
 import { PriceFeed } from "./prices.js";
 import { Contract, JsonRpcProvider, formatUnits, parseUnits } from "ethers";
-import { DEFAULT_RPC, EVM_CHAIN_ID, STABLES, SWAP_FEE_BPS, WSOL, NATIVE_EVM, type Chain } from "./chains.js";
+import { CHAIN_INFO, DEFAULT_RPC, EVM_CHAIN_ID, STABLES, SWAP_FEE_BPS, WSOL, NATIVE_EVM, chainName, type Chain } from "./chains.js";
 import { addresses, unlock, type Keys } from "./keystore.js";
 import { TokenList } from "./holdings.js";
 import { findListed, isCoreToken, loadExtraLists, solanaInfo } from "./tokenlist.js";
@@ -192,7 +192,7 @@ export class TollkitWallet {
           out[c] = rows;
         } else {
           const p = new JsonRpcProvider(this.rpc(c), EVM_CHAIN_ID[c], { staticNetwork: true });
-          const rows = [{ token: "ETH", amount: formatUnits(await p.getBalance(a.evm), 18) }];
+          const rows = [{ token: CHAIN_INFO[c].native, amount: formatUnits(await p.getBalance(a.evm), 18) }];
           for (const [addr, meta] of Object.entries(STABLES[c])) {
             const bal = await new Contract(addr, ["function balanceOf(address) view returns (uint256)"], p).balanceOf!(a.evm);
             rows.push({ token: meta.symbol, amount: formatUnits(bal, meta.decimals) });
@@ -257,7 +257,7 @@ export class TollkitWallet {
 
   private async priced(req: SwapRequest, forTrade = true): Promise<{ q: SwapQuote } | SwapResult> {
     const refuse = (code: string, reason: string): SwapResult => ({ ok: false, refused: { code, reason } });
-    if (!this.policy.chains.includes(req.chain)) return refuse("chain_off", `Trading on ${req.chain} is turned off.`);
+    if (!this.policy.chains.includes(req.chain)) return refuse("chain_off", `Trading on ${chainName(req.chain)} is turned off.`);
     if (req.slippage_bps > this.policy.max_slippage_bps) return refuse("slippage", `Slippage ${req.slippage_bps / 100}% is over your maximum of ${this.policy.max_slippage_bps / 100}%.`);
     if (req.sell_token.toLowerCase() === req.buy_token.toLowerCase()) return refuse("same_token", "Sell and buy tokens are the same.");
     // Buying a token the wallet doesn't know: only after the owner added it (which runs Tollkit's token check).
@@ -411,7 +411,7 @@ export class TollkitWallet {
   /** A priced move (nothing signed). `amount` is in coins, e.g. "25" USDC or "0.05" ETH. */
   async moveQuote(asset: MoveAsset, from: Chain, to: Chain, amount: string): Promise<MoveQuote> {
     if (asset !== "USDC" && asset !== "ETH") throw new Error("Pick USDC or ETH.");
-    for (const c of [from, to]) if (!this.policy.chains.includes(c)) throw new Error(`${c} is turned off in your settings.`);
+    for (const c of [from, to]) if (!this.policy.chains.includes(c)) throw new Error(`${chainName(c)} is turned off in your settings.`);
     if (!canMove(asset, from, to)) throw new Error(asset === "ETH" ? "ETH moves between Base and Ethereum only." : "Pick two different networks.");
     let atomic: bigint;
     try { atomic = parseUnits(String(amount).trim(), asset === "USDC" ? 6 : 18); } catch { throw new Error("Enter an amount like 25 or 0.05."); }

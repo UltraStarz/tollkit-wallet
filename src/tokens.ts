@@ -1,12 +1,12 @@
 /**
  * Token names and human amounts. Agents and people say "10 USDC" or "0.01 ETH";
  * the swap APIs want addresses and atomic units. Known tokens below were
- * checked on-chain (symbol() via public RPC, 2026-10-13); anything else is
+ * checked on-chain (symbol() via public RPC, 2026-10-13; Arbitrum and Polygon 2026-10-18); anything else is
  * passed as an address and its decimals are read from the chain.
  */
 import { Connection, PublicKey } from "@solana/web3.js";
 import { Contract, JsonRpcProvider, parseUnits } from "ethers";
-import { DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
+import { DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, WSOL, type Chain, type EvmChain, chainName } from "./chains.js";
 
 export interface Token { address: string; symbol: string; decimals: number }
 
@@ -21,6 +21,17 @@ export const KNOWN: Record<Chain, Record<string, Token>> = {
     WETH: { address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", symbol: "WETH", decimals: 18 },
     USDC: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC", decimals: 6 },
     USDT: { address: "0xdAC17F958D2ee523a2206206994597C13D831ec7", symbol: "USDT", decimals: 6 },
+  },
+  arbitrum: {
+    ETH: { address: NATIVE_EVM, symbol: "ETH", decimals: 18 },
+    WETH: { address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", symbol: "WETH", decimals: 18 },
+    USDC: { address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", symbol: "USDC", decimals: 6 },
+  },
+  polygon: {
+    POL: { address: NATIVE_EVM, symbol: "POL", decimals: 18 },
+    WPOL: { address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", symbol: "WPOL", decimals: 18 },
+    WETH: { address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", symbol: "WETH", decimals: 18 },
+    USDC: { address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", symbol: "USDC", decimals: 6 },
   },
   solana: {
     SOL: { address: WSOL, symbol: "SOL", decimals: 9 },
@@ -44,8 +55,8 @@ export async function resolveToken(chain: Chain, token: string, rpc?: string): P
     if (typeof d !== "number") throw new Error(`${t} isn't a token mint on Solana.`);
     return { address: t, symbol: t.slice(0, 4) + "…", decimals: d };
   }
-  if (!isEvmAddr(t)) throw new Error(`"${t}" isn't a known token on ${chain} or a contract address.`);
-  const p = new JsonRpcProvider(rpc ?? DEFAULT_RPC[chain], EVM_CHAIN_ID[chain], { staticNetwork: true });
+  if (!isEvmAddr(t)) throw new Error(`"${t}" isn't a known token on ${chainName(chain)} or a contract address.`);
+  const p = new JsonRpcProvider(rpc ?? DEFAULT_RPC[chain], EVM_CHAIN_ID[chain as EvmChain], { staticNetwork: true });
   const c = new Contract(t, ["function decimals() view returns (uint8)", "function symbol() view returns (string)"], p);
   const [d, s] = await Promise.all([c.decimals!(), c.symbol!().catch(() => t.slice(0, 6))]);
   return { address: t, symbol: String(s), decimals: Number(d) };

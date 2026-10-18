@@ -17,20 +17,20 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Connection, PublicKey, VersionedTransaction, type Keypair } from "@solana/web3.js";
 import { AbiCoder, Interface, JsonRpcProvider, MaxUint256, Transaction as EvmTx, formatEther, formatUnits, getAddress, getBytes, hexlify, isHexString, toQuantity, toUtf8String, TypedDataEncoder, type HDNodeWallet, type Wallet } from "ethers";
-import { DEFAULT_RPC, EVM_CHAIN_ID, type Chain } from "./chains.js";
+import { CHAIN_INFO, DEFAULT_RPC, EVM_CHAINS, EVM_CHAIN_ID, chainName, type Chain, type EvmChain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { record } from "./ledger.js";
 import type { Decision } from "./telegram.js";
 
 type Keys = { evm: Wallet | HDNodeWallet; solana: Keypair };
-export interface Site { origin: string; evm: boolean; solana: boolean; chain: "base" | "ethereum"; since: string }
+export interface Site { origin: string; evm: boolean; solana: boolean; chain: EvmChain; since: string }
 interface ExtFile { tokens: { hash: string; origin: string; created: string }[]; sites: Site[] }
 export class RpcError extends Error { constructor(readonly code: number, message: string) { super(message); } }
 const rejected = () => new RpcError(4001, "You rejected this in Tollkit.");
 const unauthorized = () => new RpcError(4100, "Connect this site to Tollkit first.");
 
-const CHAIN_HEX: Record<"base" | "ethereum", string> = { base: "0x2105", ethereum: "0x1" };
-const HEX_CHAIN: Record<string, "base" | "ethereum"> = { "0x2105": "base", "0x1": "ethereum" };
+const CHAIN_HEX = Object.fromEntries(EVM_CHAINS.map((c) => [c, `0x${EVM_CHAIN_ID[c].toString(16)}`])) as Record<EvmChain, string>;
+const HEX_CHAIN: Record<string, EvmChain> = Object.fromEntries(EVM_CHAINS.map((c) => [CHAIN_HEX[c], c]));
 /** Read-only Ethereum JSON-RPC methods passed straight to the network. */
 const READ = new Set(["eth_blockNumber", "eth_call", "eth_estimateGas", "eth_gasPrice", "eth_maxPriorityFeePerGas", "eth_feeHistory", "eth_getBalance", "eth_getBlockByNumber", "eth_getBlockByHash", "eth_getCode", "eth_getLogs", "eth_getStorageAt", "eth_getTransactionByHash", "eth_getTransactionCount", "eth_getTransactionReceipt", "eth_syncing", "web3_clientVersion"]);
 /** Program names shown in approvals (each checked on mainnet as an executable account). */
@@ -105,8 +105,8 @@ export class DappBridge {
   private jobs = new Map<string, { status: "pending" | "done" | "error"; result?: unknown; error?: { code: number; message: string }; at: number; origin?: string }>();
   constructor(private o: { evm: string; solana: string; keys: () => Keys; chains: () => Chain[]; dir?: string; rpc?: Partial<Record<Chain, string>>; proxy?: string;
     approve: (text: string) => Promise<Decision>;
-    /** Tests: replace network calls. */ evmRpc?: (chain: "base" | "ethereum", method: string, params: unknown[]) => Promise<unknown>;
-    solConn?: Pick<Connection, "simulateTransaction" | "sendRawTransaction" | "getBalance" | "getParsedTokenAccountsByOwner">; sendEvm?: (chain: "base" | "ethereum", tx: EvmTx | Record<string, unknown>, keys: Keys) => Promise<string>;
+    /** Tests: replace network calls. */ evmRpc?: (chain: EvmChain, method: string, params: unknown[]) => Promise<unknown>;
+    solConn?: Pick<Connection, "simulateTransaction" | "sendRawTransaction" | "getBalance" | "getParsedTokenAccountsByOwner">; sendEvm?: (chain: EvmChain, tx: EvmTx | Record<string, unknown>, keys: Keys) => Promise<string>;
     /** Tests: how long a site waits after a Deny (default 3 s). */ rejectCooldownMs?: number }) {
     this.file = path.join(walletHome(o.dir), "extension.json");
   }
@@ -178,10 +178,10 @@ export class DappBridge {
   }
   job(id: string) { const j = this.jobs.get(id); if (!j) throw new RpcError(-32603, "Unknown request."); return j; }
 
-  private chainOf(origin: string): "base" | "ethereum" {
+  private chainOf(origin: string): EvmChain {
     const c = this.site(origin)?.chain ?? "base";
     const on = this.o.chains();
-    return on.includes(c) ? c : on.includes("base") ? "base" : "ethereum";
+    return on.includes(c) ? c : (EVM_CHAINS.find((x) => on.includes(x)) ?? "base");
   }
   private evmOk(): boolean { return this.o.chains().some((c) => c !== "solana"); }
 
@@ -198,8 +198,8 @@ export class DappBridge {
       case "wallet_switchEthereumChain": case "wallet_addEthereumChain": {
         const want = String((p[0] as any)?.chainId ?? "").toLowerCase();
         const c = HEX_CHAIN[want];
-        if (!c) throw new RpcError(4902, "Tollkit works with Base and Ethereum only.");
-        if (!this.o.chains().includes(c)) throw new RpcError(4901, `${c === "base" ? "Base" : "Ethereum"} is turned off in Tollkit's settings.`);
+        if (!c) throw new RpcError(4902, "Tollkit works with Base, Ethereum, Arbitrum and Polygon.");
+        if (!this.o.chains().includes(c)) throw new RpcError(4901, `${chainName(c)} is turned off in Tollkit's settings.`);
         this.setSite(origin, { chain: c });
         return done(null);
       }
@@ -214,7 +214,7 @@ export class DappBridge {
       case "eth_sign": throw new RpcError(4200, "Tollkit doesn't support eth_sign (it can sign anything). Use personal_sign.");
     }
     if (READ.has(method)) {
-      if (!this.evmOk()) throw new RpcError(4900, "Base and Ethereum are turned off in Tollkit's settings.");
+      if (!this.evmOk()) throw new RpcError(4900, "Base, Ethereum, Arbitrum and Polygon are all turned off in Tollkit's settings.");
       return done(await this.rpc(this.chainOf(origin), method, p));
     }
     if (["personal_sign", "eth_signTypedData_v4", "eth_sendTransaction"].includes(method)) { if (!s?.evm) throw unauthorized(); return { done: false }; }
@@ -224,14 +224,14 @@ export class DappBridge {
 
   private solAccount() { return { address: this.o.solana, publicKey: Buffer.from(new PublicKey(this.o.solana).toBytes()).toString("base64") }; }
 
-  private rpc(chain: "base" | "ethereum", method: string, params: unknown[]): Promise<unknown> {
+  private rpc(chain: EvmChain, method: string, params: unknown[]): Promise<unknown> {
     if (this.o.evmRpc) return this.o.evmRpc(chain, method, params);
     return new JsonRpcProvider(this.o.rpc?.[chain] ?? DEFAULT_RPC[chain], EVM_CHAIN_ID[chain], { staticNetwork: true }).send(method, params);
   }
   private sol() { return this.o.solConn ?? new Connection(this.o.rpc?.solana ?? DEFAULT_RPC.solana, "confirmed"); }
 
   private meta = new Map<string, { symbol: string; decimals: number } | null>();
-  private async tokenMeta(chain: "base" | "ethereum", token: string): Promise<{ symbol: string; decimals: number } | null> {
+  private async tokenMeta(chain: EvmChain, token: string): Promise<{ symbol: string; decimals: number } | null> {
     const k = `${chain}:${token.toLowerCase()}`;
     if (this.meta.has(k)) return this.meta.get(k)!;
     let m: { symbol: string; decimals: number } | null = null;
@@ -246,8 +246,8 @@ export class DappBridge {
   }
 
   /** Plain words for the common token calls, so an approval or transfer isn't hidden behind "Calls 0x095ea7b3". */
-  private async describeEvmCall(chain: "base" | "ethereum", to: string | null, data: string): Promise<string> {
-    if (!data || data === "0x") return "No data (a plain ETH transfer).";
+  private async describeEvmCall(chain: EvmChain, to: string | null, data: string): Promise<string> {
+    if (!data || data === "0x") return `No data (a plain ${CHAIN_INFO[chain].native} transfer).`;
     let p: ReturnType<Interface["parseTransaction"]> = null;
     try { p = TOKEN_CALLS.parseTransaction({ data }); } catch { p = null; }
     const raw = `Calls ${data.slice(0, 10)} with ${(data.length - 2) / 2} bytes of data (not a standard token call; it does whatever the contract does).`;
@@ -326,7 +326,7 @@ export class DappBridge {
     const keys = this.o.keys();
     switch (method) {
       case "eth_requestAccounts": case "wallet_requestPermissions":
-        if (!this.evmOk()) throw new RpcError(4900, "Base and Ethereum are turned off in Tollkit's settings.");
+        if (!this.evmOk()) throw new RpcError(4900, "Base, Ethereum, Arbitrum and Polygon are all turned off in Tollkit's settings.");
         await this.ask(origin, `${host} wants to connect to your wallet.\nIt will see your Base/Ethereum address ${this.o.evm} and can ask you to sign or send. Each request comes here for your OK.`);
         this.setSite(origin, { evm: true });
         return method === "eth_requestAccounts" ? [this.o.evm] : [{ parentCapability: "eth_accounts", invoker: origin }];
@@ -376,11 +376,11 @@ export class DappBridge {
         try { await this.rpc(chain, "eth_estimateGas", [{ from: this.o.evm, to, value: toQuantity(value), data }]); sim = "Check: should go through."; }
         catch (e) { sim = `Check: would fail (${(e as Error).message.slice(0, 120)}).`; }
         const what = await this.describeEvmCall(chain, to, String(data));
-        await this.ask(origin, `${host} asks you to send a transaction on ${chain === "base" ? "Base" : "Ethereum"}:\nTo ${to ?? "(new contract)"}\nValue ${formatEther(value)} ETH\n${what}\n${sim}`);
+        await this.ask(origin, `${host} asks you to send a transaction on ${chainName(chain)}:\nTo ${to ?? "(new contract)"}\nValue ${formatEther(value)} ${CHAIN_INFO[chain].native}\n${what}\n${sim}`);
         const req: Record<string, unknown> = { to, value, data, chainId: EVM_CHAIN_ID[chain] };
         if (t.gas ?? t.gasLimit) req.gasLimit = BigInt(t.gas ?? t.gasLimit);
         const hash = this.o.sendEvm ? await this.o.sendEvm(chain, req, keys) : (await keys.evm.connect(sendingProvider(chain, { rpc: this.o.rpc, proxy: this.o.proxy })).sendTransaction(req)).hash; // Ethereum: via Flashbots Protect
-        record({ id: randomUUID(), ts: new Date().toISOString(), kind: "dapp", status: "done", usd: 0, chain, seller: host, tool: "send", detail: `${formatEther(value)} ETH -> ${to ?? "new contract"} (from ${host})`, tx: hash }, this.o.dir);
+        record({ id: randomUUID(), ts: new Date().toISOString(), kind: "dapp", status: "done", usd: 0, chain, seller: host, tool: "send", detail: `${formatEther(value)} ${CHAIN_INFO[chain].native} -> ${to ?? "new contract"} (from ${host})`, tx: hash }, this.o.dir);
         return hash;
       }
       case "sol_signTransaction": case "sol_signAndSendTransaction": {

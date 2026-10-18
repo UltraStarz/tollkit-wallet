@@ -3,7 +3,7 @@
  * and ETH between Base and Ethereum with Across (through Tollkit's server, which holds the Across key).
  *
  * Checked against primary sources on 2026-10-14:
- *   CCTP domains Ethereum 0, Solana 5, Base 6 (developers.circle.com/cctp/concepts/supported-chains-and-domains)
+ *   CCTP domains Ethereum 0, Arbitrum 3, Solana 5, Base 6, Polygon PoS 7 (developers.circle.com/cctp/evm-smart-contracts)
  *   EVM TokenMessengerV2 0x28b5…cf5d (developers.circle.com/cctp/evm-smart-contracts);
  *     depositForBurnWithHook signature from Circle's own example (circlefin/solana-cctp-contracts examples/v2/evm.ts)
  *   Solana TokenMessengerMinterV2 CCTPV2vP…, MessageTransmitterV2 CCTPV2Sm… (that repo's README and IDL);
@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { sendAndConfirm } from "./solconfirm.js";
 import { AbiCoder, Contract, Interface, JsonRpcProvider, ZeroAddress, ZeroHash, concat, getAddress, getBytes, hexlify, toUtf8Bytes, zeroPadBytes, zeroPadValue, type HDNodeWallet, type Wallet } from "ethers";
-import { DEFAULT_RPC, EVM_CHAIN_ID, type Chain } from "./chains.js";
+import { CHAIN_INFO, DEFAULT_RPC, EVM_CHAIN_ID, chainName, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
 
 type Fetch = typeof fetch;
@@ -32,7 +32,7 @@ export type MoveAsset = "USDC" | "ETH";
 
 export const BRIDGE_FEE_BPS = 25;
 export const IRIS = "https://iris-api.circle.com";
-export const CCTP_DOMAIN: Record<Chain, number> = { ethereum: 0, solana: 5, base: 6 };
+export const CCTP_DOMAIN: Record<Chain, number> = { ethereum: 0, arbitrum: 3, solana: 5, base: 6, polygon: 7 };
 export const TOKEN_MESSENGER_V2 = "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d";
 export const SOL_TMM = new PublicKey("CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe");
 export const SOL_MT = new PublicKey("CCTPV2Sm4AdWt5296sk4P66VBZ7bEhcARwFaaS9YPbeC");
@@ -40,13 +40,15 @@ export const ACROSS_PERIPHERY = "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4";
 export const USDC: Record<Chain, string> = {
   base: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   ethereum: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  arbitrum: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+  polygon: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
   solana: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
 };
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 /** Anchor discriminator for deposit_for_burn_with_hook, from the IDL. */
 const DFB_HOOK_DISC = Uint8Array.from([111, 245, 62, 131, 204, 108, 223, 155]);
 /** Seconds to arrive with Fast Transfer, by source (developers.circle.com/cctp/concepts/finality-and-block-confirmations). */
-const FAST_ETA: Record<Chain, number> = { ethereum: 20, base: 8, solana: 8 };
+const FAST_ETA: Record<Chain, number> = { ethereum: 20, base: 8, arbitrum: 8, polygon: 8, solana: 8 };
 
 /** The Forwarding Service hook: "cctp-forward" padded to 24 bytes, version 0, length 0 (32 bytes). */
 export function forwardHook(solanaRecipientSetup?: PublicKey): Uint8Array {
@@ -58,7 +60,9 @@ export function forwardHook(solanaRecipientSetup?: PublicKey): Uint8Array {
 }
 
 export const canMove = (asset: MoveAsset, from: Chain, to: Chain) =>
-  from !== to && (asset === "USDC" || (asset === "ETH" && from !== "solana" && to !== "solana"));
+  from !== to && (asset === "USDC" || (asset === "ETH" && ACROSS_ETH.includes(from) && ACROSS_ETH.includes(to)));
+/** ETH moves (Across) are wired for Base and Ethereum only. */
+const ACROSS_ETH: Chain[] = ["base", "ethereum"];
 
 export interface MoveQuote {
   asset: MoveAsset; from: Chain; to: Chain; via: "cctp" | "across";
@@ -128,7 +132,7 @@ export class Mover {
   }
 
   private async quoteCctp(from: Chain, to: Chain, amount: bigint, cfg: Cfg): Promise<MoveQuote> {
-    if (!cfg.fee_recipient[from === "solana" ? "solana" : "evm"] && cfg.fee_bps > 0) throw new Error(`Moving from ${from} isn't set up on Tollkit's server yet.`);
+    if (!cfg.fee_recipient[from === "solana" ? "solana" : "evm"] && cfg.fee_bps > 0) throw new Error(`Moving from ${chainName(from)} isn't set up on Tollkit's server yet.`);
     let setup = false, mintRecipient: string;
     if (to === "solana") {
       const { ata, exists } = await this.solUsdcAccount(new PublicKey(this.o.solana));
@@ -218,7 +222,7 @@ export class Mover {
     const amount = BigInt(q.amount), burn = BigInt(q.burn!), fee = BigInt(q.tollkit_fee);
     const have = await this.evmRead(q.from, "usdc");
     if (have < amount) throw new Error(`The wallet has ${fmtAmount("USDC", have)} on ${q.from}, less than ${fmtAmount("USDC", amount)}.`);
-    if ((await this.evmRead(q.from, "eth")) === 0n) throw new Error(`Moving from ${q.from} needs a little ETH there for network fees.`);
+    if ((await this.evmRead(q.from, "eth")) === 0n) throw new Error(`Moving from ${chainName(q.from)} needs a little ${CHAIN_INFO[q.from].native} there for network fees.`);
     // Approve exactly the amount being burned, only to Circle's TokenMessengerV2.
     if ((await this.evmRead(q.from, "allowance")) < burn) await this.evmSend(q.from, { to: USDC[q.from], data: ERC20.interface.encodeFunctionData("approve", [TOKEN_MESSENGER_V2, burn]) }, keys);
     const tx = await this.evmSend(q.from, { to: TOKEN_MESSENGER_V2, data: TM.interface.encodeFunctionData("depositForBurnWithHook", [burn, CCTP_DOMAIN[q.to], q.mint_recipient, USDC[q.from], ZeroHash, BigInt(q.max_fee!), 1000, q.hook]) }, keys);
