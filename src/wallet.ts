@@ -115,7 +115,7 @@ export class TollkitWallet {
   }
 
   get addresses() { return addresses(this.o.dir); }
-  private get f(): Fetch { return this.o.fetch ?? fetch; }
+  private get f(): Fetch { return this.o.fetch ?? ((i: any, n?: any) => fetch(i, n)); }
   private rpc(c: Chain) { return this.o.rpc?.[c] ?? DEFAULT_RPC[c]; }
 
   /**

@@ -33,7 +33,7 @@ async function fetchList(urls: string[], f: Fetch): Promise<string[] | null> {
 
 export class Sanctions {
   private cache: Cache | null = null;
-  constructor(private readonly dir?: string, private readonly f: Fetch = fetch, private readonly now: () => number = Date.now) {}
+  constructor(private readonly dir?: string, private readonly f: Fetch = ((i: any, n?: any) => fetch(i, n)), private readonly now: () => number = Date.now) {}
 
   private load(): Cache | null {
     if (this.cache) return this.cache;

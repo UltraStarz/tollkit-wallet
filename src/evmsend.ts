@@ -12,7 +12,7 @@ type Fetch = typeof fetch;
 export const DEFAULT_SEND_PROXY = "https://api.tollkit.dev/wallet";
 
 export class ProtectedProvider extends JsonRpcProvider {
-  constructor(url: string, private readonly sendUrl: string, private readonly f: Fetch = fetch) { super(url, EVM_CHAIN_ID.ethereum, { staticNetwork: true }); }
+  constructor(url: string, private readonly sendUrl: string, private readonly f: Fetch = ((i: any, n?: any) => fetch(i, n))) { super(url, EVM_CHAIN_ID.ethereum, { staticNetwork: true }); }
   override async _perform(req: any): Promise<any> {
     if (req?.method !== "broadcastTransaction") return super._perform(req);
     const r = await this.f(this.sendUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [req.signedTransaction] }), signal: AbortSignal.timeout(20_000) });

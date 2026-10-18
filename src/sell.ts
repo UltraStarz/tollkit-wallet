@@ -25,7 +25,7 @@ type Fetch = typeof fetch;
 export class Sales {
   private file: string;
   constructor(private o: { dir?: string; proxy?: string; fetch?: Fetch; sign?: (kind: "offramp", network: Chain, address: string) => Promise<{ ts: number; nonce: string; sig: string }> }) { this.file = path.join(walletHome(o.dir), "sales.json"); }
-  private get f(): Fetch { return this.o.fetch ?? fetch; }
+  private get f(): Fetch { return this.o.fetch ?? ((i: any, n?: any) => fetch(i, n)); }
   private get proxy() { return this.o.proxy ?? DEFAULT_PROXY; }
 
   list(): Sale[] { try { return existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : []; } catch { return []; } }

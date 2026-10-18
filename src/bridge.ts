@@ -96,7 +96,7 @@ export class Mover {
     evmRead?: (from: Chain, what: "usdc" | "eth" | "allowance") => Promise<bigint> }) {
     this.file = path.join(walletHome(o.dir), "moves.json");
   }
-  private get f(): Fetch { return this.o.fetch ?? fetch; }
+  private get f(): Fetch { return this.o.fetch ?? ((i: any, n?: any) => fetch(i, n)); }
   private rpc(c: Chain) { return this.o.rpc?.[c] ?? DEFAULT_RPC[c]; }
   private sol() { return this.o.solConn ?? new Connection(this.rpc("solana"), "confirmed"); }
 

@@ -76,7 +76,7 @@ export class AlwaysOn {
   private syncing: Promise<unknown> | null = null;
   constructor(private readonly o: AlwaysOpts) { this.file = path.join(walletHome(o.dir), "always.json"); }
   private now() { return this.o.now?.() ?? Date.now(); }
-  private get f() { return this.o.fetch ?? fetch; }
+  private get f(): typeof fetch { return this.o.fetch ?? ((i: any, n?: any) => fetch(i, n)); }
 
   private load(): Local {
     try { if (existsSync(this.file)) return JSON.parse(readFileSync(this.file, "utf8")); } catch { /* start over */ }

@@ -76,7 +76,7 @@ export class Holdings {
   constructor(private readonly o: { evm: string; solana: string; chains: () => Chain[]; dir?: string; fetch?: Fetch; rpc?: Partial<Record<Chain, string>>; intervalMs?: number }) {
     this.list = new TokenList(o.dir);
   }
-  private get f(): Fetch { return this.o.fetch ?? fetch; }
+  private get f(): Fetch { return this.o.fetch ?? ((i: any, n?: any) => fetch(i, n)); }
   private rpc(c: Chain) { return this.o.rpc?.[c] ?? DEFAULT_RPC[c]; }
   snapshot() { return this.snap; }
 
