@@ -14,6 +14,7 @@ import { CHAIN_ENUM, type Chain } from "./chains.js";
 import { RuleInput, describeRule, ruleProblem, type Rule } from "./rules.js";
 import { parseStrategy } from "./parse.js";
 import { PriceFeed } from "./prices.js";
+import { proposeSwap } from "./ideas.js";
 
 const MAX_BODY = 50_000;
 
@@ -133,6 +134,17 @@ export const ACTIONS = [
     description: "Paper-trading balances, number of practice fills and fees they would have cost.",
     run: async (w) => w.paper().summary() }),
 ] as const;
+
+export const SwapProposeArgs = SwapArgs.extend({
+  reason: z.string().max(300).optional().describe("One or two plain sentences on why, shown on the card"),
+});
+/**
+ * Only for the wallet's own AI chat (advisor mode): suggest one swap for the owner to approve with a tap. Agents
+ * connected over MCP have `swap` itself, inside the owner's limits and approvals.
+ */
+export const SWAP_PROPOSE = def({ name: "swap_propose", spends: false, schema: SwapProposeArgs,
+  description: "Suggest a single swap right now (not a rule). The wallet checks it against the owner's limits and shows it as a card with an Approve button; nothing trades until the owner taps it. Use when the owner asks to buy, sell or swap something now. Give `amount` in the sell token's units.",
+  run: async (w, a) => proposeSwap(w, a) });
 
 function showRule(r: Rule) {
   const last = r.state.fills.at(-1);

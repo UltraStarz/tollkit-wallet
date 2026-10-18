@@ -171,11 +171,11 @@ Or use the **Autopilot** tab in the dashboard (`tollkit-wallet ui`). Rule types:
 - The autopilot runs while the wallet runs: keep the dashboard open, or run `tollkit-wallet autopilot` on a computer or small server that stays on. Only one copy runs rules at a time.
 - Limit orders fill only at their price or better (within 1% for fees and spread). Stops always sell. When selling all of a chain's coin, a little is kept for network fees.
 
-### Chat with your AI on the Autopilot tab
+### Chat with Claude on the Claude tab
 
-If Claude Code is installed and signed in on this computer, the Autopilot tab is a chat. Say what you want in your own words ("protect my ETH if it drops hard", "buy SOL on dips, $20 at a time"); Claude checks your balances, live prices and recent price history, explains its thinking, and suggests rules as cards you turn on with one tap. It runs on your own Claude plan.
+If Claude Code is installed and signed in on this computer, the Claude tab is a chat, and the Ask Claude bar on Home opens it. Say what you want in your own words ("buy $20 of ETH", "protect my ETH if it drops hard", "buy SOL on dips, $20 at a time"); Claude checks your balances, live prices and recent price history, explains its thinking, and suggests either a single swap, as a card you approve with one tap, or rules you turn on with one tap. It runs on your own Claude plan.
 
-For these chats Claude Code runs with its own tools switched off and only the wallet's advisor tools available (`tollkit-wallet mcp --advisor`: balances, limits, receipts, prices, price history, your rules, and suggesting rules). It can't trade, pay, withdraw or change limits, and its suggestions always wait for you, even if you let other agents turn rules on.
+For these chats Claude Code runs with its own tools switched off and only the wallet's advisor tools available (`tollkit-wallet mcp --advisor`: balances, limits, receipts, prices, price history, your rules, suggesting rules, and suggesting a swap). It can't trade, pay, withdraw or change limits, and its suggestions always wait for you, even if you let other agents turn rules on. A suggested swap gets a fresh price when you tap Approve, stays inside your per-trade and daily limits and the token list, and expires after 15 minutes. Your tap is the approval, so it isn't asked again.
 
 **Check-ins:** pick every 1, 4, 12 or 24 hours and Claude reviews your rules against the market and what you've told it, then suggests changes (for example raising a stop-loss after a rise). A suggested change replaces the old rule only when you turn it on. If Telegram is set up, check-in suggestions also arrive there with Approve and Deny. Check-ins run while the dashboard is open.
 

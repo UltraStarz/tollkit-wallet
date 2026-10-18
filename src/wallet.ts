@@ -26,6 +26,7 @@ import { dashboardOpen, requestLocal } from "./approvals.js";
 import { randomUUID } from "node:crypto";
 import { KNOWN, type Token } from "./tokens.js";
 import { RuleStore } from "./rules.js";
+import { IdeaStore } from "./ideas.js";
 import { PaperBook } from "./paper.js";
 import { liveBalance, type Executor } from "./autopilot.js";
 import { Staking, type StakingOptions } from "./stake.js";
@@ -248,7 +249,8 @@ export class TollkitWallet {
   }
 
   /** Core, listed (Superchain list on Base/Ethereum, Jupiter-verified on Solana) or added by the owner. */
-  private async knownToken(chain: Chain, token: string): Promise<boolean> {
+  /** Is this a token the wallet trades without asking: a core token, a listed one, or one the owner added. */
+  async knownToken(chain: Chain, token: string): Promise<boolean> {
     if (token === NATIVE_EVM || token === WSOL || isCoreToken(chain, token)) return true;
     if ((new TokenList(this.o.dir).list()[chain] ?? []).some((a) => a.toLowerCase() === token.toLowerCase())) return true;
     if (chain !== "solana") { await loadExtraLists(this.f); return !!findListed(chain, token); }
@@ -276,8 +278,11 @@ export class TollkitWallet {
     return { q: { ...q, usd_value: usd, fee_usd: (usd * q.fee_bps) / 10000 } };
   }
 
-  /** Quote, check, approve if needed, reserve, sign, send, record. */
-  async swap(req: SwapRequest): Promise<SwapResult> {
+  /**
+   * Quote, check, approve if needed, reserve, sign, send, record. `ownerApproved`: the owner just tapped Approve on
+   * this exact swap in the wallet's own screen (a trade idea), so it isn't asked again; every limit still applies.
+   */
+  async swap(req: SwapRequest, o: { ownerApproved?: boolean } = {}): Promise<SwapResult> {
     const pr = await this.priced(req);
     if (!("q" in pr)) return pr;
     const q = pr.q;
@@ -285,7 +290,7 @@ export class TollkitWallet {
     const p = this.policy;
     if (usd > p.per_trade_usd) return { ok: false, quote: strip(q), refused: { code: "over_per_limit", reason: `${money(usd)} is over the per-trade limit of ${money(p.per_trade_usd)}.` } };
     if (spentToday("trade", this.o.dir) + usd > p.daily_trades_usd) return { ok: false, quote: strip(q), refused: { code: "over_daily_limit", reason: `This would go over today's trading limit of ${money(p.daily_trades_usd)}.` } };
-    if (usd > p.approval_above_usd) {
+    if (usd > p.approval_above_usd && !o.ownerApproved) {
       const ask = this.approver;
       if (!ask) return { ok: false, quote: strip(q), refused: { code: "needs_approval", reason: `Trades over ${money(p.approval_above_usd)} need your approval, but Telegram approvals aren't set up.` } };
       const d = await ask(`Swap ${money(usd)} on ${q.chain} (${q.venue})?\nSell ${describeAmount(q.chain, q.sell_token, q.sell_amount)}\nGet at least ${describeAmount(q.chain, q.buy_token, q.min_buy_amount)}\nTollkit fee ${q.fee_bps / 100}% (${money(q.fee_usd ?? 0)})${q.venue_fee_bps ? `, venue fee ${q.venue_fee_bps / 100}%` : ""}`);
@@ -510,6 +515,7 @@ export class TollkitWallet {
 
   /** Autopilot rules for this wallet. */
   rules(): RuleStore { return new RuleStore(this.o.dir); }
+  ideas(): IdeaStore { return new IdeaStore(this.o.dir); }
   /** Paper trading book (real quotes, pretend money). */
   paper(startUsd?: number): PaperBook { return new PaperBook(this, { dir: this.o.dir, startUsd }); }
   /** What the autopilot trades with: the real wallet, or the paper book. */

@@ -1,12 +1,12 @@
 /**
- * The Autopilot tab's AI: the owner chats with their own AI (Claude Code,
+ * The Claude tab's AI: the owner chats with their own AI (Claude Code,
  * signed in on this computer, so it runs on their plan) and it can check in
  * on a schedule.
  *
  * The AI only gets the wallet's advisor tools (`tollkit-wallet mcp --advisor`):
  * balances, limits, receipts, prices, price history, the rule list, and
- * autopilot_propose. Rules it proposes always wait for the owner to turn them
- * on. It has no tool to trade, pay, withdraw or change limits, and Claude
+ * autopilot_propose and swap_propose. Rules it proposes always wait for the
+ * owner to turn them on, and swaps for the owner to tap Approve. It has no tool to trade, pay, withdraw or change limits, and Claude
  * Code's own tools (files, shell, web) are switched off for these runs.
  *
  * Flags checked against Claude Code's docs (code.claude.com/docs/en/headless,
@@ -35,7 +35,7 @@ export interface FuelCtl {
   setMode(m: "ask" | "auto"): void;
   topUp(plan: FuelPlan): Promise<{ ok: boolean; reason?: string; tx?: string }>;
 }
-export interface ChatMsg { id: string; role: "you" | "ai"; text: string; ts: string; rules?: string[]; checkin?: boolean; error?: boolean; quiet?: boolean; fuel?: FuelPlan }
+export interface ChatMsg { id: string; role: "you" | "ai"; text: string; ts: string; rules?: string[]; swaps?: string[]; checkin?: boolean; error?: boolean; quiet?: boolean; fuel?: FuelPlan }
 interface ChatFile { session_id?: string; messages: ChatMsg[]; checkin: { every_hours: number; last?: string } }
 export interface RunOpts { sessionId?: string; cwd: string; mcpConfig: string; system: string }
 export type Runner = (prompt: string, o: RunOpts) => Promise<{ text: string; sessionId?: string }>;
@@ -43,21 +43,24 @@ export type Runner = (prompt: string, o: RunOpts) => Promise<{ text: string; ses
 export const CHECKIN_HOURS = [0, 1, 4, 12, 24];
 const MAX_MSGS = 200;
 
-export const SYSTEM = `You are the AI inside the owner's Tollkit Wallet, on the Autopilot tab. The owner talks to you to set up and adjust autopilot rules for their own money.
+export const SYSTEM = `You are Claude, inside the owner's Tollkit Wallet, on its Claude tab. The owner talks to you about their own money: what they hold, what prices are doing, one-off trades, and autopilot rules.
 
 What you can do, through the tollkit-wallet tools:
 - read their balances, limits and recent trades (wallet_balances, wallet_status, receipts)
-- check prices and price history (market_prices, price_history; ETH and SOL)
+- check prices and price history (market_prices, price_history; ETH, SOL and POL)
+- suggest one swap to do now (swap_propose), when they ask to buy, sell or swap something now
 - see their rules (autopilot_rules) and suggest new ones (autopilot_propose)
-You cannot trade, pay, withdraw or change limits, and you can't turn rules on. Every rule you suggest waits on a card under your message for the owner to tap "Turn on". Never say a rule is on or that you placed a trade.
+You cannot trade, pay, withdraw or change limits, and you can't turn rules on. Every swap or rule you suggest waits on a card under your message: the owner taps "Approve" for a swap or "Turn on" for a rule. Never say a swap happened, a rule is on, or that you placed a trade.
 
-Rule kinds: limit_buy, limit_sell, stop_loss, take_profit, trailing_stop, dca (recurring buy), grid (buys amount_usd at each of \`levels\` prices from lower_price to upper_price and sells each a level higher). Assets trade against USDC on Base or Solana (Ethereum only if the owner enabled it). Use exact \`rules\` in autopilot_propose, not text. Give every rule a one- or two-sentence plain \`reason\`. To change an existing rule, propose the new one with \`replaces: <old rule id>\`; turning it on cancels the old one. A take-profit and stop-loss for the same position should share a \`group\` so one cancels the other.
+Swaps: use swap_propose with the chain, the token sold, the token bought and the amount in the sold token's units (for "$20 of ETH", sell 20 USDC). Give a one- or two-sentence plain \`reason\`. If it's refused (limits, balance, unknown token), tell the owner why in plain words and offer what would work. One swap per request unless they ask for more.
 
-Before suggesting: check balances (don't plan to sell what they don't hold or spend more USDC than they have), keep each buy within their per-trade limit, and use recent prices to pick sensible triggers. If what they ask is unclear or risky (all-in, no stop), say so briefly and suggest a safer version; they decide.
+Rule kinds: limit_buy, limit_sell, stop_loss, take_profit, trailing_stop, dca (recurring buy), grid (buys amount_usd at each of \`levels\` prices from lower_price to upper_price and sells each a level higher). Assets trade against USDC on the networks the owner turned on (wallet_status lists them). Use exact \`rules\` in autopilot_propose, not text. Give every rule a one- or two-sentence plain \`reason\`. To change an existing rule, propose the new one with \`replaces: <old rule id>\`; turning it on cancels the old one. A take-profit and stop-loss for the same position should share a \`group\` so one cancels the other.
 
-Style: short, plain English, like a careful friend who knows markets. No hype, no emojis, no guarantees or predictions presented as fact. Quote real numbers from the tools. When you suggest rules, end with one line saying they're waiting below to turn on.`;
+Before suggesting: check balances (don't plan to sell what they don't hold or spend more USDC than they have), keep each trade within their per-trade limit, and use recent prices to pick sensible triggers. If what they ask is unclear or risky (all-in, no stop, a coin they don't know), say so briefly and suggest a safer version; they decide.
 
-const CHECKIN = (hours: number) => `Scheduled check-in (every ${hours} hour${hours === 1 ? "" : "s"}). Look at current prices, the recent price history for the coins in the owner's rules and balances, and their open rules, with what they've told you they want in this conversation. If a rule should change (for example raising a stop-loss after a rise, or a buy level that no longer makes sense), suggest the replacement with \`replaces\`. Suggest something new only if it clearly fits what they asked for. If nothing needs changing, reply with one short line that starts with "No changes".`;
+Style: short, plain English, like a careful friend who knows markets. No hype, no emojis, no guarantees or predictions presented as fact. Quote real numbers from the tools. When you suggest a swap or rules, end with one line saying they're waiting below for the owner.`;
+
+const CHECKIN = (hours: number) => `Scheduled check-in (every ${hours} hour${hours === 1 ? "" : "s"}). Don't suggest one-off swaps in a check-in; only rules. Look at current prices, the recent price history for the coins in the owner's rules and balances, and their open rules, with what they've told you they want in this conversation. If a rule should change (for example raising a stop-loss after a rise, or a buy level that no longer makes sense), suggest the replacement with \`replaces\`. Suggest something new only if it clearly fits what they asked for. If nothing needs changing, reply with one short line that starts with "No changes".`;
 
 /** Claude Code, headless, locked to the wallet's advisor tools. */
 export function claudeRunner(exe: string, timeoutMs = 240_000): Runner {
@@ -144,7 +147,7 @@ export class AiAssistant {
     this.busy = { kind, since: new Date(this.now()).toISOString() };
     const c = this.load();
     if (kind === "chat" && !opts.again) { c.messages.push({ id: randomUUID().slice(0, 8), role: "you", text: t, ts: new Date(this.now()).toISOString() }); this.save(c); }
-    const before = new Set(this.w.rules().list().map((r) => r.id));
+    const before = new Set(this.w.rules().list().map((r) => r.id)), ideasBefore = new Set(this.w.ideas().list().map((i) => i.id));
     const cwd = path.join(walletHome(this.o.dir), "ai"); mkdirSync(cwd, { recursive: true, mode: 0o700 });
     const l = launchConfig(this.o.dir);
     const mcpConfig = JSON.stringify({ mcpServers: { "tollkit-wallet": { type: "stdio", command: l.command, args: [...l.args, "--advisor"], env: l.env } } });
@@ -157,7 +160,8 @@ export class AiAssistant {
       const fresh = this.load();
       if (r.sessionId) fresh.session_id = r.sessionId;
       const made = this.w.rules().list().filter((x) => !before.has(x.id) && x.created_by === "agent").map((x) => x.id);
-      msg = { id: randomUUID().slice(0, 8), role: "ai", text: r.text || "(no reply)", ts: new Date(this.now()).toISOString(), ...(made.length ? { rules: made } : {}), ...(kind === "checkin" ? { checkin: true, quiet: !made.length } : {}) };
+      const swaps = this.w.ideas().list().filter((x) => !ideasBefore.has(x.id)).map((x) => x.id);
+      msg = { id: randomUUID().slice(0, 8), role: "ai", text: r.text || "(no reply)", ts: new Date(this.now()).toISOString(), ...(made.length ? { rules: made } : {}), ...(swaps.length ? { swaps } : {}), ...(kind === "checkin" ? { checkin: true, quiet: !made.length && !swaps.length } : {}) };
       fresh.messages.push(msg);
       if (kind === "checkin") fresh.checkin.last = new Date(this.now()).toISOString();
       this.save(fresh);

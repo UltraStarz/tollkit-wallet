@@ -10,12 +10,12 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { TollkitWallet } from "./wallet.js";
-import { ACTIONS, proposeRules } from "./actions.js";
+import { ACTIONS, SWAP_PROPOSE, proposeRules } from "./actions.js";
 
-/** The only tools the wallet's built-in AI chat gets: read, look at prices, and suggest rules for the owner to turn on. */
-export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_propose", "paper_status"];
+/** The only tools the wallet's built-in AI chat gets: read, look at prices, suggest rules for the owner to turn on, and suggest one-off swaps for the owner to approve. */
+export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_propose", "swap_propose", "paper_status"];
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.5.0";
 
 export function passwordFromEnv(): string {
   const file = process.env.TOLLKIT_WALLET_PASSWORD_FILE;
@@ -29,7 +29,7 @@ const json = (v: unknown) => ({ content: [{ type: "text" as const, text: JSON.st
 
 export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): McpServer {
   const s = new McpServer({ name: "tollkit-wallet", version: VERSION });
-  for (const a of ACTIONS) {
+  for (const a of o.advisor ? [...ACTIONS, SWAP_PROPOSE] : ACTIONS) {
     if (o.advisor && !ADVISOR_TOOLS.includes(a.name)) continue;
     // In advisor mode suggestions always wait for the owner, whatever agent_rules says.
     const run = o.advisor && a.name === "autopilot_propose" ? (ww: TollkitWallet, args: any) => proposeRules(ww, args, { neverAuto: true }) : a.run;
@@ -37,7 +37,7 @@ export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): Mc
       description: a.description,
       inputSchema: (a.schema as any).shape,
       annotations: a.spends ? { destructiveHint: true, openWorldHint: true, idempotentHint: false }
-        : /^autopilot_(propose|cancel)$/.test(a.name) ? { readOnlyHint: false, destructiveHint: a.name === "autopilot_propose", openWorldHint: true }
+        : /^(autopilot_(propose|cancel)|swap_propose)$/.test(a.name) ? { readOnlyHint: false, destructiveHint: a.name === "autopilot_propose", openWorldHint: true }
         : { readOnlyHint: true, openWorldHint: !["wallet_status", "receipts", "autopilot_rules", "paper_status"].includes(a.name) },
     }, async (args: any) => json(await (run as any)(w, args ?? {})));
   }

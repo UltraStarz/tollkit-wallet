@@ -139,6 +139,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           live: watcher ? { events: watcher.events(), balances: watcher.balances(), heads: watcher.heads() } : null,
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
+          ideas: w.ideas().list().slice(-60),
           bots: summarize(w.rules().list()), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
@@ -228,6 +229,13 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       }
       if (p === "/api/trade-mode") { try { return send(res, 200, { trade_mode: setTradeMode(b.mode, w.dir) }); } catch (e) { return send(res, 400, { error: (e as Error).message }); } }
       if (p === "/api/bots/share") { setShare(b.on === true, w.dir); if (b.on === true) void botsBeat(); return send(res, 200, { share: b.on === true }); }
+      // A trade idea from the Claude chat: the owner's tap is the approval; limits and token checks still apply.
+      if (p === "/api/ideas") {
+        const id = String(b.id ?? ""), act = String(b.action ?? "");
+        if (act !== "approve" && act !== "dismiss") return send(res, 400, { error: "action must be approve or dismiss" });
+        try { return send(res, 200, { idea: act === "approve" ? await w.ideas().approve(id, w) : await w.ideas().dismiss(id) }); }
+        catch (e) { return send(res, 400, { error: (e as Error).message }); }
+      }
       if (p === "/api/rules/status") {
         const st = String(b.status);
         if (!["active", "paused", "cancelled"].includes(st)) return send(res, 400, { error: "status must be active, paused or cancelled" });
