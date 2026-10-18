@@ -295,11 +295,16 @@ nav button .emo{display:block;margin:0 auto 3px;width:20px;height:20px;font-size
 .chax{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--mut);margin-top:4px;font-variant-numeric:tabular-nums}
 .chft{display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px}
 .chtbl{max-height:220px;overflow:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px}.chtbl table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}.chtbl th,.chtbl td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line)}.chtbl td:last-child,.chtbl th:last-child{text-align:right}
-.wact{display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:8px;margin-top:14px}
-.wtile{display:flex;flex-direction:column;align-items:center;gap:6px;padding:11px 0 9px;border-radius:14px;background:var(--surf);border:1px solid var(--line);color:var(--tx);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:border-color .2s,transform .2s var(--ease)}
-.wtile:hover{border-color:var(--acc)}.wtile:active{transform:scale(.97)}
-.wtile i{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff}
-.wtile i svg{width:18px;height:18px;margin:0;display:block}
+.wact{display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:4px;margin-top:16px}
+.wtile{display:flex;flex-direction:column;align-items:center;gap:7px;padding:4px 0;border:0;background:none;color:var(--mut);font:inherit;font-size:11.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;cursor:pointer;border-radius:14px;-webkit-tap-highlight-color:transparent;transition:color .2s}
+.wtile:hover{color:var(--tx)}
+.wtile:focus-visible{outline:none}.wtile:focus-visible i{box-shadow:0 0 0 3px var(--card),0 0 0 5px var(--acc)}
+/* Each action is a glossy squircle: a two-tone gradient, a soft top-left light, a thin inner rim and a coloured glow underneath. */
+.wtile i{position:relative;width:46px;height:46px;border-radius:16px;display:grid;place-items:center;color:#fff;background:radial-gradient(120% 90% at 28% 12%,rgba(255,255,255,.38),rgba(255,255,255,0) 55%),linear-gradient(150deg,color-mix(in srgb,var(--acc) 82%,#fff),var(--acc) 45%,color-mix(in srgb,var(--acc2) 78%,#000));box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 0 0 1px rgba(255,255,255,.12),0 10px 22px -10px rgba(var(--glow),.85),0 2px 5px -2px rgba(0,0,0,.25);transition:transform .35s var(--ease),box-shadow .35s var(--ease)}
+.wtile i svg{width:20px;height:20px;margin:0;display:block;filter:drop-shadow(0 1px 1px rgba(0,0,0,.18));transition:transform .35s var(--ease)}
+.m .wtile:hover i{transform:translateY(-2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 0 0 1px rgba(255,255,255,.16),0 16px 28px -10px rgba(var(--glow),1),0 3px 7px -3px rgba(0,0,0,.3)}
+.m .wtile:hover i svg{transform:scale(1.08)}
+.m .wtile:active i{transform:scale(.93);transition-duration:.12s}
 .stk{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surf);border-radius:12px;margin-top:8px}
 .stk .r{margin-left:auto;display:flex;align-items:center;gap:8px}
 .stc{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--surf2);color:var(--mut);white-space:nowrap}.stc.active{color:var(--ok)}.stc.ready{color:var(--acc)}
