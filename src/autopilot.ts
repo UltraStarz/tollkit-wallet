@@ -8,6 +8,7 @@
  * with `tollkit-wallet autopilot` (for a server that stays on). Only one
  * process runs rules at a time (a lease file), so two copies never double-fill.
  */
+import { plainError } from "./errors.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -248,6 +249,7 @@ export class Autopilot {
 
   /** Back off after a failure. Stops retry fast; anything else slows down and stops after 5 tries. */
   private async fail(r: Rule, code: string, reason: string) {
+    reason = plainError(reason, r.chain);
     const urgent = r.kind === "stop_loss" || r.kind === "trailing_stop";
     const wait = code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
     const updated = await this.store.mutate((rs) => {

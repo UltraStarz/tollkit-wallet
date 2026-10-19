@@ -4,6 +4,7 @@
  * and (above the threshold) a Telegram approval. Used by the CLI, the MCP
  * server, the dashboard and the framework plugins.
  */
+import { plainError } from "./errors.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { sendAndConfirm } from "./solconfirm.js";
@@ -324,8 +325,9 @@ export class TollkitWallet {
       if (q.chain !== "solana" && q.buy_token !== NATIVE_EVM) try { new TokenList(this.o.dir).add(q.chain, q.buy_token); } catch { /* display only */ }
       return { ok: true, quote: strip(q), tx, receipt_id: id };
     } catch (e) {
-      settle(id, { status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir);
-      return { ok: false, quote: strip(q), receipt_id: id, refused: { code: "swap_failed", reason: (e as Error).message } };
+      const why = plainError(e, q.chain);
+      settle(id, { status: "failed", reason: why }, this.o.dir);
+      return { ok: false, quote: strip(q), receipt_id: id, refused: { code: "swap_failed", reason: why } };
     }
   }
 
@@ -371,8 +373,9 @@ export class TollkitWallet {
       log({ status: "done", tx });
       return { ok: true, tx, to: dest };
     } catch (e) {
-      log({ status: "failed", reason: (e as Error).message.slice(0, 300) });
-      return { ok: false, to: dest, refused: { code: "send_failed", reason: (e as Error).message } };
+      const why = plainError(e, chain);
+      log({ status: "failed", reason: why });
+      return { ok: false, to: dest, refused: { code: "send_failed", reason: why } };
     }
   }
 
@@ -405,8 +408,8 @@ export class TollkitWallet {
       log({ status: "done", tx });
       return { tx };
     } catch (e) {
-      if (detail) log({ status: "failed", reason: (e as Error).message.slice(0, 300) });
-      throw e;
+      if (detail) log({ status: "failed", reason: plainError(e, "solana") });
+      throw new Error(plainError(e, "solana"));
     }
   }
 
@@ -440,8 +443,8 @@ export class TollkitWallet {
       record({ ...base, status: "done", tx: rec.tx }, this.o.dir);
       return { ok: true, move: rec, quote: q };
     } catch (e) {
-      record({ ...base, status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir);
-      throw e;
+      record({ ...base, status: "failed", reason: plainError(e, from) }, this.o.dir);
+      throw new Error(plainError(e, from));
     }
   }
 
@@ -520,10 +523,10 @@ export class TollkitWallet {
       this.sales().update(ref, { state: "sent", tx });
       return { ok: true, tx, to: dest, amount: `${t.sell_amount!.value} ${token.symbol}` };
     } catch (e) {
-      record({ ...base, status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir);
+      record({ ...base, status: "failed", reason: plainError(e, sale.chain) }, this.o.dir);
       // It may or may not have reached the network; don't offer to send again for this sale.
-      this.sales().update(ref, { state: "failed", reason: (e as Error).message.slice(0, 200) });
-      throw new Error(`${(e as Error).message.slice(0, 200)} Check Activity before starting a new cash out.`);
+      this.sales().update(ref, { state: "failed", reason: plainError(e, sale.chain) });
+      throw new Error(`${plainError(e, sale.chain)} Check Activity before starting a new cash out.`);
     }
   }
 
