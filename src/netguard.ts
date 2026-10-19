@@ -19,7 +19,13 @@ export function isLocalUrl(u: string): boolean {
 export function publicFetch(f: typeof fetch = fetch): typeof fetch {
   return (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     let url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    // 0.8.1: a Request object carries its own method, headers and body (the x402 client retries with one; the
+    // paid retry used to lose its payment header here, so every pay_fetch ended "402 after payment").
     let opts: RequestInit = { ...init };
+    if (typeof input !== "string" && !(input instanceof URL)) {
+      const r = input as Request;
+      opts = { method: r.method, headers: r.headers, body: r.method === "GET" || r.method === "HEAD" ? undefined : await r.clone().arrayBuffer(), ...init };
+    }
     for (let hop = 0; hop <= 5; hop++) {
       if (isLocalUrl(url)) throw new Error("Refused: that address is on this computer or a private network.");
       const r = await f(url, { ...opts, redirect: "manual" });

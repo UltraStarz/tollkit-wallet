@@ -14,6 +14,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { TollkitWallet } from "./wallet.js";
 import { ACTIONS, SWAP_PROPOSE, type ActionCtx } from "./actions.js";
 import { appName, noteAiUse } from "./aiuse.js";
+import { describeTool, offeredTools, refreshCatalog, zodShape, TOOL_PREFIX } from "./tollkit-tools.js";
 
 /** The `_meta` key Tollkit's relay uses to say which AI app sent a call that came in by the connector address. */
 export const CLIENT_META = "dev.tollkit/client";
@@ -26,7 +27,7 @@ export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", 
   "bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "stake_info", "buy_link",
   "setup_request", "setup_requests", "setup_cancel"];
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.8.1";
 
 export function passwordFromEnv(): string {
   const file = process.env.TOLLKIT_WALLET_PASSWORD_FILE;
@@ -58,6 +59,26 @@ export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): Mc
       const ctx: ActionCtx = { app, advisor: !!o.advisor };
       return json(await (a.run as any)(w, args ?? {}, ctx));
     });
+  }
+  // 0.8.1: Tollkit's own paid tools, by name, for connected apps (src/tollkit-tools.ts). Not for the in-app chat:
+  // the owner talks to it about their money, not the web. The catalog refreshes in the background for next time.
+  if (!o.advisor) {
+    void refreshCatalog(w.dir, (w as any).f);
+    for (const t of offeredTools(w.dir)) {
+      s.registerTool(TOOL_PREFIX + t.name, {
+        title: t.title,
+        description: describeTool(t),
+        inputSchema: zodShape(t.input_schema),
+        annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: false },
+      }, async (args: any, extra: any) => {
+        const app = appName(extra?._meta?.[CLIENT_META] ?? s.server.getClientVersion()?.name);
+        noteAiUse(w.dir, app, TOOL_PREFIX + t.name);
+        const r = await w.pay(t.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args ?? {}) }, { publicOnly: true, by: app });
+        let result: unknown;
+        if (r.response) { const text = await r.response.text(); try { result = JSON.parse(text); } catch { result = text.slice(0, 50_000); } }
+        return json({ tool: t.name, paid: r.paid, cost_usd: r.offer?.usd ?? (r.paid ? t.price_usd : 0), status: r.status, receipt_id: r.receipt_id, tx: r.tx, refused: r.refused, result });
+      });
+    }
   }
   return s;
 }

@@ -29,7 +29,7 @@ export function setBudget(dir: string | undefined, app: string, weekly_usd: numb
   if (!name || name.length > 40) throw new Error("Name the AI app.");
   if (weekly_usd !== null && !(Number.isFinite(weekly_usd) && weekly_usd > 0 && weekly_usd <= 1_000_000)) throw new Error("Pick a weekly amount over $0.");
   const list = readBudgets(dir).filter((b) => b.app !== name);
-  if (weekly_usd !== null) list.push({ app: name, weekly_usd: Math.round(weekly_usd * 100) / 100 });
+  if (weekly_usd !== null) list.push({ app: name, weekly_usd: Math.round(weekly_usd * 10000) / 10000 });
   if (list.length > 50) throw new Error("That's enough budgets.");
   const f = fileOf(dir), t = `${f}.${process.pid}.tmp`;
   writeFileSync(t, JSON.stringify(list, null, 2), { mode: 0o600 });

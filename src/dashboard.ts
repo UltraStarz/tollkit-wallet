@@ -35,6 +35,7 @@ import { buyLink, BUY_ASSETS } from "./buy.js";
 import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.js";
 import { budgetView, setBudget } from "./appbudget.js";
 import { Setups, showSetup, needsPassword, type SetupRequest } from "./setups.js";
+import { catalogView, refreshCatalog, setHidden } from "./tollkit-tools.js";
 
 const CHAINS: string[] = ALL_CHAINS;
 
@@ -84,6 +85,10 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // 0.8.0: an AI tool added or changed rules; start them now rather than at the next tick.
   w.hooks.rulesChanged = () => { void autopilot?.tick(); void alwaysSync(); };
   const setups = new Setups(w.dir);
+  // 0.8.1: Tollkit's paid tools for connected apps; the list refreshes from the server while the wallet is open.
+  const tf: typeof fetch = (w as any).f ?? fetch;
+  if (o.watch !== false) void refreshCatalog(w.dir, tf);
+  const toolsTimer = o.watch === false ? null : setInterval(() => void refreshCatalog(w.dir, tf), 6 * 3600_000);
   if (alwaysTimer) setTimeout(() => { void w.always().config().then(() => alwaysSync()).catch(() => {}); }, 3_000);
   // The Autopilot tab's AI chat and scheduled check-ins (runs while the dashboard is open).
   const ai = o.ai === false ? null : o.ai ?? new AiAssistant(w, { dir: w.dir });
@@ -206,7 +211,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
           ai: ai ? ai.view() : null,
           // 0.8.0: forms an AI app filled in for the owner to apply, and each app's weekly budget.
-          setups: setups.waiting().map(showSetup), app_budgets: budgetView(w.dir),
+          setups: setups.waiting().map(showSetup), app_budgets: budgetView(w.dir), tollkit_tools: catalogView(w.dir),
           backup: { kind: backupKind(w.dir), done: backupDone(w.dir) },
           ext: { paired: w.dapps().paired(), sites: w.dapps().sites() },
           holdings: holdings ? holdings.snapshot() : null, coins });
@@ -309,6 +314,10 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         return send(res, 200, { ok: true, removed: ids.length });
       }
       // 0.8.0: per-app weekly budgets (tightening an AI's allowance never needs the password).
+      if (p === "/api/tollkit-tools") {
+        if (typeof b.name !== "string" || !catalogView(w.dir).tools.some((t) => t.name === b.name)) return send(res, 400, { error: "No such tool." });
+        setHidden(w.dir, b.name, b.hidden === true); return send(res, 200, { tollkit_tools: catalogView(w.dir) });
+      }
       if (p === "/api/app-budgets") {
         try { setBudget(w.dir, String(b.app ?? ""), b.weekly_usd === null || b.weekly_usd === "" || b.weekly_usd === undefined ? null : Number(b.weekly_usd)); return send(res, 200, { app_budgets: budgetView(w.dir) }); }
         catch (e) { return send(res, 400, { error: (e as Error).message }); }
@@ -497,7 +506,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 

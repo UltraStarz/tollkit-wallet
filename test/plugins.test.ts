@@ -66,7 +66,8 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
 {
   const s: any = buildServer(w);
   const names = Object.keys(s._registeredTools ?? {});
-  check(names.length === 30 && names.includes("swap") && names.includes("bot_start") && names.includes("setup_request") && names.includes("autopilot_propose") && names.includes("price_history"), "MCP: same 30 tools", names);
+  const own = names.filter((n) => !n.startsWith("tollkit_")), paid = names.filter((n) => n.startsWith("tollkit_"));
+  check(own.length === 30 && own.includes("swap") && own.includes("bot_start") && own.includes("setup_request") && own.includes("autopilot_propose") && own.includes("price_history") && paid.length >= 25, "MCP: the same 30 tools, plus Tollkit's paid tools by name (0.8.1)", [own.length, paid.length]);
   const adv: any = buildServer(w, { advisor: true });
   const an = Object.keys(adv._registeredTools ?? {});
   check(an.length === ADVISOR_TOOLS.length && !an.some((n) => /^(swap|pay_fetch|autopilot_cancel|paper_swap|seller_check)$/.test(n)), "MCP advisor mode: read, prices and suggest only, no trading", an);
