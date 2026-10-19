@@ -104,6 +104,8 @@ export function describeAmount(chain: Chain, token: string, atomic: string): str
 
 export class TollkitWallet {
   readonly dir: string;
+  /** Set by whoever runs the autopilot (the dashboard): called when an AI tool adds or changes rules, so they start at once. */
+  readonly hooks: { rulesChanged?: () => void } = {};
   private constructor(private keys: Keys, private password: string, readonly policy: Policy, private readonly o: WalletOptions, readonly sanctions: Sanctions) {
     this.dir = walletHome(o.dir);
   }
@@ -286,7 +288,7 @@ export class TollkitWallet {
    * Quote, check, approve if needed, reserve, sign, send, record. `ownerApproved`: the owner just tapped Approve on
    * this exact swap in the wallet's own screen (a trade idea), so it isn't asked again; every limit still applies.
    */
-  async swap(req: SwapRequest, o: { ownerApproved?: boolean } = {}): Promise<SwapResult> {
+  async swap(req: SwapRequest, o: { ownerApproved?: boolean; by?: string } = {}): Promise<SwapResult> {
     const pr = await this.priced(req);
     if (!("q" in pr)) return pr;
     const q = pr.q;
@@ -312,7 +314,7 @@ export class TollkitWallet {
       if (q.fee_inline) { q.raw.fee = { lamports: fee.lamports.toString(), to: fee.to }; fee = null; } // goes in the swap itself
     }
     let id: string;
-    try { id = await reserve(p, "trade", usd, { chain: q.chain, seller: q.venue, tool: "swap", fee_usd: q.fee_usd ?? undefined, detail: `${describeAmount(q.chain, q.sell_token, q.sell_amount)} -> at least ${describeAmount(q.chain, q.buy_token, q.min_buy_amount)}` }, this.o.dir); }
+    try { id = await reserve(p, "trade", usd, { chain: q.chain, seller: q.venue, tool: "swap", fee_usd: q.fee_usd ?? undefined, detail: `${describeAmount(q.chain, q.sell_token, q.sell_amount)} -> at least ${describeAmount(q.chain, q.buy_token, q.min_buy_amount)}`, ...(o.by ? { by: o.by } : {}) }, this.o.dir); }
     catch (e) { if (e instanceof LimitError) return { ok: false, quote: strip(q), refused: { code: e.code, reason: e.message } }; throw e; }
     try {
       const tx = await (this.o.execute ?? ((qq, k) => executeSwap(qq, k, { fetch: this.f, proxy: this.o.proxy, rpc: this.o.rpc })))(q, this.keys);
@@ -332,12 +334,12 @@ export class TollkitWallet {
   }
 
   /** Fetch a URL, paying through x402 or MPP if it asks, within the owner's rules. */
-  async pay(url: string, init?: RequestInit, opts: { publicOnly?: boolean; prefer?: Chain[] } = {}): Promise<PayResult> {
+  async pay(url: string, init?: RequestInit, opts: { publicOnly?: boolean; prefer?: Chain[]; by?: string } = {}): Promise<PayResult> {
     // Agents only reach the public internet (not this computer or the local network), redirects included.
     const f = opts.publicOnly ? publicFetch(this.f) : this.f;
     return payFetch(url, init, this.keys, {
       dir: this.o.dir, policy: this.policy, fetch: f, sanctions: this.sanctions,
-      checkSeller: (u, payTo) => checkSeller(u, payTo, f), approve: this.approver, solanaRpc: this.rpc("solana"), prefer: opts.prefer, // the same RPC as everything else (the public one refuses browser extensions)
+      checkSeller: (u, payTo) => checkSeller(u, payTo, f), approve: this.approver, solanaRpc: this.rpc("solana"), prefer: opts.prefer, by: opts.by, // the same RPC as everything else (the public one refuses browser extensions)
     });
   }
 
@@ -539,7 +541,7 @@ export class TollkitWallet {
   executor(mode: "live" | "paper" = "live"): Executor {
     const slippageBps = Math.min(100, this.policy.max_slippage_bps);
     if (mode === "paper") { const pb = this.paper(); return { mode, slippageBps, swap: (r) => pb.swap(r), quote: (r) => this.quote(r), balance: async (c, t) => pb.balance(c, t) }; }
-    return { mode, slippageBps, swap: (r) => this.swap(r), quote: (r) => this.quote(r), balance: (c, t) => liveBalance(this.addresses, c, t, this.rpc(c), this.f) };
+    return { mode, slippageBps, swap: (r, o) => this.swap(r, o), quote: (r) => this.quote(r), balance: (c, t) => liveBalance(this.addresses, c, t, this.rpc(c), this.f) };
   }
 
   /** Drop the keys from memory. */

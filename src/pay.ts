@@ -58,6 +58,8 @@ export interface PayDeps {
   solanaRpc?: string;
   /** Chains to pay on first when the seller offers several (e.g. where the wallet holds the stablecoin). */
   prefer?: Chain[];
+  /** The AI app paying (src/aiuse.ts name), for the receipt and its weekly budget. */
+  by?: string;
 }
 
 export interface PayResult {
@@ -142,7 +144,7 @@ export async function gate(offer: Offer, url: string, deps: PayDeps): Promise<st
     if (d !== "approved") throw new Refusal(d === "denied" ? "denied" : "approval_timeout", d === "denied" ? "You denied this payment." : "No approval in time, so it wasn't paid.");
   }
   try {
-    return await reserve(p, "payment", offer.usd, { chain: offer.chain, seller: offer.seller, tool: url, detail: `${offer.protocol} ${money(offer.usd)}` }, deps.dir);
+    return await reserve(p, "payment", offer.usd, { chain: offer.chain, seller: offer.seller, tool: url, detail: `${offer.protocol} ${money(offer.usd)}`, ...(deps.by ? { by: deps.by } : {}) }, deps.dir);
   } catch (e) {
     if (e instanceof LimitError) throw new Refusal(e.code, e.message);
     throw e;

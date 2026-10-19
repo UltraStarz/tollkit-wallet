@@ -33,6 +33,8 @@ import { setTradeMode, tradeMode } from "./trademode.js";
 import { DEFAULT_PROXY } from "./swap.js";
 import { buyLink, BUY_ASSETS } from "./buy.js";
 import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.js";
+import { budgetView, setBudget } from "./appbudget.js";
+import { Setups, showSetup, needsPassword, type SetupRequest } from "./setups.js";
 
 const CHAINS: string[] = ALL_CHAINS;
 
@@ -79,6 +81,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
   };
   const alwaysTimer = o.watch === false ? null : setInterval(() => void alwaysSync(), 5 * 60_000);
+  // 0.8.0: an AI tool added or changed rules; start them now rather than at the next tick.
+  w.hooks.rulesChanged = () => { void autopilot?.tick(); void alwaysSync(); };
+  const setups = new Setups(w.dir);
   if (alwaysTimer) setTimeout(() => { void w.always().config().then(() => alwaysSync()).catch(() => {}); }, 3_000);
   // The Autopilot tab's AI chat and scheduled check-ins (runs while the dashboard is open).
   const ai = o.ai === false ? null : o.ai ?? new AiAssistant(w, { dir: w.dir });
@@ -106,6 +111,52 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const host = o.host ?? "127.0.0.1";
   let port = o.port ?? 7420;
   const okToken = (t: string | null | undefined) => !!t && t.length === token.length && timingSafeEqual(Buffer.from(t), Buffer.from(token));
+
+  /** One setup request, applied the way the owner's own form would do it. Returns what to show. */
+  const applySetup = async (r: SetupRequest, b: Record<string, any>): Promise<{ ok: true; note?: string; pending?: boolean; quote?: unknown; result?: unknown }> => {
+    const q = r.params as any;
+    switch (r.kind) {
+      case "limits": {
+        const next = PolicySchema.safeParse({ ...w.policy, ...q, withdraw_addresses: w.policy.withdraw_addresses });
+        if (!next.success) throw new Error(next.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+        w.setPolicy(password, next.data); return { ok: true, note: "Limits changed." };
+      }
+      case "withdraw_address": {
+        if (q.action === "remove") w.removeWithdrawAddress(password, q.chain, q.address); else await w.saveWithdrawAddress(password, q.chain, q.address, q.label ?? "");
+        return { ok: true, note: q.action === "remove" ? "Address removed." : "Address saved." };
+      }
+      case "withdraw": {
+        if (!w.policy.withdraw_addresses.some((a) => a.chain === q.chain && a.address.toLowerCase() === String(q.to).toLowerCase())) throw new Error("That address isn't one of your saved withdrawal addresses.");
+        const tok = await resolveToken(q.chain, q.token);
+        const out = await w.withdraw(password, q.chain, tok, q.to, toAtomic(q.amount, tok.decimals));
+        if (!out.ok) throw new Error(out.refused?.reason ?? "The withdrawal was refused.");
+        return { ok: true, note: `Sent. Transaction ${out.tx}`, result: out };
+      }
+      case "move": {
+        // First call: a fresh quote for the owner to read. Second call (confirm, with the minimum they saw): the move.
+        if (b.confirm !== true || !/^\d+$/.test(String(b.receive_min ?? ""))) return { ok: true, pending: true, quote: await w.moveQuote(q.asset, q.from, q.to, q.amount) };
+        const out: any = await w.move(password, q.asset, q.from, q.to, q.amount, String(b.receive_min));
+        if (out && out.ok === false) throw new Error(out.refused?.reason ?? "The move was refused.");
+        return { ok: true, note: "Move started. Track it on Home.", result: out };
+      }
+      case "stake": {
+        const out = q.action === "stake" ? await w.stakeAction(password, { action: "stake", sol: Number(q.sol), vote: String(q.vote ?? "") }) : await w.stakeAction(password, { action: q.action, account: String(q.account ?? "") });
+        return { ok: true, note: `Done. Transaction ${out.tx}`, result: out };
+      }
+      case "cash_out": {
+        if (!w.policy.chains.includes(q.chain)) throw new Error(`${q.chain} is turned off in your settings.`);
+        const sale = await w.sales().start(q.chain === "solana" ? w.addresses.solana : w.addresses.evm, q.chain, q.asset, q.amount);
+        return { ok: true, note: "Coinbase checkout opened; finish the sale there, then send from the Sell screen.", result: sale };
+      }
+      case "connect_app": {
+        if (o.connectApps === false) throw new Error("Connecting apps this way isn't available here; use the connector address on the AI tab.");
+        if (!existsSync(passwordFile(w.dir))) savePasswordFile(password, w.dir);
+        return { ok: true, note: await addApp(q.app, w.dir) };
+      }
+      case "app_budget": { setBudget(w.dir, q.app, q.weekly_usd); return { ok: true, note: q.weekly_usd === null ? "Budget removed." : "Budget set." }; }
+      case "always_budget": { w.always().set("", false, Number(q.budget_usd)); return { ok: true, note: "Always On budget set." }; }
+    }
+  };
 
   const server = createServer(async (req, res) => {
     try {
@@ -154,6 +205,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
           ai: ai ? ai.view() : null,
+          // 0.8.0: forms an AI app filled in for the owner to apply, and each app's weekly budget.
+          setups: setups.waiting().map(showSetup), app_budgets: budgetView(w.dir),
           backup: { kind: backupKind(w.dir), done: backupDone(w.dir) },
           ext: { paired: w.dapps().paired(), sites: w.dapps().sites() },
           holdings: holdings ? holdings.snapshot() : null, coins });
@@ -254,6 +307,30 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!rs.every(done)) return send(res, 400, { error: "Stop it first; only stopped or finished bots can be removed." });
         await w.rules().archive(rs.map((r) => r.id));
         return send(res, 200, { ok: true, removed: ids.length });
+      }
+      // 0.8.0: per-app weekly budgets (tightening an AI's allowance never needs the password).
+      if (p === "/api/app-budgets") {
+        try { setBudget(w.dir, String(b.app ?? ""), b.weekly_usd === null || b.weekly_usd === "" || b.weekly_usd === undefined ? null : Number(b.weekly_usd)); return send(res, 200, { app_budgets: budgetView(w.dir) }); }
+        catch (e) { return send(res, 400, { error: (e as Error).message }); }
+      }
+      // 0.8.0: setup requests from AI apps. Dismissing needs nothing; applying runs the same code as the owner's own
+      // form, with the password where that form asks for it.
+      if (p === "/api/setups") {
+        if (b.action !== "dismiss") return send(res, 400, { error: "action must be dismiss" });
+        const r = await setups.finish(String(b.id ?? ""), "dismissed", "The owner dismissed it");
+        return send(res, r ? 200 : 409, r ? { ok: true } : { error: "That request isn't waiting any more." });
+      }
+      if (p === "/api/setups/apply") {
+        const r = setups.get(String(b.id ?? ""));
+        if (!r || r.status !== "waiting") return send(res, 409, { error: "That request isn't waiting any more." });
+        if (needsPassword(r.kind) && (typeof b.password !== "string" || b.password !== password)) return send(res, 403, { error: "Wrong password." });
+        try {
+          const out = await applySetup(r, b);
+          if (out.pending) return send(res, 200, out); // a move: the quote first, then the owner confirms
+          await setups.finish(r.id, "applied", out.note);
+          void autopilot?.tick(); void alwaysSync();
+          return send(res, 200, out);
+        } catch (e) { return send(res, 400, { error: (e as Error).message.slice(0, 300) }); }
       }
       if (p === "/api/trade-mode") { try { return send(res, 200, { trade_mode: setTradeMode(b.mode, w.dir) }); } catch (e) { return send(res, 400, { error: (e as Error).message }); } }
       if (p === "/api/bots/share") { setShare(b.on === true, w.dir); if (b.on === true) void botsBeat(); return send(res, 200, { share: b.on === true }); }

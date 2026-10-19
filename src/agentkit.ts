@@ -27,7 +27,7 @@ export class TollkitWalletActionProvider extends ActionProvider<WalletProvider> 
       invoke: async (args: any) => {
         const parsed = a.schema.safeParse(args ?? {});
         if (!parsed.success) return JSON.stringify({ ok: false, refused: { code: "bad_request", reason: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") } });
-        return JSON.stringify(await (a.run as any)(this.wallet, parsed.data));
+        return JSON.stringify(await (a.run as any)(this.wallet, parsed.data, { app: "AgentKit" }));
       },
     }));
   }

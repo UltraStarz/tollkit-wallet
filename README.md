@@ -56,7 +56,11 @@ The agent has no tool for this.
 }
 ```
 
-Tools: `wallet_status`, `wallet_balances`, `swap_quote`, `swap`, `pay_fetch`, `seller_check`, `receipts`, `market_prices`, `price_history`, `autopilot_propose`, `autopilot_rules`, `autopilot_cancel`, `paper_swap`, `paper_status`. There is no tool for changing limits, approvals or keys.
+Tools: `wallet_status`, `wallet_balances`, `swap_quote`, `swap`, `pay_fetch`, `seller_check`, `receipts`, `market_prices`, `price_history`, `autopilot_propose`, `autopilot_rules`, `autopilot_cancel`, `paper_swap`, `paper_status`, and (0.8.0) the setup tools: `bot_templates`, `bot_preview`, `bot_start`, `bots_status`, `bot_control`, `token_search`, `token_check`, `token_add`, `token_hide`, `always_on`, `move_quote`, `stake_info`, `buy_link`, `setup_request`, `setup_requests`, `setup_cancel`.
+
+An AI app can set up anything you can set up in the app, in two tiers. Bots, tokens that pass the scam check, "keep running when closed" on a rule, quotes and buy links happen at once; none of them moves money, and every trade they lead to stays inside your limits. Limits, withdrawal addresses, withdrawing, moving between networks, staking, cashing out, connecting another AI app and budgets are a `setup_request`: the app fills in the form, you see it as a card on the Approvals screen and tap Apply, typing your password where the wallet always asks. Nothing changes until you do. There is still no tool that changes limits, moves funds, approves a request or reveals keys.
+
+Each AI app can have a weekly budget (Settings, "Budget per AI app"): its trades, payments and the bots it starts count against it, and it resets on Monday. Your limits apply on top.
 
 The easiest way: open the dashboard (`tollkit-wallet ui`), click **Connect your AI**, type your wallet password and click **Add** next to your app. It finds Claude desktop, Claude Code, Cursor, Codex and Gemini CLI on your computer and adds the wallet to their settings for you (keeping a backup of any file it changes); VS Code opens to confirm. Each app also has the steps to do it by hand.
 

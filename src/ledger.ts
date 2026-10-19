@@ -7,6 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync }
 import { randomUUID } from "node:crypto";
 import { files, walletHome } from "./paths.js";
 import type { Policy } from "./policy.js";
+import { budgetProblem } from "./appbudget.js";
 
 export type Kind = "trade" | "payment" | "withdrawal" | "stake" | "move" | "dapp";
 export type Status = "pending" | "done" | "failed";
@@ -89,6 +90,9 @@ export async function reserve(p: Policy, kind: Kind, usd: number, meta: Omit<Ent
       const s = spentToday("payment", dir, meta.seller);
       if (s + usd > p.per_seller_daily_usd) throw new LimitError(`Over the daily limit of $${p.per_seller_daily_usd} for ${meta.seller}.`, "over_seller_limit");
     }
+    // 0.8.0: the AI app's own weekly budget (src/appbudget.ts), when the owner set one.
+    const over = budgetProblem(dir, meta.by, usd);
+    if (over) throw new LimitError(over, "over_app_budget");
     const id = randomUUID();
     write({ id, ts: new Date().toISOString(), kind, status: "pending", usd, ...meta }, dir);
     return id;

@@ -74,6 +74,8 @@ export interface Rule extends RuleInput {
   id: string;
   status: RuleStatus;
   created_by: "owner" | "agent";
+  /** The AI app that set it up (src/aiuse.ts names); its fills count against that app's weekly budget. */
+  by?: string;
   created_at: string;
   activated_at?: string;
   /** The owner removed this finished rule from their bot list. Its trades stay in the history. */
@@ -186,7 +188,7 @@ export class RuleStore {
     return withLock(() => { const rules = this.list(); const out = fn(rules); this.write(rules); return out; }, this.dir);
   }
 
-  async add(input: RuleInput, by: "owner" | "agent", autoActivate: boolean): Promise<Rule> {
+  async add(input: RuleInput, by: "owner" | "agent", autoActivate: boolean, app?: string): Promise<Rule> {
     const parsed = RuleInput.parse(input);
     const why = ruleProblem(parsed);
     if (why) throw new Error(why);
@@ -197,7 +199,7 @@ export class RuleStore {
     const now = new Date();
     const active = by === "owner" || autoActivate;
     const rule: Rule = {
-      ...parsed, id: randomUUID().slice(0, 8), created_by: by, created_at: now.toISOString(),
+      ...parsed, id: randomUUID().slice(0, 8), created_by: by, ...(app ? { by: app } : {}), created_at: now.toISOString(),
       status: active ? "active" : "proposed", ...(active ? { activated_at: now.toISOString() } : {}),
       state: { runs: 0, failures: 0, fills: [], ...(parsed.kind === "grid" ? { grid: { units: Array(parsed.levels! - 1).fill(null), cost: Array(parsed.levels! - 1).fill(null), atomic: Array(parsed.levels! - 1).fill(null) } } : {}), ...(parsed.kind === "dca" ? { next_run: (parsed.every === "week" && parsed.weekday !== undefined ? nextRun(parsed, now) : now).toISOString() } : {}) },
     };
@@ -206,13 +208,13 @@ export class RuleStore {
   }
 
   /** A bot's rules, added together. "@0", "@1"... in after/sell_from point at earlier rules in the same list. */
-  async addBot(inputs: RuleInput[], by: "owner" | "agent", autoActivate: boolean): Promise<Rule[]> {
+  async addBot(inputs: RuleInput[], by: "owner" | "agent", autoActivate: boolean, app?: string): Promise<Rule[]> {
     const made: Rule[] = [];
     for (const input of inputs) {
       const fix = (v?: string) => (v && /^@\d+$/.test(v) ? made[Number(v.slice(1))]?.id : v);
       const ref = { ...input, after: fix(input.after), sell_from: fix(input.sell_from) };
       if ((input.after && !ref.after) || (input.sell_from && !ref.sell_from)) throw new Error("A bot step points at a step that doesn't exist.");
-      made.push(await this.add(ref, by, autoActivate));
+      made.push(await this.add(ref, by, autoActivate, app));
     }
     return made;
   }

@@ -23,7 +23,7 @@ import type { SwapResult } from "./wallet.js";
 
 export interface Executor {
   mode: "live" | "paper";
-  swap(req: SwapRequest): Promise<SwapResult>;
+  swap(req: SwapRequest, o?: { by?: string }): Promise<SwapResult>;
   quote(req: SwapRequest): Promise<SwapResult>;
   balance(chain: Chain, token: Token): Promise<bigint>;
   slippageBps: number;
@@ -169,7 +169,7 @@ export class Autopilot {
       const eff = (q.quote.usd_value ?? 0) / units;
       if (r.kind === "limit_buy" ? eff > r.trigger_price! * 1.01 : eff < r.trigger_price! * 0.99) return; // the market moved back; keep waiting
     }
-    const res = await this.exec.swap(req);
+    const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
     const usd = res.quote?.usd_value ?? undefined;
     const now = new Date(this.now());
@@ -206,7 +206,7 @@ export class Autopilot {
     const sellAt = g.atomic.findIndex((a, i) => a !== null && p >= L[i + 1]!);
     if (sellAt >= 0) {
       const req: SwapRequest = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: g.atomic[sellAt]!, slippage_bps: this.exec.slippageBps };
-      const res = await this.exec.swap(req);
+      const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
       if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
       const usd = res.quote?.usd_value ?? undefined, units = Number(req.sell_amount) / 10 ** t.decimals;
       const updated = await this.store.mutate((rs) => {
@@ -231,7 +231,7 @@ export class Autopilot {
     for (let i = L.length - 2; i >= 0; i--) if (g.atomic[i] === null && p <= L[i]! && L[i]! - p < step) { buyAt = i; break; }
     if (buyAt < 0) return;
     const req: SwapRequest = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.exec.slippageBps };
-    const res = await this.exec.swap(req);
+    const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
     const usd = res.quote?.usd_value ?? undefined, atomic = String(res.quote?.buy_amount ?? "0"), units = Number(atomic) / 10 ** t.decimals;
     const updated = await this.store.mutate((rs) => {

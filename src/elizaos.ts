@@ -103,6 +103,23 @@ const ELIZA_NAMES: Record<string, { name: string; similes: string[] }> = {
   paper_status: { name: "TOLLKIT_PAPER_STATUS", similes: ["PAPER_BALANCE", "PAPER_PORTFOLIO"] },
   market_prices: { name: "TOLLKIT_MARKET_PRICES", similes: ["CRYPTO_PRICE", "ETH_PRICE", "SOL_PRICE"] },
   price_history: { name: "TOLLKIT_PRICE_HISTORY", similes: ["PRICE_CHART", "PRICE_TREND", "CANDLES"] },
+  // 0.8.0: setting things up for the owner.
+  bot_templates: { name: "TOLLKIT_BOT_TEMPLATES", similes: ["LIST_BOTS", "BOT_CATALOG", "TRADING_BOTS"] },
+  bot_preview: { name: "TOLLKIT_BOT_PREVIEW", similes: ["PREVIEW_BOT", "WHAT_WOULD_BOT_DO"] },
+  bot_start: { name: "TOLLKIT_BOT_START", similes: ["START_BOT", "RUN_BOT", "MAKE_BOT", "DCA_BOT", "GRID_BOT"] },
+  bots_status: { name: "TOLLKIT_BOTS_STATUS", similes: ["BOT_STATUS", "MY_BOTS", "BOT_RESULTS"] },
+  bot_control: { name: "TOLLKIT_BOT_CONTROL", similes: ["PAUSE_BOT", "RESUME_BOT", "STOP_BOT", "REMOVE_BOT"] },
+  token_search: { name: "TOLLKIT_TOKEN_SEARCH", similes: ["FIND_TOKEN", "SEARCH_TOKEN"] },
+  token_check: { name: "TOLLKIT_TOKEN_CHECK", similes: ["CHECK_TOKEN", "SCAM_CHECK", "IS_TOKEN_SAFE"] },
+  token_add: { name: "TOLLKIT_TOKEN_ADD", similes: ["ADD_TOKEN", "WATCH_TOKEN"] },
+  token_hide: { name: "TOLLKIT_TOKEN_HIDE", similes: ["HIDE_TOKEN", "REMOVE_TOKEN"] },
+  always_on: { name: "TOLLKIT_ALWAYS_ON", similes: ["KEEP_RUNNING", "RUN_WHILE_CLOSED", "SERVER_RUN"] },
+  move_quote: { name: "TOLLKIT_MOVE_QUOTE", similes: ["BRIDGE_QUOTE", "MOVE_BETWEEN_CHAINS_QUOTE"] },
+  stake_info: { name: "TOLLKIT_STAKE_INFO", similes: ["STAKING_STATUS", "VALIDATORS"] },
+  buy_link: { name: "TOLLKIT_BUY_LINK", similes: ["BUY_CRYPTO", "ONRAMP", "COINBASE_CHECKOUT"] },
+  setup_request: { name: "TOLLKIT_SETUP_REQUEST", similes: ["ASK_OWNER", "CHANGE_LIMITS", "REQUEST_WITHDRAWAL", "REQUEST_MOVE", "REQUEST_STAKE"] },
+  setup_requests: { name: "TOLLKIT_SETUP_REQUESTS", similes: ["MY_REQUESTS", "REQUEST_STATUS"] },
+  setup_cancel: { name: "TOLLKIT_SETUP_CANCEL", similes: ["WITHDRAW_REQUEST", "CANCEL_REQUEST"] },
 };
 
 function toElizaAction(a: WalletAction): Action {
@@ -121,7 +138,7 @@ function toElizaAction(a: WalletAction): Action {
           await callback?.({ text, actions: [n.name] });
           return { success: false, text, error: "bad_request" };
         }
-        const result: any = await (a.run as any)(w, parsed.data);
+        const result: any = await (a.run as any)(w, parsed.data, { app: "ElizaOS" });
         const refused = result?.refused?.reason as string | undefined;
         const text = refused ? `Not done: ${refused}` : summary(a.name, result);
         await callback?.({ text, actions: [n.name] });
