@@ -25,6 +25,7 @@ export interface Entry {
   tx?: string;
   fee_tx?: string;      // Tollkit's fee, when it was sent on its own (Solana pairs Jupiter can't take it from)
   reason?: string;      // why it failed
+  by?: string;          // the AI app that asked for it (src/aiuse.ts); absent when the owner or autopilot did
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -100,9 +101,15 @@ export function settle(id: string, patch: Partial<Entry> & { status: "done" | "f
   write({ ...prev, ...patch, id, ts: prev.ts }, dir);
 }
 
+/** Adds who asked for an entry (the AI app), without touching anything else about it. */
+export function tagEntry(id: string, patch: Pick<Entry, "by">, dir?: string) {
+  const prev = entries(dir).find((e) => e.id === id);
+  if (prev) write({ ...prev, ...patch, id, ts: prev.ts }, dir);
+}
+
 /** Receipts as CSV, newest last. */
 export function exportCsv(dir?: string, since?: string): string {
-  const cols: (keyof Entry)[] = ["ts", "kind", "status", "usd", "fee_usd", "chain", "seller", "tool", "detail", "tx", "reason", "id"];
+  const cols: (keyof Entry)[] = ["ts", "kind", "status", "usd", "fee_usd", "chain", "seller", "tool", "detail", "tx", "reason", "by", "id"];
   const esc = (v: unknown) => { const s = v === undefined || v === null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const rows = entries(dir).filter((e) => !since || e.ts >= since);
   return [cols.join(","), ...rows.map((e) => cols.map((c) => esc(e[c])).join(","))].join("\n") + "\n";

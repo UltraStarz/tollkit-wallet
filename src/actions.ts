@@ -104,7 +104,7 @@ export const ACTIONS = [
       const r = await w.pay(a.url, { method: a.method ?? (a.body ? "POST" : "GET"), headers: a.headers, body: a.body }, { publicOnly: true });
       let body: string | undefined;
       if (r.response) { const t = await r.response.text(); body = t.length > MAX_BODY ? t.slice(0, MAX_BODY) + `\n…[truncated ${t.length - MAX_BODY} chars]` : t; }
-      return { paid: r.paid, status: r.status, cost_usd: r.offer?.usd, protocol: r.offer?.protocol, chain: r.offer?.chain, tx: r.tx, refused: r.refused, content_type: r.response?.headers.get("content-type"), body };
+      return { paid: r.paid, status: r.status, receipt_id: r.receipt_id, cost_usd: r.offer?.usd, protocol: r.offer?.protocol, chain: r.offer?.chain, tx: r.tx, refused: r.refused, content_type: r.response?.headers.get("content-type"), body };
     } }),
   def({ name: "seller_check", spends: false, schema: SellerArgs,
     description: "Check a paid endpoint before buying: is it up, does its live price match its listing, does it pay where it says (Tollkit Weigh Station).",

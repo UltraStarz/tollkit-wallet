@@ -11,6 +11,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { TollkitWallet } from "./wallet.js";
 import { ACTIONS, SWAP_PROPOSE, proposeRules } from "./actions.js";
+import { appName, noteAiUse } from "./aiuse.js";
+import { tagEntry } from "./ledger.js";
+
+/** The `_meta` key Tollkit's relay uses to say which AI app sent a call that came in by the connector address. */
+export const CLIENT_META = "dev.tollkit/client";
 
 /** The only tools the wallet's built-in AI chat gets: read, look at prices, suggest rules for the owner to turn on, and suggest one-off swaps for the owner to approve. */
 export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_propose", "swap_propose", "paper_status"];
@@ -39,7 +44,14 @@ export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): Mc
       annotations: a.spends ? { destructiveHint: true, openWorldHint: true, idempotentHint: false }
         : /^(autopilot_(propose|cancel)|swap_propose)$/.test(a.name) ? { readOnlyHint: false, destructiveHint: a.name === "autopilot_propose", openWorldHint: true }
         : { readOnlyHint: true, openWorldHint: !["wallet_status", "receipts", "autopilot_rules", "paper_status"].includes(a.name) },
-    }, async (args: any) => json(await (run as any)(w, args ?? {})));
+    }, async (args: any, extra: any) => {
+      // Which app is asking: the relay says so for connector-address calls; a local app names itself when it connects.
+      const app = o.advisor ? "Tollkit AI" : appName(extra?._meta?.[CLIENT_META] ?? s.server.getClientVersion()?.name);
+      noteAiUse(w.dir, app, a.name);
+      const out = await (run as any)(w, args ?? {});
+      if (a.spends && typeof out?.receipt_id === "string") { try { tagEntry(out.receipt_id, { by: app }, w.dir); } catch { /* display only */ } }
+      return json(out);
+    });
   }
   return s;
 }

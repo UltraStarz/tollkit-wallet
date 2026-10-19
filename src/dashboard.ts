@@ -14,6 +14,7 @@ import { PolicySchema } from "./policy.js";
 import { resolveToken, toAtomic } from "./tokens.js";
 import { PAGE } from "./ui.js";
 import { qrSvg } from "./qr.js";
+import { readAiUse } from "./aiuse.js";
 import { Watcher } from "./watch.js";
 import { PriceFeed } from "./prices.js";
 import { Autopilot } from "./autopilot.js";
@@ -143,7 +144,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       }
       const p = url.pathname;
       if (req.method === "GET" && p === "/api/state") {
-        return send(res, 200, { ...w.status(), pending: pending(w.dir), receipts: w.receipts().slice(-200).reverse(),
+        return send(res, 200, { ...w.status(), pending: pending(w.dir), receipts: w.receipts().slice(-200).reverse(), ai_use: readAiUse(w.dir),
           live: watcher ? { events: watcher.events(), balances: watcher.balances(), heads: watcher.heads() } : null,
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
