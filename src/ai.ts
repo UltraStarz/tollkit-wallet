@@ -41,6 +41,22 @@ export interface RunOpts { sessionId?: string; cwd: string; mcpConfig: string; s
 export type Runner = (prompt: string, o: RunOpts) => Promise<{ text: string; sessionId?: string }>;
 
 export const CHECKIN_HOURS = [0, 1, 4, 12, 24];
+
+/**
+ * 0.8.4: which Tollkit AI model answers in the extension's chat. Fast (Claude Haiku, $0.02 a step) is the default;
+ * Smart (Claude Sonnet, $0.04 a step) is for harder questions. Kept in ai/tier.json.
+ */
+export type AiTier = "fast" | "smart";
+const tierFile = (dir?: string) => path.join(walletHome(dir), "ai", "tier.json");
+export function aiTier(dir?: string): AiTier {
+  try { return JSON.parse(readFileSync(tierFile(dir), "utf8"))?.tier === "smart" ? "smart" : "fast"; } catch { return "fast"; }
+}
+export function setAiTier(dir: string | undefined, t: unknown): AiTier {
+  if (t !== "fast" && t !== "smart") throw new Error("Pick Fast or Smart.");
+  const f = tierFile(dir); mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+  const tmp = `${f}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify({ tier: t }), { mode: 0o600 }); renameSync(tmp, f);
+  return t;
+}
 const MAX_MSGS = 200;
 
 export const SYSTEM = `You are the AI assistant inside the owner's Tollkit Wallet, on its AI tab. The owner talks to you about their own money: what they hold, what prices are doing, one-off trades, and autopilot rules. If they ask what AI or model you are, say plainly that you run on Claude, made by Anthropic.
@@ -89,13 +105,14 @@ export function claudeRunner(exe: string, timeoutMs = 240_000): Runner {
   });
 }
 
+type Provider = { id: string; name: string; note: string; setup?: string; tiers?: boolean };
 export class AiAssistant {
   private file: string;
   busy: { kind: "chat" | "checkin"; since: string; note?: string } | null = null;
   private approving = false;
   constructor(private readonly w: TollkitWallet, private readonly o: { dir?: string; runner?: Runner; exe?: string | null; now?: () => number; fetch?: typeof fetch;
     /** Who answers, when it isn't Claude Code on this computer (the browser extension uses Claude through Tollkit's server). */
-    provider?: { id: string; name: string; note: string; setup?: string };
+    provider?: Provider | (() => Provider);
     fuel?: FuelCtl } = {}) {
     this.file = path.join(walletHome(o.dir), "ai", "chat.json");
   }
@@ -117,10 +134,11 @@ export class AiAssistant {
     const c = this.load(), every = c.checkin.every_hours;
     const next = every && c.checkin.last ? new Date(Date.parse(c.checkin.last) + every * 3600_000).toISOString() : every ? new Date(this.now()).toISOString() : null;
     return {
-      provider: this.runner() ? (this.o.provider ?? { id: "claude-code", name: "Claude Code" }) : null,
+      provider: this.runner() ? ((typeof this.o.provider === "function" ? this.o.provider() : this.o.provider) ?? { id: "claude-code", name: "Claude Code" }) : null,
       ready: existsSync(passwordFile(this.o.dir)),
       busy: this.busy, messages: c.messages.slice(-60), checkin: { every_hours: every, last: c.checkin.last ?? null, next },
       fuel: this.o.fuel ? { mode: this.o.fuel.mode() } : null,
+      tier: aiTier(this.o.dir),
     };
   }
 

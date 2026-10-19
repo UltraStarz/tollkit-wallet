@@ -24,7 +24,7 @@ import { CHAINS as ALL_CHAINS, chainName, type Chain } from "./chains.js";
 import { existsSync } from "node:fs";
 import { passwordFile } from "./paths.js";
 import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLink, type AppId } from "./connect.js";
-import { AiAssistant } from "./ai.js";
+import { AiAssistant, setAiTier } from "./ai.js";
 import { Holdings, priceChart, coinId, erc20Info, type ChartRange } from "./holdings.js";
 import { KNOWN } from "./tokens.js";
 import { checkToken, findListed, isCoreToken, loadExtraLists, searchEvm, searchSolana, solanaInfo } from "./tokenlist.js";
@@ -442,6 +442,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         void ai.topUpAndRetry(id, b.auto === true).catch(() => {});
         return send(res, 200, { ok: true });
       }
+      // 0.8.4: Fast (2¢ a step) or Smart (4¢); fuel limits still apply, so it needs no password.
+      if (p === "/api/ai/tier") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); setAiTier(w.dir, b.tier); return send(res, 200, { ok: true }); }
       if (p === "/api/ai/fuel") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); ai.setFuelMode(String(b.mode)); return send(res, 200, { ok: true }); }
       if (p === "/api/ai/new") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); if (ai.busy) return send(res, 409, { error: "Wait for the AI to finish." }); ai.newChat(); return send(res, 200, { ok: true }); }
       // Everything below changes money rules or moves funds: password again, every time.

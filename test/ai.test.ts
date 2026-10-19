@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createKeystore } from "../src/keystore.js";
 import { TollkitWallet } from "../src/wallet.js";
-import { AiAssistant, claudeRunner, SYSTEM, type Runner } from "../src/ai.js";
+import { AiAssistant, claudeRunner, SYSTEM, aiTier, setAiTier, type Runner } from "../src/ai.js";
 import { proposeRules, priceHistory } from "../src/actions.js";
 import { saveTelegram } from "../src/wallet.js";
 
@@ -123,6 +123,14 @@ const out = await claudeRunner(fake)("Owner: hi", { cwd: dir, mcpConfig: "{}", s
 const argv = JSON.parse(out.text);
 const at = (f: string) => argv[argv.indexOf(f) + 1];
 check(argv[0] === "-p" && argv[1] === "Owner: hi" && at("--tools") === "" && argv.includes("--strict-mcp-config") && at("--allowedTools") === "mcp__tollkit-wallet__*" && at("--permission-mode") === "dontAsk" && at("--resume") === "s1" && at("--system-prompt") === "SYS" && !argv.includes("--bare") && out.sessionId === "s9", "Claude Code is run locked down: no built-in tools, only the wallet server, deny the rest", argv);
+
+// 0.8.4: Fast (default) or Smart, saved per wallet and shown in the chat state.
+check(aiTier(dir) === "fast" && (ai.view() as any).tier === "fast", "Fast is the default model tier");
+setAiTier(dir, "smart");
+check(aiTier(dir) === "smart" && (ai.view() as any).tier === "smart", "Smart is remembered and shown");
+let badTier = ""; try { setAiTier(dir, "huge"); } catch (e: any) { badTier = e.message; }
+check(/Fast or Smart/.test(badTier) && aiTier(dir) === "smart", "an unknown tier is refused");
+setAiTier(dir, "fast");
 
 console.log(`\nai: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
