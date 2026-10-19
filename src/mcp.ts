@@ -27,7 +27,7 @@ export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", 
   "bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "stake_info", "buy_link",
   "setup_request", "setup_requests", "setup_cancel"];
 
-export const VERSION = "0.8.4";
+export const VERSION = "0.8.5";
 
 export function passwordFromEnv(): string {
   const file = process.env.TOLLKIT_WALLET_PASSWORD_FILE;

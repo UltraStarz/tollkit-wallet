@@ -29,6 +29,7 @@ import { Holdings, priceChart, coinId, erc20Info, type ChartRange } from "./hold
 import { KNOWN } from "./tokens.js";
 import { checkToken, findListed, isCoreToken, loadExtraLists, searchEvm, searchSolana, solanaInfo } from "./tokenlist.js";
 import { buildBot, maybeShare, setShare, shareSettings, summarize, TEMPLATES } from "./bots.js";
+import { PriceTape, botLevels, botNext, botTrades, coinbaseProduct, hourlyCandles, replay } from "./botviz.js";
 import { setTradeMode, tradeMode } from "./trademode.js";
 import { DEFAULT_PROXY } from "./swap.js";
 import { buyLink, BUY_ASSETS } from "./buy.js";
@@ -74,8 +75,18 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const prices = o.watch === false ? null : new PriceFeed();
   prices?.start();
   // The autopilot runs while the dashboard is open (live money; paper mode is `tollkit-wallet autopilot --paper`).
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) }) : null;
+  // 0.8.5: every price the autopilot checks a bot against, kept a week, so any token's bot has a chart.
+  const tape = new PriceTape(w.dir);
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id), onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
   autopilot?.start();
+  // The Bots screen: each bot's summary plus its next move and latest trades (0.8.5).
+  const botsView = () => {
+    const live = w.rules().list().filter((r) => !r.archived), today = new Date().toISOString().slice(0, 10);
+    return summarize(live).map((b) => {
+      const rs = live.filter((r) => (r.bot ?? `rule-${r.id}`) === b.id), trades = botTrades(rs, 20);
+      return { ...b, next: botNext(rs, b.last_price), trades, trades_today: trades.filter((t) => t.ok && t.ts.startsWith(today)).length, chartable: !!coinbaseProduct(b.token) || tape.series(b.chain, b.token).length > 1 };
+    });
+  };
   // "Keep running when closed": hand the switched-on rules to Tollkit's server and bring back what it traded.
   const alwaysSync = async () => {
     if (!w.always().anyOn()) return;
@@ -206,7 +217,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
           ideas: w.ideas().list().slice(-60),
           always: w.always().view(),
-          bots: summarize(w.rules().list().filter((r) => !r.archived)), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
+          bots: botsView(), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
           ai: ai ? ai.view() : null,
@@ -217,6 +228,20 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           holdings: holdings ? holdings.snapshot() : null, coins });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
+      // 0.8.5: a price chart for a bot (its levels and trades on it) or for a token being set up.
+      if (req.method === "GET" && p === "/api/bots/chart") {
+        const id = url.searchParams.get("bot");
+        const rs = id ? w.rules().list().filter((r) => (r.bot ?? `rule-${r.id}`) === id) : [];
+        const chain = (rs[0]?.chain ?? url.searchParams.get("chain") ?? "base") as Chain, token = rs[0]?.token ?? String(url.searchParams.get("token") ?? "");
+        if (!token) return send(res, 400, { error: "Which bot or token?" });
+        const days = Math.min(30, Math.max(1, Number(url.searchParams.get("days")) || 7));
+        const product = coinbaseProduct(token);
+        let series: [number, number][] = [], source: string | null = null;
+        if (product) { try { series = (await hourlyCandles(product, days * 24)).map((k) => [k.t, k.c]); source = "Coinbase, hourly"; } catch { /* fall back to the tape */ } }
+        if (!series.length) { series = tape.series(chain, token, Date.now() - days * 86_400_000); source = series.length ? "Prices this wallet saw" : null; }
+        const price = rs.map((r) => r.state.last_price).find((x) => typeof x === "number") ?? series.at(-1)?.[1] ?? null;
+        return send(res, 200, { token, chain, source, series, price, levels: botLevels(rs), trades: botTrades(rs, 50).filter((t) => t.ok && t.price), next: rs.length ? botNext(rs, price) : null, started: rs.map((r) => r.created_at).sort()[0] ?? null });
+      }
       // Receive: this wallet's own addresses, each with a QR code to scan from another wallet or an exchange.
       if (req.method === "GET" && p === "/api/receive") {
         const evm = w.addresses.evm, sol = w.addresses.solana;
@@ -290,6 +315,15 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         const made = await w.rules().addBot(built.rules, "owner", false);
         void autopilot?.tick(); void alwaysSync();
         return send(res, 200, { bot: built.bot, rules: made.map((r) => r.id) });
+      }
+      // 0.8.5: what a bot's settings would have done over the last 30 days. Nothing is traded or saved.
+      if (p === "/api/bots/replay") {
+        const chain = String(b.chain) as Chain;
+        if (!CHAINS.includes(chain)) return send(res, 400, { error: "Pick a network." });
+        let sym = String(b.token ?? "").trim();
+        try { const t = await resolveToken(chain, sym); sym = t.symbol || sym; } catch { /* keep what was typed */ }
+        try { return send(res, 200, await replay({ template: String(b.template ?? ""), chain, token: sym, params: (b.params ?? {}) as Record<string, unknown>, hold_usd: Number(b.hold_usd) || undefined, days: Number(b.days) || 30 })); }
+        catch (e) { return send(res, 400, { error: (e as Error).message }); }
       }
       if (p === "/api/bots/status") {
         const st = String(b.status), id = String(b.bot ?? "");
@@ -508,7 +542,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); tape.flush(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 

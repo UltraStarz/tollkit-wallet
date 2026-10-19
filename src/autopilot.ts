@@ -36,7 +36,11 @@ const QUOTE_PRICE_TTL = 60_000;
 
 export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () => number; leaseId?: string; resolve?: typeof resolveToken; onEvent?: (e: AutopilotEvent) => void;
   /** Rules Tollkit's server is running while the app is closed (src/alwayson.ts): the device leaves them alone. */
-  skip?: (id: string) => boolean }
+  skip?: (id: string) => boolean;
+  /** 0.8.5: a replay (src/botviz.ts) runs alone in memory and takes no lease. */
+  noLease?: boolean;
+  /** 0.8.5: every price a rule was checked against (the Bots screen's price tape). */
+  onPrice?: (r: Rule, price: number) => void }
 export interface AutopilotEvent { type: "filled" | "failed" | "skipped" | "expired" | "cancelled"; rule: Rule; detail: string }
 
 export class Autopilot {
@@ -62,6 +66,7 @@ export class Autopilot {
 
   /** Only one process runs rules. A lease older than 3 intervals is free to take. */
   private takeLease(): boolean {
+    if (this.o.noLease) return (this.holdsLease = true);
     try {
       if (existsSync(this.leaseFile)) {
         const l = JSON.parse(readFileSync(this.leaseFile, "utf8"));
@@ -126,6 +131,7 @@ export class Autopilot {
     const t = await this.token(r.chain, r.token);
     const p = await this.price(r.chain, t);
     if (p === undefined) { await this.record(r.id, { checked: true }); return; }
+    try { this.o.onPrice?.(r, p); } catch { /* charts never break trading */ }
     if (r.kind === "grid") { await this.record(r.id, { price: p, checked: true }); await this.grid(r, t, p); return; }
     let high = r.state.high;
     if (r.kind === "trailing_stop") high = Math.max(high ?? p, p);
