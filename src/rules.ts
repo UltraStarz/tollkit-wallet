@@ -76,6 +76,8 @@ export interface Rule extends RuleInput {
   created_by: "owner" | "agent";
   created_at: string;
   activated_at?: string;
+  /** The owner removed this finished rule from their bot list. Its trades stay in the history. */
+  archived?: boolean;
   state: {
     high?: number;        // trailing stop: highest price seen while active
     runs: number;         // fills so far
@@ -213,6 +215,17 @@ export class RuleStore {
       made.push(await this.add(ref, by, autoActivate));
     }
     return made;
+  }
+
+  /** Removes finished rules (done, cancelled or expired) from the bot list; a rule that can still trade can't be removed. */
+  async archive(ids: string[]): Promise<number> {
+    return this.mutate((rules) => {
+      const rs = ids.map((id) => rules.find((x) => x.id === id));
+      if (rs.some((r) => !r)) throw new Error("No such rule.");
+      if (rs.some((r) => !["done", "cancelled", "expired"].includes(r!.status))) throw new Error("Stop it first; only stopped or finished bots can be removed.");
+      for (const r of rs) r!.archived = true;
+      return rs.length;
+    });
   }
 
   /** Owner actions. Turning a rule on resets the trailing high and failure count. */

@@ -81,6 +81,16 @@ check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group &
   check(s.get(tp!.id)!.status === "cancelled", "stopping the buy cancels the take-profit");
 }
 
+// --- removing a stopped bot from the list
+{
+  const dir = tmp(), s = new RuleStore(dir);
+  const [buy, tp] = await s.addBot(buildBot("dip", "ETH", "base", {}, 2500).rules, "owner", true);
+  const live = await s.archive([buy!.id]).then(() => "removed", (e: Error) => e.message);
+  check(/Stop it first/.test(live) && !s.get(buy!.id)!.archived, "a bot that can still trade can't be removed", live);
+  await s.setStatus(buy!.id, "cancelled"); await s.setStatus(tp!.id, "cancelled");
+  check((await s.archive([buy!.id, tp!.id])) === 2 && s.get(buy!.id)!.archived === true && s.list().length === 2, "a stopped bot can be removed from the list; its rules and trades are kept");
+}
+
 // --- grid
 {
   const dir = tmp(), m = market(), s = new RuleStore(dir), ap = new Autopilot(s, m.exec, m.prices, { dir });

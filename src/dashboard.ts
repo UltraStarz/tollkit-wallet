@@ -149,7 +149,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
           ideas: w.ideas().list().slice(-60),
           always: w.always().view(),
-          bots: summarize(w.rules().list()), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
+          bots: summarize(w.rules().list().filter((r) => !r.archived)), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
           ai: ai ? ai.view() : null,
@@ -240,6 +240,19 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         for (const r of rs) await w.rules().setStatus(r.id, st as "active" | "paused" | "cancelled");
         void autopilot?.tick(); void alwaysSync();
         return send(res, 200, { ok: true });
+      }
+      // Removing a stopped or finished bot only tidies the list: its trades stay in Activity, and nothing can trade.
+      if (p === "/api/bots/remove") {
+        const done = (r: { status: string }) => ["done", "cancelled", "expired"].includes(r.status);
+        const all = w.rules().list().filter((r) => !r.archived && r.status !== "proposed");
+        const groups = new Map<string, typeof all>();
+        for (const r of all) { const k = r.bot ?? `rule-${r.id}`; groups.set(k, [...(groups.get(k) ?? []), r]); }
+        const ids = b.finished === true ? [...groups.keys()].filter((k) => groups.get(k)!.every(done)) : [String(b.bot ?? "")];
+        const rs = ids.flatMap((k) => groups.get(k) ?? []);
+        if (!rs.length) return send(res, 400, { error: b.finished === true ? "There are no stopped or finished bots to remove." : "That bot isn't in your list." });
+        if (!rs.every(done)) return send(res, 400, { error: "Stop it first; only stopped or finished bots can be removed." });
+        await w.rules().archive(rs.map((r) => r.id));
+        return send(res, 200, { ok: true, removed: ids.length });
       }
       if (p === "/api/trade-mode") { try { return send(res, 200, { trade_mode: setTradeMode(b.mode, w.dir) }); } catch (e) { return send(res, 400, { error: (e as Error).message }); } }
       if (p === "/api/bots/share") { setShare(b.on === true, w.dir); if (b.on === true) void botsBeat(); return send(res, 200, { share: b.on === true }); }

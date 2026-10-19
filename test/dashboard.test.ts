@@ -1,4 +1,5 @@
 /** Dashboard server: access control, state, approvals end-to-end, password-gated changes. Local only; fake quotes. */
+import { buildBot } from "../src/bots.js";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { zxData } from "./fixtures/zx.js";
 import os from "node:os";
@@ -105,6 +106,18 @@ check(rm.status !== 403, "connect: removing an app doesn't need the password", r
 const rcv = await j("/api/receive");
 check(rcv.evm.address === st.addresses.evm && rcv.solana.address === st.addresses.solana && /^<svg[^>]*viewBox="0 0 \d+ \d+"/.test(rcv.evm.qr) && /<path d="M/.test(rcv.solana.qr) && rcv.evm.qr !== rcv.solana.qr, "receive: both addresses, each with its own QR code");
 check((await raw("/api/receive", { token: null })).status === 401, "receive: refused without the token");
+{
+  const made = await w.rules().addBot(buildBot("dip", "ETH", "base", {}, 2500).rules, "owner", true);
+  const started = { status: made.length === 2 ? 200 : 0 };
+  const id = (await j("/api/state")).bots.find((x: any) => x.status !== "done" && x.status !== "stopped")?.id;
+  const early = await j("/api/bots/remove", { method: "POST", body: { bot: id } });
+  await j("/api/bots/status", { method: "POST", body: { bot: id, status: "cancelled" } });
+  const rm = await j("/api/bots/remove", { method: "POST", body: { bot: id } });
+  const after = await j("/api/state");
+  check(started.status === 200 && early.status === 400 && rm.status === 200 && !after.bots.some((x: any) => x.id === id) && after.rules.some((r: any) => r.bot === id && r.archived), "bots: a running bot can't be removed; once stopped, Remove takes it off the list and keeps its rules", { started: started.status, early, rm });
+  const none = await j("/api/bots/remove", { method: "POST", body: { finished: true } });
+  check(none.status === 400, "bots: nothing left to clear says so", none);
+}
 await d.close();
 console.log(`\ndashboard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
