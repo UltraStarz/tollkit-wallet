@@ -725,7 +725,7 @@ var IDB={},IDE={};
 function ideaAct(id,act){if(IDB[id])return;IDB[id]=act;delete IDE[id];render();api("/ideas",{id:id,action:act}).then(function(){return refresh()}).catch(function(e){IDE[id]=e.message;return refresh().then(function(){if(!(S.ideas||[]).some(function(x){return x.id===id}))flash=[0,e.message]})}).then(function(){delete IDB[id];render()})}
 function ideaCard(i){var b=IDB[i.id],chain=CHAIN_NAMES[i.chain]||i.chain,est=Number(i.est.buy_amount),left=Math.max(0,Math.ceil((Date.parse(i.created_at)+15*60e3-Date.now())/60e3)),st=b==="approve"?"running":i.status;
 var head='<div style="display:flex;gap:10px;align-items:center">'+tokIcon(i.buy,i.chain)+'<div style="min-width:0"><div>Swap '+esc(i.amount)+' '+esc(i.sell)+' for '+esc(i.buy)+'</div><div class="sm mut">'+esc(chain)+' · about '+esc(fmtAmt(est))+' '+esc(i.buy)+' ('+fmtUsd(i.est.usd)+') · fee '+fmtUsd(i.est.fee_usd)+'</div></div></div>';
-var why=i.reason?'<div class="sm idwhy">'+esc(i.reason)+'</div>':"";
+var why=(i.chain==="solana"?'<div class="sm mut jupby">Powered by Jupiter'+(i.est.route&&i.est.route!=="0x"?' · '+esc(i.est.route):'')+'</div>':i.est.route==="0x"?'<div class="sm mut">Priced by 0x</div>':'')+(i.reason?'<div class="sm idwhy">'+esc(i.reason)+'</div>':"");
 var foot=st==="proposed"?'<div class="btns"><button class="b ok" onclick="ideaAct(\''+i.id+'\',\'approve\')"'+(b?" disabled":"")+'>Approve swap</button><button class="b no" onclick="ideaAct(\''+i.id+'\',\'dismiss\')"'+(b?" disabled":"")+'>Dismiss</button></div><div class="sm mut">Gets a fresh price when you approve. Expires in '+left+' min.</div>'
 :st==="running"?'<div class="sm tc-ctyping"><i></i><i></i><i></i><span>Swapping… this can take a few seconds</span></div>'
 :st==="done"?'<div class="sm"><span class="ok">Done</span>'+(i.result&&i.result.tx&&EXP[i.chain]?' · <a target="_blank" rel="noopener" href="'+EXP[i.chain]+esc(i.result.tx)+'">tx</a>':'')+(i.result&&i.result.usd?' · '+fmtUsd(i.result.usd):'')+'</div>'
@@ -868,7 +868,7 @@ if(BOT.tab==="time")h+=botTimeline(L);else{var sh=L.filter(BTAB[BOT.tab]);h+=sh.
 else h+='<div class="mut sm">No bots yet. Pick one below: you’ll see where it buys and sells on a chart, and can replay it over the last 30 days before it starts. Every bot follows your limits like any trade.</div>';
 h+='<h3>Start a bot</h3><div class="sm mut" style="margin-bottom:6px">Plain rules, no AI. You see every step before it starts.</div><div class="botcat">'+T.map(function(t){var on=BOT.tpl===t.id;return tplCard(t,on,L)+(on?'<div class="botwrap'+(BOT.anim?" drop":"")+'"><div class="botin">'+botForm()+'</div></div>':'')}).join("")+'</div>';
 BOT.anim=false;
-h+='<label class="botshare"><input type="checkbox" id="botshare"'+(S.bot_share?" checked":"")+' onchange="botShare(this.checked)"> Share my bots’ results with Tollkit’s public bot board (anonymous: bot type, token, trade counts and result %, no addresses or amounts)</label>';
+h+='<label class="botshare"><input type="checkbox" id="botshare"'+(S.bot_share?" checked":"")+' onchange="botShare(this.checked)"> Share my bots’ results with Tollkit’s public bot board (anonymous: bot type, token, trade counts and result %, no addresses or amounts)</label><div class="sm mut" style="margin-top:6px">Solana bot trades are powered by Jupiter (Jupiter Ultra or Metis); Base and Ethereum trades are priced by 0x.</div>';
 return h}
 
 // ── Each strategy as a small moving picture: the price line draws itself and the bot acts where it would.

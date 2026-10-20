@@ -30,7 +30,7 @@ export interface TradeIdea {
   created_at: string;
   status: IdeaStatus;
   /** The quote the idea was based on (an estimate; Approve gets a fresh one). */
-  est: { usd: number; fee_usd: number; buy_amount: string; min_buy_amount: string };
+  est: { usd: number; fee_usd: number; buy_amount: string; min_buy_amount: string; route?: string };
   result?: { tx?: string; reason?: string; usd?: number; at: string };
 }
 
@@ -118,7 +118,7 @@ export async function proposeSwap(w: TollkitWallet, a: { chain: string; sell: st
       chain, sell: sell.symbol, buy: buy.symbol, amount: a.amount.trim(),
       sell_token: sell.address, buy_token: buy.address, sell_decimals: sell.decimals, buy_decimals: buy.decimals,
       ...(a.slippage_bps ? { slippage_bps: slippage } : {}), ...(a.reason ? { reason: a.reason.slice(0, 300) } : {}),
-      est: { usd, fee_usd: q.quote.fee_usd ?? 0, buy_amount: formatUnits(BigInt(q.quote.buy_amount), buy.decimals), min_buy_amount: formatUnits(BigInt(q.quote.min_buy_amount), buy.decimals) },
+      est: { usd, fee_usd: q.quote.fee_usd ?? 0, buy_amount: formatUnits(BigInt(q.quote.buy_amount), buy.decimals), min_buy_amount: formatUnits(BigInt(q.quote.min_buy_amount), buy.decimals), ...(q.quote.route ? { route: q.quote.route } : {}) },
     });
     return { ok: true, idea: { id: idea.id, swap: `${idea.amount} ${idea.sell} -> about ${(+idea.est.buy_amount).toPrecision(4)} ${idea.buy} on ${chain}`, usd: +usd.toFixed(2), fee_usd: +idea.est.fee_usd.toFixed(2) },
       note: "Shown to the owner as a card with an Approve button. Nothing has traded. It expires in 15 minutes." };

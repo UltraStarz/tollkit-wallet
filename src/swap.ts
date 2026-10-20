@@ -30,6 +30,12 @@ export interface SwapQuote {
   fee_separate?: boolean;
   /** Solana only: built from Jupiter's instructions with Tollkit's fee (in SOL) inside the same transaction. */
   fee_inline?: boolean;
+  /**
+   * 0.8.6: the API that priced the swap, as Jupiter's API license (cl. 2.3, 8.4) says to show it next to "Powered by
+   * Jupiter": "Jupiter Ultra" for the /order meta-aggregator (Ultra's successor), "Metis" for /build router
+   * instructions. "0x" on Base and Ethereum.
+   */
+  route?: "Jupiter Ultra" | "Metis" | "0x";
   raw: any;
 }
 
@@ -99,7 +105,7 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
             chain: "solana", venue: "jupiter", sell_token: req.sell_token, buy_token: req.buy_token,
             sell_amount: String(b.inAmount ?? req.sell_amount), buy_amount: String(b.outAmount), min_buy_amount: String(b.otherAmountThreshold ?? b.outAmount),
             fee_bps: Number(b.tollkit_fee.bps) === 0 ? 0 : SWAP_FEE_BPS, venue_fee_bps: 0, usd_value: null, fee_usd: null,
-            raw: { build: b, swapUsdValue: j.swapUsdValue, inUsdValue: j.inUsdValue }, fee_inline: true,
+            raw: { build: b, swapUsdValue: j.swapUsdValue, inUsdValue: j.inUsdValue }, fee_inline: true, route: "Metis",
           });
         }
       } catch { /* the order below, with the fee sent separately */ }
@@ -109,7 +115,7 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
       sell_amount: String(j.inAmount ?? req.sell_amount), buy_amount: String(j.outAmount), min_buy_amount: String(j.otherAmountThreshold ?? j.outAmount),
       // Tollkit's fee is always 0.5%; when the route doesn't carry it, whatever the route does carry is Jupiter's own.
       fee_bps: SWAP_FEE_BPS, venue_fee_bps: inRoute ? 0 : Math.max(0, Number(j.platformFee?.feeBps ?? j.feeBps ?? 0) || 0),
-      usd_value: null, fee_usd: null, raw: j, ...(inRoute ? {} : { fee_separate: true }),
+      usd_value: null, fee_usd: null, raw: j, ...(inRoute ? {} : { fee_separate: true }), route: "Jupiter Ultra",
     };
     return withUsd(q);
   }
@@ -129,7 +135,7 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
   return withUsd({
     chain: req.chain, venue: "0x", sell_token: req.sell_token, buy_token: req.buy_token,
     sell_amount: String(j.sellAmount ?? req.sell_amount), buy_amount: String(j.buyAmount), min_buy_amount: String(j.minBuyAmount ?? j.buyAmount),
-    fee_bps: feeBps, venue_fee_bps: venueBps, usd_value: null, fee_usd: null, raw: j,
+    fee_bps: feeBps, venue_fee_bps: venueBps, usd_value: null, fee_usd: null, raw: j, route: "0x",
   });
 }
 
