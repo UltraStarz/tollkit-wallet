@@ -393,7 +393,7 @@ export class SuperBot {
     if (body.length > SUPERBOT.maxContextChars) { context.recent_decisions = []; context.retired_recently = []; body = JSON.stringify({ snapshot_id: snap.id, context }); }
     const r = await this.w.pay(`${this.d.proxy}${SUPERBOT.stepPath}`, { method: "POST", headers: { "content-type": "application/json" }, body }, { publicOnly: true, by: "superbot" });
     const j: any = r.response ? await r.response.json().catch(() => null) : null;
-    if (!r.paid || !r.response?.ok || !j?.decision) {
+    if (!(r.paid || r.owner) || !r.response?.ok || !j?.decision) {
       const why = r.refused ? `${r.refused.reason}` : j?.error ?? `Tollkit's server answered HTTP ${r.status ?? "?"}`;
       await this.update((x) => { x.stats.last_error = `AI step: ${why}`.slice(0, 300); x.stats.last_snapshot = snap.id; });
       return;

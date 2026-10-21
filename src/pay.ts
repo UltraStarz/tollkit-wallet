@@ -17,7 +17,7 @@ import { ExactSvmSchemeV1 } from "@x402/svm/exact/v1/client";
 import { Mppx, evm as mppEvm } from "mppx/client";
 import { Receipt, evm as mppEvmAssets } from "mppx";
 import { solana as mppSolana, resolveStablecoinMint } from "@solana/mpp/client";
-import { createKeyPairSignerFromBytes } from "@solana/kit";
+import { createKeyPairFromBytes, createKeyPairSignerFromBytes, getBase58Decoder, signBytes } from "@solana/kit";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Keypair } from "@solana/web3.js";
 import type { HDNodeWallet, Wallet } from "ethers";
@@ -64,6 +64,8 @@ export interface PayDeps {
 
 export interface PayResult {
   paid: boolean;
+  /** Served free with the owner pass: this wallet is Tollkit's own payout wallet, so nothing was paid. */
+  owner?: boolean;
   status: number | null;
   response: Response | null;
   offer?: Offer;
@@ -170,6 +172,32 @@ function replayFirst(first: Response, f: Fetch): Fetch {
 
 export interface Signers { evm: Wallet | HDNodeWallet; solana: Keypair }
 
+/**
+ * The owner pass. When a tollkit.dev quote asks to be paid to this wallet's own address (the owner pointed
+ * Tollkit's revenue here), paying would send USDC to itself, which the facilitator refuses. Instead, sign
+ * "TOLLkit owner pass / METHOD path / time" with that address's key; Tollkit's server checks it and serves
+ * the call free. Only for https tollkit.dev hosts, and only when the quote's payTo is this wallet.
+ */
+export const OWNER_HEADER = "x-tollkit-owner";
+export function isTollkitHost(url: string): boolean {
+  try { const u = new URL(url); return u.protocol === "https:" && (u.hostname === "tollkit.dev" || u.hostname.endsWith(".tollkit.dev")); } catch { return false; }
+}
+export async function ownerPassFor(url: string, init: RequestInit | undefined, first: Response, keys: Signers, now = Date.now()): Promise<string | null> {
+  if (!isTollkitHost(url)) return null;
+  let accepts: any[] = [];
+  try { accepts = decodePaymentRequiredHeader(first.headers.get("payment-required") ?? "").accepts ?? []; } catch { return null; }
+  const evm = keys.evm.address, sol = keys.solana.publicKey.toBase58();
+  const ts = Math.floor(now / 1000);
+  const msg = `TOLLkit owner pass\n${(init?.method ?? "GET").toUpperCase()} ${new URL(url).pathname}\n${ts}`;
+  if (accepts.some((a) => typeof a?.payTo === "string" && a.payTo.toLowerCase() === evm.toLowerCase())) return `evm.${evm}.${ts}.${await keys.evm.signMessage(msg)}`;
+  if (accepts.some((a) => a?.payTo === sol)) {
+    const kp = await createKeyPairFromBytes(keys.solana.secretKey);
+    const sig = await signBytes(kp.privateKey, new TextEncoder().encode(msg));
+    return `solana.${sol}.${ts}.${getBase58Decoder().decode(sig)}`;
+  }
+  return null;
+}
+
 /** Fetch a URL, paying if it asks, within the owner's rules. */
 export async function payFetch(url: string, init: RequestInit | undefined, keys: Signers, deps: PayDeps): Promise<PayResult> {
   const f = deps.fetch ?? fetch;
@@ -178,6 +206,16 @@ export async function payFetch(url: string, init: RequestInit | undefined, keys:
   const body = await first.clone().text();
   const proto = protocolOf(first, body);
   if (!proto) return { paid: false, status: 402, response: first, refused: { code: "unknown_protocol", reason: "The seller asked for payment in a format the wallet doesn't speak." } };
+  if (proto === "x402") {
+    const pass = await ownerPassFor(url, init, first, keys).catch(() => null);
+    if (pass) {
+      const headers = new Headers(init?.headers);
+      headers.set(OWNER_HEADER, pass);
+      const res = await f(url, { ...init, headers });
+      return { paid: false, owner: true, status: res.status, response: res,
+        ...(res.status === 401 || res.status === 402 ? { refused: { code: "owner_pass_refused", reason: "This is Tollkit's payout wallet, and Tollkit's server didn't accept its owner pass. Nothing was charged." } } : {}) };
+    }
+  }
   const evmAccount = privateKeyToAccount(keys.evm.privateKey as `0x${string}`);
   const solSigner = await createKeyPairSignerFromBytes(keys.solana.secretKey);
   return proto === "x402"
