@@ -8,6 +8,8 @@
  * with `tollkit-wallet autopilot` (for a server that stays on). Only one
  * process runs rules at a time (a lease file), so two copies never double-fill.
  */
+import { checkAlert, hourlyCloses } from "./indicators.js";
+import { autopilotSpentToday, isAutopilotRule, isPaperRule, nothingToSell, sellableFor } from "./ownership.js";
 import { plainError } from "./errors.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -40,8 +42,12 @@ export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () 
   /** 0.8.5: a replay (src/botviz.ts) runs alone in memory and takes no lease. */
   noLease?: boolean;
   /** 0.8.5: every price a rule was checked against (the Bots screen's price tape). */
-  onPrice?: (r: Rule, price: number) => void }
-export interface AutopilotEvent { type: "filled" | "failed" | "skipped" | "expired" | "cancelled"; rule: Rule; detail: string }
+  onPrice?: (r: Rule, price: number) => void;
+  /** 0.9.1: dollars of live trades Autopilot's own rules may make today (its share of the daily limit), or null for no cap. */
+  autopilotDailyCap?: () => number | null;
+  /** 0.9.1: hourly closes for alert indicators (tests pass their own). */
+  hourly?: (chain: Chain, t: Token) => Promise<number[]> }
+export interface AutopilotEvent { type: "filled" | "failed" | "skipped" | "expired" | "cancelled" | "alert"; rule: Rule; detail: string }
 
 export class Autopilot {
   private timer: NodeJS.Timeout | null = null;
@@ -118,6 +124,7 @@ export class Autopilot {
     if (this.o.skip?.(r.id)) return;
     const now = this.now();
     if (r.expires_at && Date.parse(r.expires_at) <= now) { await this.finish(r.id, "expired", "Expired before it triggered."); return; }
+    if (r.state.hold_until && Date.parse(r.state.hold_until) > now) return;
     if (r.state.next_run && Date.parse(r.state.next_run) > now) {
       // DCA waits for its schedule; a failed attempt waits for its retry time.
       if (r.kind === "dca" || r.state.failures > 0) return;
@@ -133,6 +140,7 @@ export class Autopilot {
     if (p === undefined) { await this.record(r.id, { checked: true }); return; }
     try { this.o.onPrice?.(r, p); } catch { /* charts never break trading */ }
     if (r.kind === "grid") { await this.record(r.id, { price: p, checked: true }); await this.grid(r, t, p); return; }
+    if (r.kind === "alert") { await this.record(r.id, { price: p, checked: true }); await this.alert(r, t, p); return; }
     let high = r.state.high;
     if (r.kind === "trailing_stop") high = Math.max(high ?? p, p);
     const hit =
@@ -161,10 +169,16 @@ export class Autopilot {
     } else {
       let bal = await this.exec.balance(r.chain, t);
       if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
+      // 0.9.1: Autopilot's rules sell only what its strategies bought; everyone else's leave those coins alone.
+      const whole = bal;
+      bal = sellableFor(r, bal, this.store.list(), t, this.exec.mode === "paper");
       const from = r.sell_from ? this.store.get(r.sell_from) : undefined;
       let amt = from ? BigInt(from.state.bought_atomic ?? "0") : r.sell_percent !== undefined ? (bal * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : BigInt(toAtomic(r.sell_amount!, t.decimals));
       if (amt > bal) amt = bal;
-      if (amt <= 0n) { await this.fail(r, "insufficient_balance", `No ${t.symbol} to sell.`); return; }
+      if (amt <= 0n) {
+        if (bal <= 0n && (isAutopilotRule(r) || whole > 0n)) { await this.hold(r, this.now() + 5 * 60_000, nothingToSell(r, t.symbol, whole)); return; }
+        await this.fail(r, "insufficient_balance", `No ${t.symbol} to sell.`); return;
+      }
       req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps };
     }
     // Limit orders only fill at their price or better (1% allowance for the fee and spread). Stops always exit.
@@ -175,6 +189,7 @@ export class Autopilot {
       const eff = (q.quote.usd_value ?? 0) / units;
       if (r.kind === "limit_buy" ? eff > r.trigger_price! * 1.01 : eff < r.trigger_price! * 0.99) return; // the market moved back; keep waiting
     }
+    if (await this.overShare(r, BUY_KINDS.includes(r.kind) ? r.amount_usd! : (Number(req.sell_amount) / 10 ** t.decimals) * price)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
     const usd = res.quote?.usd_value ?? undefined;
@@ -187,7 +202,7 @@ export class Autopilot {
       x.state.fills = x.state.fills.slice(-50);
       tally(x, buy ? "buy" : "sell", usd, units);
       if (buy) x.state.bought_atomic = (BigInt(x.state.bought_atomic ?? "0") + BigInt(String(res.quote?.buy_amount ?? "0"))).toString();
-      x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined;
+      x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined; x.state.hold_until = undefined;
       if (x.kind === "dca") {
         x.state.next_run = nextRun(x, now).toISOString();
         if (x.times && x.state.runs >= x.times) x.status = "done";
@@ -212,6 +227,7 @@ export class Autopilot {
     const sellAt = g.atomic.findIndex((a, i) => a !== null && p >= L[i + 1]!);
     if (sellAt >= 0) {
       const req: SwapRequest = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: g.atomic[sellAt]!, slippage_bps: this.exec.slippageBps };
+      if (await this.overShare(r, (Number(g.atomic[sellAt]!) / 10 ** t.decimals) * p)) return;
       const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
       if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
       const usd = res.quote?.usd_value ?? undefined, units = Number(req.sell_amount) / 10 ** t.decimals;
@@ -237,6 +253,7 @@ export class Autopilot {
     for (let i = L.length - 2; i >= 0; i--) if (g.atomic[i] === null && p <= L[i]! && L[i]! - p < step) { buyAt = i; break; }
     if (buyAt < 0) return;
     const req: SwapRequest = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.exec.slippageBps };
+    if (await this.overShare(r, r.amount_usd!)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
     const usd = res.quote?.usd_value ?? undefined, atomic = String(res.quote?.buy_amount ?? "0"), units = Number(atomic) / 10 ** t.decimals;
@@ -251,6 +268,47 @@ export class Autopilot {
       return { ...x };
     });
     this.o.onEvent?.({ type: "filled", rule: updated, detail: `Grid bought level ${buyAt + 1} at about $${p}${usd ? ` for $${usd.toFixed(2)}` : ""}` });
+  }
+
+  /**
+   * 0.9.1: an alert only notifies. It fires when its condition holds, then waits for the condition to clear before it
+   * can fire again (and never more than once an hour). A crossing alert set while the price is already across waits
+   * for it to cross back first, so it reports a real cross.
+   */
+  private async alert(r: Rule, t: Token, p: number) {
+    let closes: number[] | null = null;
+    if (r.alert !== "above" && r.alert !== "below") { try { closes = await (this.o.hourly ?? ((c, tk) => hourlyCloses(c, tk)))(r.chain, t); } catch { closes = null; } }
+    const c = checkAlert(r, p, closes), now = this.now();
+    let armed = r.state.alert_armed ?? (r.alert === "ma_up" || r.alert === "ma_down" ? !c.hit : true);
+    const since = r.state.last_alert ? now - Date.parse(r.state.last_alert) : Infinity;
+    const fire = armed && c.hit && since >= 3600_000;
+    if (!fire && !armed && c.clear) armed = true;
+    const updated = await this.store.mutate((rs) => {
+      const x = rs.find((y) => y.id === r.id)!;
+      x.state.alert_now = c.now;
+      if (fire) { x.state.alert_armed = false; x.state.last_alert = new Date(now).toISOString(); x.state.alert_count = (x.state.alert_count ?? 0) + 1; x.state.runs += 1; x.state.note = `${t.symbol} ${c.detail}`.slice(0, 120); }
+      else x.state.alert_armed = armed;
+      return { ...x };
+    });
+    if (fire) this.o.onEvent?.({ type: "alert", rule: updated, detail: `${t.symbol} ${c.detail} (${r.chain[0]!.toUpperCase()}${r.chain.slice(1)}).` });
+  }
+
+  /** 0.9.1: wait without counting a failure, with a note on the rule card. */
+  private async hold(r: Rule, until: number, note: string) {
+    const updated = await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id)!; x.state.hold_until = new Date(until).toISOString(); x.state.last_error = note; return { ...x }; });
+    this.o.onEvent?.({ type: "skipped", rule: updated, detail: note });
+  }
+
+  /** 0.9.1: Autopilot's live trades stop for the day once they reach its share of the daily trading limit. */
+  private async overShare(r: Rule, usd: number): Promise<boolean> {
+    if (!isAutopilotRule(r) || this.exec.mode !== "live" || isPaperRule(r)) return false;
+    const cap = this.o.autopilotDailyCap?.() ?? null;
+    if (cap === null) return false;
+    const spent = autopilotSpentToday(this.store.list(), this.now());
+    if (spent + (Number.isFinite(usd) ? usd : 0) <= cap + 0.005) return false;
+    const midnight = new Date(this.now()); midnight.setUTCHours(24, 0, 30, 0);
+    await this.hold(r, midnight.getTime(), `Autopilot used its share of today's trading limit ($${spent.toFixed(2)} of $${cap.toFixed(2)}). It picks up again tomorrow; your own rules keep the rest.`);
+    return true;
   }
 
   /** Back off after a failure. Stops retry fast; anything else slows down and stops after 5 tries. */

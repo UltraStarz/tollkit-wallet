@@ -29,6 +29,9 @@ export const TEMPLATES: Template[] = [
     fields: [{ key: "step1", label: "First sale at a gain of (%)", kind: "pct", default: 10, min: 1, max: 1000 }, { key: "step2", label: "Second at (%)", kind: "pct", default: 25, min: 1, max: 1000 }, { key: "step3", label: "Last at (%)", kind: "pct", default: 50, min: 1, max: 1000 }] },
   { id: "grid", name: "Grid trader", blurb: "Buys a little at each level as the price falls through a range and sells each one a level higher. Works best when the price moves sideways.", risk: "If the price drops out of the range, it holds what it bought; if it rises out, it stops buying.",
     fields: [{ key: "amount_usd", label: "Dollars per level", kind: "usd", default: 20, min: 1 }, { key: "range_pct", label: "Range around today's price (± %)", kind: "pct", default: 10, min: 1, max: 90 }, { key: "levels", label: "Levels", kind: "int", default: 8, min: 3, max: 40 }] },
+  { id: "alert", name: "Alert", blurb: "Tells you when the price crosses a level, moves a lot in a day, or an indicator (RSI, 50-hour average) flips. Never trades.", risk: "Only a notification: nothing is bought or sold. Works while the wallet app is running.",
+    fields: [{ key: "condition", label: "Tell me when", kind: "choice", default: "above", choices: [["above", "It goes above a price"], ["below", "It falls below a price"], ["move", "It moves a lot in a day"], ["rsi_high", "It looks overbought (RSI over 70)"], ["rsi_low", "It looks oversold (RSI under 30)"], ["ma_up", "It crosses above its 50-hour average"], ["ma_down", "It crosses below its 50-hour average"]] },
+      { key: "pct", label: "How far (%): from today's price, or the day's move", kind: "pct", default: 5, min: 0.5, max: 50 }] },
 ];
 
 const round = (n: number) => Number(n.toPrecision(6));
@@ -79,6 +82,11 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
       break;
     }
     case "grid": rules = [{ ...base, kind: "grid", amount_usd: n("amount_usd"), lower_price: round(p * (1 - n("range_pct") / 100)), upper_price: round(p * (1 + n("range_pct") / 100)), levels: n("levels") }]; break;
+    case "alert": {
+      const c = v.condition as string, pct = n("pct");
+      rules = [{ ...base, kind: "alert", alert: c as any, ...(c === "above" ? { trigger_price: round(p * (1 + pct / 100)) } : c === "below" ? { trigger_price: round(p * (1 - pct / 100)) } : c === "move" ? { alert_value: pct } : {}) }];
+      break;
+    }
     default: throw new Error("Pick a bot.");
   }
   for (const r of rules) { const why = ruleProblem(r); if (why) throw new Error(why); }

@@ -14,6 +14,7 @@
  * Supported now: the EVM networks the server lists (Base first), ETH against USDC, for recurring buys, limit buys,
  * take-profits, limit sells and stop-losses. Other rules keep running on the device while the app is open.
  */
+import { nothingToSell, sellableFor } from "./ownership.js";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -335,10 +336,12 @@ export class AlwaysOn {
       return { slips: out };
     }
     // Sells: a fixed amount of ETH, set now: a share of today's balance (keeping a little for gas), or the rule's amount.
-    const spendable = ethBal > (RESERVE[chain] ?? 0n) ? ethBal - (RESERVE[chain] ?? 0n) : 0n;
+    const free = ethBal > (RESERVE[chain] ?? 0n) ? ethBal - (RESERVE[chain] ?? 0n) : 0n;
+    // 0.9.1: an Autopilot rule signs only the ETH its strategies hold; the owner's rules only the rest (src/ownership.ts).
+    const spendable = sellableFor(r, free, this.o.rules().list(), { symbol: "ETH", address: NATIVE_EVM, decimals: 18 });
     let sellAtomic = r.sell_percent !== undefined ? (spendable * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : parseUnits(r.sell_amount!, 18);
     if (sellAtomic > spendable) sellAtomic = spendable;
-    if (sellAtomic <= 0n) throw new Error("No ETH to sell on this network.");
+    if (sellAtomic <= 0n) throw new Error(spendable <= 0n && free > 0n ? nothingToSell(r, "ETH", free) : "No ETH to sell on this network.");
     const cut = r.kind === "stop_loss" ? FLOOR.stopLoss : r.kind === "take_profit" ? FLOOR.takeProfit : FLOOR.limit;
     const floor = parseUnits((Number(formatUnits(sellAtomic, 18)) * r.trigger_price! * (1 - cut)).toFixed(usdc.decimals), usdc.decimals);
     await sign("sell", now - 60, end, 1, sellAtomic, floor);

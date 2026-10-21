@@ -24,6 +24,7 @@
  * when it opens. The strategist's decision is advice to a program: nothing it says is applied without
  * passing the same checks the owner's own forms pass.
  */
+import { isAutopilotRule } from "./ownership.js";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -65,12 +66,14 @@ export interface SuperbotSettings {
   rethink_minutes: (typeof SUPERBOT.rethink)[number];
   max_strategies: number;
   always_on: boolean;
+  /** 0.9.1: the most of the wallet's daily trading limit Autopilot's live trades may use (%); the rest stays for your own rules. */
+  daily_share_pct: number;
 }
 export const DEFAULT_SETTINGS: SuperbotSettings = {
   chains: ["base", "solana"], tokens: [{ chain: "base", token: "ETH" }, { chain: "solana", token: "SOL" }],
   sources: { news: true, farcaster: true, x: false },
   budget_usd: 100, per_trade_usd: 20, max_token_pct: 25, daily_loss_pct: 5, weekly_loss_pct: 15, slippage_bps: 100,
-  paper_days: 7, paper_trades: 20, rethink_minutes: 30, max_strategies: 4, always_on: false,
+  paper_days: 7, paper_trades: 20, rethink_minutes: 30, max_strategies: 4, always_on: false, daily_share_pct: 50,
 };
 
 export interface Strategy {
@@ -119,6 +122,7 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   if (b.budget_usd !== undefined) s.budget_usd = num(b.budget_usd, 100, 10, 100_000);
   if (b.per_trade_usd !== undefined) s.per_trade_usd = num(b.per_trade_usd, 20, 1, 10_000);
   if (b.max_token_pct !== undefined) s.max_token_pct = num(b.max_token_pct, 25, 5, 100);
+  if (b.daily_share_pct !== undefined) s.daily_share_pct = num(b.daily_share_pct, 50, 10, 100);
   if (b.daily_loss_pct !== undefined) s.daily_loss_pct = num(b.daily_loss_pct, 5, 1, 50);
   if (b.weekly_loss_pct !== undefined) s.weekly_loss_pct = num(b.weekly_loss_pct, 15, 1, 90);
   if (b.slippage_bps !== undefined) s.slippage_bps = num(b.slippage_bps, 100, 10, 500);
@@ -165,6 +169,12 @@ export class SuperBot {
   private async update<T>(fn: (s: State) => T): Promise<T> { return withLock(() => { const s = this.load(); const out = fn(s); this.save(s); return out; }, this.d.dir); }
 
   isPaperRule(id: string) { return this.load().paper_rules.includes(id); }
+  /** 0.9.1: dollars of live trades Autopilot may make today: its share of the wallet's daily trading limit. */
+  dailyCapUsd(walletDailyUsd: number): number | null {
+    const s = this.load();
+    if (!s.enabled) return null;
+    return Math.round(walletDailyUsd * (s.settings.daily_share_pct ?? 50)) / 100;
+  }
   private rulesOf(s: State, st: Strategy, all: Rule[]) { return st.bot ? all.filter((r) => r.bot === st.bot && !r.archived) : []; }
   private openRules(rules: Rule[]) { return rules.filter((r) => ["active", "paused", "proposed"].includes(r.status)); }
   private summaryOf(st: Strategy, all: Rule[]): BotSummary | null { return st.bot ? summarize(all.filter((r) => r.bot === st.bot && !r.archived))[0] ?? null : null; }
@@ -337,7 +347,7 @@ export class SuperBot {
     try { built = buildBot(st.template, st.token, st.chain, params, price); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
     const sum = this.summaryOf(st, all);
     await this.stopRules(st, all, why);
-    const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: why.slice(0, 200) })), "agent", true, "superbot");
+    const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: why.slice(0, 200), ...(stage === "paper" ? { paper: true } : {}) })), "agent", true, "superbot");
     await this.update((x) => {
       const y = x.strategies.find((z) => z.id === st.id); if (!y) return;
       y.past = [...(y.past ?? []), { stage: y.stage, result_pct: sum?.result_pct ?? null, trades: sum?.trades_ok ?? 0 }].slice(-6);
@@ -375,11 +385,13 @@ export class SuperBot {
     return {
       limits: { budget_usd: s.settings.budget_usd, per_trade_usd: s.settings.per_trade_usd, max_token_pct: s.settings.max_token_pct, max_strategies: s.settings.max_strategies, slippage_bps: s.settings.slippage_bps, paper_period: `${s.settings.paper_days} days or ${s.settings.paper_trades} trades` },
       allowed: { chains: s.settings.chains, tokens: s.settings.tokens.map((x) => ({ ...x, price_usd: prices[`${x.chain}:${x.token}`] ?? null })) },
-      templates: TEMPLATES.map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
+      templates: TEMPLATES.filter((x) => x.id !== "alert").map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
       strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
       recent_decisions: s.decisions.filter((d) => d.by === "strategist").slice(-3).map((d) => ({ ts: d.ts, view: d.market_view, actions: d.actions.map((a) => `${a.type}${a.strategy_id ? ` ${a.strategy_id}` : ""}${a.applied ? "" : " (not applied)"}`) })),
+      // 0.9.1: the owner's own rules, so the strategist doesn't work against them.
+      owner_rules: all.filter((r) => !isAutopilotRule(r) && ["active", "paused", "proposed"].includes(r.status)).slice(0, 20).map((r) => ({ kind: r.kind, chain: r.chain, token: r.token.length > 12 ? r.token.slice(0, 8) + "…" : r.token, status: r.status, ...(r.trigger_price ? { trigger_price: r.trigger_price } : {}), ...(r.amount_usd ? { amount_usd: r.amount_usd } : {}), ...(r.sell_percent ? { sell_percent: r.sell_percent } : {}), ...(r.trail_pct ? { trail_pct: r.trail_pct } : {}), ...(r.every ? { every: r.every } : {}) })),
       sources_on: Object.entries(s.settings.sources).filter(([, v]) => v).map(([k]) => k),
     };
   }
@@ -439,7 +451,7 @@ export class SuperBot {
         if (!s.settings.chains.includes(chain)) return { applied: false, outcome: `${a.chain} is not an allowed network` };
         const tok = s.settings.tokens.find((x) => x.chain === chain && x.token.toLowerCase() === String(a.token ?? "").toLowerCase());
         if (!tok) return { applied: false, outcome: `${a.token} is not on the allowed list for ${chainName(chain)}` };
-        if (!TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
+        if (a.template === "alert" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
         if (running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
@@ -447,7 +459,7 @@ export class SuperBot {
         let built;
         try { built = buildBot(a.template, tok.token, chain, params.params, price); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
         const id = randomUUID().slice(0, 8), t = nowIso(this.now());
-        const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: String(a.reason).slice(0, 200) })), "agent", true, "superbot");
+        const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: String(a.reason).slice(0, 200), paper: true })), "agent", true, "superbot");
         await this.update((x) => {
           x.strategies.push({ id, name: built.name, template: a.template, chain, token: tok.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t, history: [{ ts: t, note: `Proposed by the AI: ${a.reason}` }] });
           x.paper_rules.push(...made.map((r) => r.id));

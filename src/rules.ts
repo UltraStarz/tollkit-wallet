@@ -17,7 +17,10 @@ import { CHAIN_ENUM } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
 
-export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid"] as const;
+export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid", "alert"] as const;
+/** 0.9.1: what an alert watches. Alerts only notify; they never trade. Indicators use hourly prices. */
+export const ALERT_TYPES = ["above", "below", "move", "rsi_high", "rsi_low", "ma_up", "ma_down"] as const;
+export type AlertType = (typeof ALERT_TYPES)[number];
 export type RuleKind = (typeof RULE_KINDS)[number];
 export const BUY_KINDS: RuleKind[] = ["limit_buy", "dca"];
 
@@ -66,6 +69,12 @@ export const RuleInput = z.object({
   bot: z.string().regex(/^[\w-]{4,40}$/).optional(),
   bot_name: z.string().max(60).optional(),
   template: z.string().max(40).optional(),
+  /** 0.9.1, alerts: what to watch (above/below use trigger_price; move uses alert_value as a 24h % move; rsi_high/rsi_low
+   *  use alert_value as the RSI(14, hourly) level, default 70/30; ma_up/ma_down: the price crossing its 50-hour average). */
+  alert: z.enum(ALERT_TYPES).optional(),
+  alert_value: z.number().positive().max(100).optional(),
+  /** 0.9.1: made by Autopilot for a paper trial; never trades real coins. */
+  paper: z.boolean().optional(),
 });
 export type RuleInput = z.infer<typeof RuleInput>;
 
@@ -89,6 +98,10 @@ export interface Rule extends RuleInput {
     last_checked?: string;
     last_error?: string;
     note?: string;        // e.g. "Replaced by ab12cd34"
+    /** 0.9.1: wait until then without counting a failure (nothing of its own to sell, or Autopilot's daily share used). */
+    hold_until?: string;
+    /** 0.9.1, alerts: false after firing until the condition clears; when it last fired; how often; the indicator now. */
+    alert_armed?: boolean; last_alert?: string; alert_count?: number; alert_now?: string;
     fills: Fill[];
     /** Totals that outlive the last-50 fills list: successful and failed trades, dollars and units each way. */
     ok_count?: number; fail_count?: number;
@@ -114,6 +127,12 @@ export function describeRule(r: RuleInput): string {
     case "take_profit": return `Take profit: sell ${sell} when it reaches ${$(r.trigger_price)}${on}`;
     case "stop_loss": return `Stop-loss: sell ${sell} if it falls to ${$(r.trigger_price)}${on}`;
     case "trailing_stop": return `Trailing stop: sell ${sell} if it falls ${r.trail_pct}% from its highest price${on}`;
+    case "alert": {
+      const w = r.alert === "above" ? `goes above ${$(r.trigger_price)}` : r.alert === "below" ? `falls below ${$(r.trigger_price)}` : r.alert === "move" ? `moves ${r.alert_value}% or more in a day`
+        : r.alert === "rsi_high" ? `looks overbought (hourly RSI above ${r.alert_value ?? 70})` : r.alert === "rsi_low" ? `looks oversold (hourly RSI below ${r.alert_value ?? 30})`
+        : r.alert === "ma_up" ? "crosses above its 50-hour average" : "crosses below its 50-hour average";
+      return `Alert me when ${t} ${w}${on}`;
+    }
     case "grid": return `Grid: buy ${$(r.amount_usd)} of ${t} at each of ${r.levels ?? "?"} levels from ${$(r.lower_price)} to ${$(r.upper_price)}, and sell each one a level higher${on}`;
     case "dca": {
       const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -125,6 +144,16 @@ export function describeRule(r: RuleInput): string {
 
 /** Checks that the fields a kind needs are there. Returns a reason, or null. */
 export function ruleProblem(r: RuleInput): string | null {
+  if (r.kind === "alert") {
+    if (!r.alert) return "An alert needs what to watch (alert: above, below, move, rsi_high, rsi_low, ma_up or ma_down).";
+    if ((r.alert === "above" || r.alert === "below") && !r.trigger_price) return "A price alert needs trigger_price.";
+    if (r.alert === "move" && !(r.alert_value && r.alert_value >= 0.5 && r.alert_value <= 50)) return "A move alert needs alert_value: the % move in a day (0.5 to 50).";
+    if (r.alert === "rsi_high" && r.alert_value !== undefined && (r.alert_value < 50 || r.alert_value > 95)) return "An overbought RSI level is between 50 and 95 (usually 70).";
+    if (r.alert === "rsi_low" && r.alert_value !== undefined && (r.alert_value < 5 || r.alert_value > 50)) return "An oversold RSI level is between 5 and 50 (usually 30).";
+    if (r.amount_usd || r.sell_percent || r.sell_amount) return "Alerts never trade, so they take no amounts.";
+    if (/^(USDC|USDT)$/i.test(r.token)) return "Pick a token that moves; stablecoins stay near $1.";
+    return null;
+  }
   if (r.kind === "grid") {
     if (!r.amount_usd) return "A grid needs amount_usd (dollars per level).";
     if (!r.lower_price || !r.upper_price || r.lower_price >= r.upper_price) return "A grid needs lower_price below upper_price.";
