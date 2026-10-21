@@ -403,6 +403,9 @@ nav button .npilot{display:block;margin:0 auto 3px;width:20px;height:20px;border
 /* Narrow windows (the browser side panel, phones): the app fills the window exactly, so the tab bar always sits at
    the bottom and only the content scrolls. The card's 520px minimum used to push the page past short panels. */
 @media (max-width:480px){.wrap{margin:0!important;padding:0!important;max-width:none!important}.card{height:100vh!important;height:100dvh!important;min-height:0!important;max-height:none!important;border-radius:0!important;border-left:0!important;border-right:0!important}html,body{height:100%;overflow:hidden}.sbs-h{flex-direction:column;align-items:flex-start;gap:1px}.apgo{padding:9px 11px;gap:8px}.apgo-i{width:30px;height:30px}.apgo-t b{white-space:nowrap;font-size:14px}.apgo-t small{white-space:normal;line-height:1.25}.sbsave button.b.apno{padding:0 12px;margin-right:0}}
+/* Hidden checkboxes stay inside their own control, and the app frame can never be scrolled by focus: clicking a
+   toggle used to scroll the whole card to reach its off-screen checkbox, leaving dead space under the tab bar. */
+.sbchip,.sbsw,.rcsw,.aorow,label.toggle{position:relative}.sbchip input,.sbsw input,.rcsw input{left:0;top:0;width:1px;height:1px;margin:0}.card{overflow:clip}
 </style></head><body>
 <div class="aur" aria-hidden="true"><div class="drift"><i></i><i></i><i></i></div></div>
 <div class="wrap"><div class="card">
@@ -669,12 +672,12 @@ function rowAttrs(coin,sym,chain,name){return coin?' rowc" tabindex="0" role="bu
 // Home: what's running right now, next to the balance. Each line opens its tab.
 function runBox(){var sb=S.superbot,R=S.rules||[],A=aoCfg(),pend=(S.pending||[]).length+(S.setups||[]).length;
 var tl=(sb&&sb.totals&&sb.totals.live)||0,tp=(sb&&sb.totals&&sb.totals.paper)||0;
-var ap=!sb||!sb.enabled?{on:0,t:"Off"}:sb.halted?{on:2,t:"Stopped"}:{on:1,t:tl&&tp?tl+" live · "+tp+" testing":tl?tl+" live":tp?tp+" testing":"On · none yet"};
+var ap=!sb||!sb.enabled?{on:0,t:"Off"}:sb.halted?{on:2,t:"Stopped"}:{on:1,t:tl&&tp?tl+" live · "+tp+" testing":tl?tl+" live":tp?tp+" testing":"Watching market"};
 var act=R.filter(function(r){return r.status==="active"}).length,prop=R.filter(function(r){return r.status==="proposed"}).length;
 var bt={on:act?1:0,t:act?act+" running"+(prop?" · "+prop+" new":""):prop?prop+" new":"None"};
 var srv=A&&A.rules?A.rules.length:0;
 var row=function(k,lab,st,tab,tip){return '<button class="rbx-r" onclick="go(\''+tab+'\')"'+(tip?' title="'+esc(tip)+'"':'')+'><i class="rbx-d s'+st.on+'"></i><span class="rbx-l">'+lab+'</span><b>'+esc(st.t)+'</b></button>'};
-return '<div class="rbx" aria-label="Running now"><div class="rbx-h">Running now</div>'+row("ap","Autopilot",ap,"pilot")+row("bt","Bots",bt,"autopilot")+row("sv","While closed",{on:srv?1:0,t:srv?srv+" on server":"Off"},"autopilot","Rules TOLLkit's server keeps running while this app is closed")+(pend?row("wt","Waiting",{on:3,t:pend+" to approve"},"activity"):"")+'</div>'}
+return '<div class="rbx" aria-label="Running now"><div class="rbx-h">Running now</div>'+row("ap","Autopilot",ap,"pilot",tl||tp?"Live strategies trade real money; testing ones trade on paper":sb&&sb.enabled?"On and reading the market. It starts a strategy (on paper first) when the signals give it a reason":"")+row("bt","Bots",bt,"autopilot")+row("sv","24/7",{on:srv?1:0,t:srv?srv+" rule"+(srv>1?"s":""):"Off"},"autopilot","Rules that keep running on TOLLkit's server even when your laptop or phone is off. Turn it on per rule in Bots.")+(pend?row("wt","Waiting",{on:3,t:pend+" to approve"},"activity"):"")+'</div>'}
 function holdRows(){var H=S.holdings;if(!H)return {rows:"",tot:0,chg:0};var rows="",tot=0,chg=0;(H.tokens||[]).forEach(function(t){if(NETF&&t.chain!==NETF)return;var a=Number(t.amount),val=t.usd||0;tot+=val;if(typeof t.change_24h==="number")chg+=val-val/(1+t.change_24h);
 rows+='<div class="row'+rowAttrs(t.coin,t.symbol,t.chain,t.name)+'>'+tokIcon(t.symbol,t.chain,t.icon)+'<div style="min-width:0"><div class="tname">'+esc(t.name||t.symbol)+(t.trust==="unlisted"?' <span class="chip warn tbadge" title="Not on the wallet’s token list. Check it before you trade it.">Unverified</span>':'')+'</div><div class="sm">'+(typeof t.change_24h==="number"?'<span class="'+(t.change_24h>=0?"ok":"bad")+'">'+(t.change_24h>=0?"+":"")+(t.change_24h*100).toFixed(2)+'%</span><span class="mut"> · '+esc(CHAIN_NAMES[t.chain]||t.chain)+'</span>':'<span class="mut">'+esc(CHAIN_NAMES[t.chain]||t.chain)+'</span>')+'</div></div><div class="r"><div class="usdv">'+fmtUsd(val)+'</div><div class="sm mut">'+esc(fmtAmt(a))+' '+esc(t.symbol)+'</div></div></div>'});
 return {rows:rows,tot:tot,chg:chg}}
