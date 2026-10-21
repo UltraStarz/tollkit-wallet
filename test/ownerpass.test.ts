@@ -58,8 +58,9 @@ const init = { method: "POST", headers: { "content-type": "application/json" }, 
   const h = s.calls[1]?.headers.get(OWNER_HEADER) ?? "";
   check(r.owner === true && h.startsWith(`solana.${sol}.`), "Solana payout = this wallet: Solana owner pass", h);
   const [, , ts, sig] = h.split(".");
-  const nacl = (await import("tweetnacl")).default, bs58 = (await import("bs58")).default;
-  check(nacl.sign.detached.verify(new TextEncoder().encode(`TOLLkit owner pass\nPOST /read\n${ts}`), bs58.decode(sig), keys.solana.publicKey.toBytes()), "Solana signature verifies");
+  const { getBase58Encoder, getPublicKeyFromAddress, verifySignature, address } = await import("@solana/kit");
+  const pk = await getPublicKeyFromAddress(address(sol));
+  check(await verifySignature(pk, getBase58Encoder().encode(sig) as any, new TextEncoder().encode(`TOLLkit owner pass\nPOST /read\n${ts}`)), "Solana signature verifies");
 }
 {
   const url = "https://evil.example/wallet/ai/step";

@@ -175,7 +175,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       case "move": {
         // First call: a fresh quote for the owner to read. Second call (confirm, with the minimum they saw): the move.
         if (b.confirm !== true || !/^\d+$/.test(String(b.receive_min ?? ""))) return { ok: true, pending: true, quote: await w.moveQuote(q.asset, q.from, q.to, q.amount) };
-        const out: any = await w.move(password, q.asset, q.from, q.to, q.amount, String(b.receive_min));
+        let out: any;
+        try { out = await w.move(password, q.asset, q.from, q.to, q.amount, String(b.receive_min)); }
+        catch (e: any) { if (e?.quote) return { ok: true, pending: true, quote: e.quote, note: "The price moved. Here's the new amount." }; throw e; }
         if (out && out.ok === false) throw new Error(out.refused?.reason ?? "The move was refused.");
         return { ok: true, note: "Move started. Track it on Home.", result: out };
       }

@@ -97,6 +97,16 @@ usdcBal = 500_000_000n; ethBal = 0n;
 check(/needs a little ETH/.test(await err(() => w.move(PW, "USDC", "base", "ethereum", "100"))), "no ETH for network fees: says so");
 ethBal = 10n ** 16n;
 
+// Quote drift: a new quote a hair under what the owner saw goes through; a real drop comes back with the new quote
+{
+  const rm = BigInt((await w.moveQuote("USDC", "base", "ethereum", "100")).receive_min);
+  const ok1 = await w.move(PW, "USDC", "base", "ethereum", "100", String(rm * 1004n / 1000n)).then(() => true, () => false);
+  check(ok1, "a quote 0.4% under the one shown still goes through");
+  let caught: any = null; await w.move(PW, "USDC", "base", "ethereum", "100", String(rm * 102n / 100n)).catch((e) => { caught = e; });
+  check(!!caught && /price changed/.test(caught.message) && caught.quote?.receive_min === rm.toString(), "a 2% drop is refused and carries the new quote");
+  check(await w.move(PW, "USDC", "base", "ethereum", "100", String(rm - 1n)).then(() => true, () => false), "a better price goes through");
+}
+
 // From Solana: fee transfer + CCTP burn in one transaction
 await w.move(PW, "USDC", "solana", "base", "100");
 const st = solSent.at(-1)!;
@@ -155,7 +165,7 @@ for (const [bad, why] of [
 }
 across = goodAcross(); evmSent.length = 0;
 await w.move(PW, "ETH", "base", "ethereum", "0.05");
-check(/price changed/.test(await err(() => w.move(PW, "ETH", "base", "ethereum", "0.05", (OUT - FEE + 1n).toString()))), "a fresh quote worse than the one shown is refused");
+check(/price changed/.test(await err(() => w.move(PW, "ETH", "base", "ethereum", "0.05", ((OUT - FEE) * 102n / 100n).toString()))), "a fresh quote 2% worse than the one shown is refused");
 check(evmSent.length === 1 && evmSent[0]!.to === ACROSS_PERIPHERY && evmSent[0]!.value === AMT, "ETH move: one transaction to Across with exactly the amount");
 
 // Tracking: Circle reports the mint on the destination

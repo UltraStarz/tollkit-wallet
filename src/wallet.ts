@@ -435,8 +435,17 @@ export class TollkitWallet {
   async move(password: string, asset: MoveAsset, from: Chain, to: Chain, amount: string, seenReceiveMin?: string) {
     if (password !== this.password) throw new Error("wrong password");
     const q = await this.moveQuote(asset, from, to, amount);
-    // The quote is fetched again here; never accept one worse than what the owner was shown.
-    if (seenReceiveMin !== undefined && /^\d+$/.test(seenReceiveMin) && BigInt(q.receive_min) < BigInt(seenReceiveMin)) throw new Error(`The price changed: you'd now get at least ${fmtAmount(asset, q.receive_min)}. Check the new quote and try again.`);
+    // The quote is fetched again here. Bridge quotes drift a little on every request, so a new one up to 0.5% (or
+    // the owner's slippage limit, if lower) under what they were shown goes through; anything worse comes back
+    // with the new quote attached, for the owner to confirm.
+    if (seenReceiveMin !== undefined && /^\d+$/.test(seenReceiveMin)) {
+      const tol = BigInt(Math.max(0, Math.min(50, this.policy.max_slippage_bps)));
+      if (BigInt(q.receive_min) * 10000n < BigInt(seenReceiveMin) * (10000n - tol)) {
+        const e = new Error(`The price changed: you'd now get at least ${fmtAmount(asset, q.receive_min)}. Confirm the new amount.`) as Error & { quote?: MoveQuote };
+        e.quote = q;
+        throw e;
+      }
+    }
     const id = randomUUID(), ts = new Date().toISOString();
     const usd = asset === "USDC" ? Number(q.amount) / 1e6 : 0;
     const base = { id, ts, kind: "move" as const, usd, chain: from, seller: q.via === "cctp" ? "Circle CCTP" : "Across", tool: "move", fee_usd: asset === "USDC" ? Number(q.tollkit_fee) / 1e6 : undefined, detail: `${fmtAmount(asset, q.amount)} ${from} -> ${to}` };
