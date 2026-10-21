@@ -37,6 +37,9 @@ import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.j
 import { budgetView, setBudget } from "./appbudget.js";
 import { Setups, showSetup, needsPassword, type SetupRequest } from "./setups.js";
 import { catalogView, refreshCatalog, setHidden } from "./tollkit-tools.js";
+import { SuperBot } from "./superbot.js";
+import { loadTelegram } from "./wallet.js";
+import { notify } from "./telegram.js";
 
 const CHAINS: string[] = ALL_CHAINS;
 
@@ -77,8 +80,12 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // The autopilot runs while the dashboard is open (live money; paper mode is `tollkit-wallet autopilot --paper`).
   // 0.8.5: every price the autopilot checks a bot against, kept a week, so any token's bot has a chart.
   const tape = new PriceTape(w.dir);
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id), onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
+  // 0.9.0: the Autopilot's paper strategies run on a second, paper autopilot; the live one leaves them alone.
+  let superbot: SuperBot | null = null;
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
   autopilot?.start();
+  const paperPilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("paper"), prices, { dir: w.dir, skip: (id) => !superbot?.isPaperRule(id), noLease: true, onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
+  paperPilot?.start();
   // The Bots screen: each bot's summary plus its next move and latest trades (0.8.5).
   const botsView = () => {
     const live = w.rules().list().filter((r) => !r.archived), today = new Date().toISOString().slice(0, 10);
@@ -94,7 +101,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   };
   const alwaysTimer = o.watch === false ? null : setInterval(() => void alwaysSync(), 5 * 60_000);
   // 0.8.0: an AI tool added or changed rules; start them now rather than at the next tick.
-  w.hooks.rulesChanged = () => { void autopilot?.tick(); void alwaysSync(); };
+  w.hooks.rulesChanged = () => { void autopilot?.tick(); void paperPilot?.tick(); void alwaysSync(); };
   const setups = new Setups(w.dir);
   // 0.8.1: Tollkit's paid tools for connected apps; the list refreshes from the server while the wallet is open.
   const tf: typeof fetch = (w as any).f ?? fetch;
@@ -123,6 +130,23 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   holdings?.start();
   const coins = Object.fromEntries(Object.entries(KNOWN).map(([c, t]) => [c, Object.fromEntries(Object.values(t).map((x) => [x.symbol, coinId(c as Chain, x.address)]))]));
   const priceOf = (t: string) => prices?.snapshot().prices[t.toUpperCase()]?.usd;
+  // 0.9.0: the Autopilot (src/superbot.ts). Same token rule as the Bots screen: core tokens, or ones added on Home.
+  const knownToken = async (chain: Chain, token: string) => {
+    if (!w.policy.chains.includes(chain)) return false;
+    if (chain !== "solana") await loadExtraLists(wf);
+    let tok; try { tok = await resolveToken(chain, token); } catch { return false; }
+    return isCoreToken(chain, tok.address) || (holdings?.list.list()[chain] ?? []).some((a) => a.toLowerCase() === tok.address.toLowerCase())
+      || (chain === "solana" ? (await solanaInfo([tok.address], wf).catch(() => new Map())).get(tok.address)?.trust === "listed" : !!findListed(chain, tok.address));
+  };
+  const tg = loadTelegram(w.dir);
+  superbot = new SuperBot(w, {
+    dir: w.dir, proxy, fetch: wf,
+    price: async (chain, token) => priceOf(token) ?? (autopilot ? await autopilot.price(chain, await resolveToken(chain, token)).catch(() => undefined) : undefined),
+    knownToken,
+    onRulesChanged: () => { void autopilot?.tick(); void paperPilot?.tick(); void alwaysSync(); },
+    notify: tg ? (t) => notify(tg, t) : undefined,
+  });
+  if (o.watch !== false) superbot.start();
   const token = randomBytes(24).toString("hex");
   const host = o.host ?? "127.0.0.1";
   let port = o.port ?? 7420;
@@ -225,7 +249,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           setups: setups.waiting().map(showSetup), app_budgets: budgetView(w.dir), tollkit_tools: catalogView(w.dir),
           backup: { kind: backupKind(w.dir), done: backupDone(w.dir) },
           ext: { paired: w.dapps().paired(), sites: w.dapps().sites() },
-          holdings: holdings ? holdings.snapshot() : null, coins });
+          holdings: holdings ? holdings.snapshot() : null, coins, superbot: superbot?.view() ?? null });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
       // 0.8.5: a price chart for a bot (its levels and trades on it) or for a token being set up.
@@ -385,6 +409,19 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         catch (e) { return send(res, 400, { error: (e as Error).message }); }
       }
       // "Keep running when closed": the switch on a rule, how much it may use, and turning it all off.
+      // 0.9.0: the Autopilot's switches. Turning it on and changing its limits are owner-only (the AI can't reach this).
+      if (p === "/api/superbot") {
+        if (!superbot) return send(res, 400, { error: "Not available." });
+        try {
+          const action = String(b.action ?? "");
+          if (action === "on") return send(res, 200, { superbot: await superbot.enable(b.settings ?? {}) });
+          if (action === "settings") return send(res, 200, { superbot: await superbot.setSettings(b.settings ?? {}) });
+          if (action === "off") return send(res, 200, { superbot: await superbot.disable() });
+          if (action === "resume") return send(res, 200, { superbot: await superbot.resume() });
+          if (action === "cycle") { await superbot.cycle(true); return send(res, 200, { superbot: superbot.view() }); }
+          return send(res, 400, { error: "Unknown action." });
+        } catch (e) { return send(res, 400, { error: (e as Error).message }); }
+      }
       if (p === "/api/always") {
         try {
           if (b.action === "off") { await w.always().off(); return send(res, 200, { always: w.always().view() }); }
@@ -542,7 +579,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); tape.flush(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); paperPilot?.stop(); superbot?.stop(); tape.flush(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 
