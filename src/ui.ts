@@ -411,7 +411,7 @@ input[type=checkbox],input[type=radio]{width:auto;padding:0}
 .sbchip,.sbsw,.rcsw,.aorow,label.toggle{position:relative}.sbchip input,.sbsw input,.rcsw input{left:0;top:0;width:1px;height:1px;margin:0}.card{overflow:clip}
 .rcc.ovl{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}.ap-ovl{color:var(--warn)}
 .rcm .rcc{white-space:nowrap}.rcc.al{display:inline-flex;align-items:center;gap:4px;color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
-.swpick{display:flex;flex-wrap:wrap;gap:6px}.swpick .bsb{display:inline-flex;align-items:center;gap:6px}.swpick .ic.tok{width:20px;height:20px;min-width:20px;font-size:9px}.swpick .ic.tok svg,.swpick .ic.tok img{width:20px;height:20px}.swflip{display:flex;justify-content:center;margin:10px 0 -2px}.swflip .b{width:36px;height:36px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center}
+.swpick{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.swpick+.mvamt{margin-top:0}.swflip{margin-top:12px!important}.swpick .bsb{display:inline-flex;align-items:center;gap:6px}.swpick .ic.tok{width:20px;height:20px;min-width:20px;font-size:9px}.swpick .ic.tok svg,.swpick .ic.tok img{width:20px;height:20px}.swflip{display:flex;justify-content:center;margin:10px 0 -2px}.swflip .b{width:36px;height:36px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center}
 </style></head><body>
 <div class="aur" aria-hidden="true"><div class="drift"><i></i><i></i><i></i></div></div>
 <div class="wrap"><div class="card">
