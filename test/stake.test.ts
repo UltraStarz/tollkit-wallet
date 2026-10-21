@@ -97,16 +97,11 @@ check(sent.length === n0 + 1 && rec.kind === "stake" && rec.tool === "stake" && 
 await err(() => w.stakeAction(PW, { action: "unstake", account: kpB }));
 check(w.receipts().at(-1)!.status === "failed", "a refused unstake is recorded as failed");
 
-// dashboard
+// 0.9.1: staking is off the wallet's screens and API; the dashboard no longer answers for it.
 const dash = await startDashboard(w, PW, { port: 17451, watch: false, autopilot: false, connectApps: false, ai: false, holdings: false });
 const tok = new URL(dash.url).searchParams.get("t")!;
-const call = async (p: string, body?: unknown) => { const res = await fetch(`http://127.0.0.1:17451${p}`, { method: body ? "POST" : "GET", headers: { "x-tw-token": tok, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); return { status: res.status, j: await res.json() as any }; };
-const g = await call("/api/stake");
-check(g.status === 200 && g.j.accounts.length === 3 && g.j.min_delegation === 1e9 && g.j.rent_reserve === 1666240 && g.j.epoch.epoch === 100, "dashboard: stakes, minimums and epoch", g.j);
-check((await call("/api/validators")).j.validators.length === 2, "dashboard: validators");
-check((await call("/api/stake", { password: "wrong", action: "stake", sol: 2, vote: VOTE_A })).status === 403, "dashboard: wrong password refused");
-const ok = await call("/api/stake", { password: PW, action: "unstake", account: kpA });
-check(ok.status === 200 && /^sig/.test(ok.j.tx), "dashboard: unstake with the password");
+const call = async (p: string, body?: unknown) => { const res = await fetch(`http://127.0.0.1:17451${p}`, { method: body ? "POST" : "GET", headers: { "x-tw-token": tok, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); return { status: res.status }; };
+check((await call("/api/stake")).status >= 400 && (await call("/api/validators")).status >= 400 && (await call("/api/stake", { password: PW, action: "unstake", account: kpA })).status >= 400, "dashboard: no staking routes any more");
 await dash.close();
 
 console.log(`\nstake: ${pass} passed, ${fail} failed`);

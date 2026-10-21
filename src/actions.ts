@@ -248,16 +248,6 @@ export const ACTIONS = [
   def({ name: "move_quote", spends: false, schema: z.object({ asset: z.enum(["USDC", "ETH"]), from: z.enum(CHAIN_ENUM), to: z.enum(CHAIN_ENUM), amount: z.string().regex(/^\d+(\.\d+)?$/) }),
     description: "Quote moving USDC or ETH between networks (nothing is signed). To do the move, send a setup_request of kind move; the owner taps Apply.",
     run: async (w, a) => { try { return await w.moveQuote(a.asset, a.from, a.to, a.amount); } catch (e) { return bad(e); } } }),
-  def({ name: "stake_info", spends: false, schema: NoArgs,
-    description: "SOL staking: the owner's stake accounts, the epoch clock, the minimums and the top validators. Staking itself is a setup_request of kind stake.",
-    run: async (w) => {
-      try {
-        if (!w.policy.chains.includes("solana")) return { ok: false, refused: { code: "chain_off", reason: "Solana is turned off in the owner's limits." } };
-        const st = w.staking(), ep = await st.epoch();
-        const [accounts, mins, validators] = await Promise.all([st.list(ep.epoch), st.minimums(), st.validators()]);
-        return { epoch: ep, accounts, ...mins, validators: validators.slice(0, 20) };
-      } catch (e) { return bad(e); }
-    } }),
   def({ name: "buy_link", spends: false, schema: z.object({ chain: z.enum(CHAIN_ENUM), asset: z.string().max(8).describe("USDC, ETH or SOL"), amount_usd: z.number().min(5).max(10_000).optional() }),
     description: "A single-use Coinbase checkout link that buys crypto straight into this wallet with a card or bank. Give it to the owner to open; nothing is bought until they pay there.",
     run: async (w, a) => {
@@ -275,7 +265,7 @@ export const ACTIONS = [
     description: "Ask the owner to make a change only they can make. They see it as a card in the wallet and tap Apply (with their password where the wallet always asks). Kinds and forms: "
       + "limits {per_trade_usd?, daily_trades_usd?, per_payment_usd?, daily_payments_usd?, per_seller_daily_usd?, approval_above_usd?, max_slippage_bps?, chains?, block_seller_warnings?, agent_rules?: propose|auto}; "
       + "withdraw_address {action: add|remove, chain, address, label?}; withdraw {chain, token, to (a saved address), amount}; move {asset: USDC|ETH, from, to, amount}; "
-      + "stake {action: stake, sol, vote?} or {action: unstake|withdraw, account}; cash_out {chain, asset, amount}; connect_app {app: claude|claude-code|cursor|vscode|codex|gemini}; "
+      + "cash_out {chain, asset, amount}; connect_app {app: claude|claude-code|cursor|vscode|codex|gemini}; "
       + "app_budget {app, weekly_usd (null removes)}; always_budget {budget_usd}. Requests expire after a day.",
     run: async (w, a, ctx) => { try { return { ok: true, request: showSetup(await new Setups(w.dir).add(a.kind, a.params, a.reason, ctx?.app ?? "An AI app")), note: "The owner will see this on the wallet's Approvals screen. Check setup_requests for what happened." }; } catch (e) { return bad(e); } } }),
   def({ name: "setup_requests", spends: false, schema: z.object({ status: z.enum(["waiting", "applied", "dismissed", "expired"]).optional() }),

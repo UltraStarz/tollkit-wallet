@@ -24,7 +24,7 @@ export const CLIENT_META = "dev.tollkit/client";
  * to approve, and (0.8.0) the same setup tools a connected app has. It never trades or pays on its own.
  */
 export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_propose", "swap_propose", "paper_status",
-  "bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "stake_info", "buy_link",
+  "bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "buy_link",
   "setup_request", "setup_requests", "setup_cancel"];
 
 export const VERSION = "0.8.5";

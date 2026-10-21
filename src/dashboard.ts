@@ -12,6 +12,7 @@ import { TollkitWallet } from "./wallet.js";
 import { decide, heartbeat, pending } from "./approvals.js";
 import { PolicySchema } from "./policy.js";
 import { resolveToken, toAtomic } from "./tokens.js";
+import { formatUnits } from "ethers";
 import { PAGE } from "./ui.js";
 import { qrSvg } from "./qr.js";
 import { readAiUse } from "./aiuse.js";
@@ -183,10 +184,6 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (out && out.ok === false) throw new Error(out.refused?.reason ?? "The move was refused.");
         return { ok: true, note: "Move started. Track it on Home.", result: out };
       }
-      case "stake": {
-        const out = q.action === "stake" ? await w.stakeAction(password, { action: "stake", sol: Number(q.sol), vote: String(q.vote ?? "") }) : await w.stakeAction(password, { action: q.action, account: String(q.account ?? "") });
-        return { ok: true, note: `Done. Transaction ${out.tx}`, result: out };
-      }
       case "cash_out": {
         if (!w.policy.chains.includes(q.chain)) throw new Error(`${q.chain} is turned off in your settings.`);
         const sale = await w.sales().start(q.chain === "solana" ? w.addresses.solana : w.addresses.evm, q.chain, q.asset, q.amount);
@@ -275,13 +272,6 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         const evm = w.addresses.evm, sol = w.addresses.solana;
         return send(res, 200, { evm: { address: evm, qr: qrSvg(evm, "QR code of " + evm) }, solana: { address: sol, qr: qrSvg(sol, "QR code of " + sol) }, chains: w.policy.chains });
       }
-      // SOL staking: the owner's stake accounts, the epoch clock and the minimums (all read live).
-      if (req.method === "GET" && p === "/api/stake") {
-        if (!w.policy.chains.includes("solana")) return send(res, 400, { error: "Solana is turned off in your settings." });
-        const st = w.staking(), ep = await st.epoch();
-        const [accounts, mins] = await Promise.all([st.list(ep.epoch), st.minimums()]);
-        return send(res, 200, { epoch: ep, accounts, ...mins });
-      }
       // Moving between networks: a fresh quote (nothing signed) and the moves still on their way.
       if (req.method === "GET" && p === "/api/move/quote") {
         const qs = url.searchParams;
@@ -296,7 +286,6 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       }
       if (req.method === "GET" && p === "/api/extmgr/sites") return send(res, 200, { sites: w.dapps().sites(), paired: w.dapps().paired() });
       if (req.method === "GET" && p === "/api/sells") return send(res, 200, { sales: w.sales().list().slice(0, 10) });
-      if (req.method === "GET" && p === "/api/validators") return send(res, 200, { validators: (await w.staking().validators()).slice(0, 200) });
       if (req.method === "GET" && p === "/api/chart") return send(res, 200, await priceChart(String(url.searchParams.get("coin") ?? ""), String(url.searchParams.get("range") ?? "1D") as ChartRange));
       if (req.method === "GET" && p === "/api/receipts.csv") {
         res.setHeader("content-disposition", `attachment; filename="tollkit-wallet-receipts-${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -405,6 +394,29 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       }
       if (p === "/api/trade-mode") { try { return send(res, 200, { trade_mode: setTradeMode(b.mode, w.dir) }); } catch (e) { return send(res, 400, { error: (e as Error).message }); } }
       if (p === "/api/bots/share") { setShare(b.on === true, w.dir); if (b.on === true) void botsBeat(); return send(res, 200, { share: b.on === true }); }
+      // 0.9.1: the owner's own Swap screen. A quote (nothing signed), then the swap the owner tapped: the same path as an
+      // approved trade idea, so every limit, the token check, the fee and the Activity record apply.
+      if (p === "/api/swap/quote" || p === "/api/swap") {
+        try {
+          const chain = String(b.chain) as Chain;
+          if (!CHAINS.includes(chain) || !w.policy.chains.includes(chain)) throw new Error("Pick a network that's turned on.");
+          const from = await resolveToken(chain, String(b.from ?? "")), to = await resolveToken(chain, String(b.to ?? ""));
+          if (from.address.toLowerCase() === to.address.toLowerCase()) throw new Error("Pick two different coins.");
+          const amount = String(b.amount ?? "").trim();
+          if (!/^\d+(\.\d+)?$/.test(amount) || !(Number(amount) > 0)) throw new Error("Enter an amount.");
+          const req = { chain, sell_token: from.address, buy_token: to.address, sell_amount: toAtomic(amount, from.decimals), slippage_bps: Math.min(100, w.policy.max_slippage_bps) };
+          if (p === "/api/swap/quote") {
+            const r = await w.quote(req);
+            if (!r.ok || !r.quote) return send(res, 400, { error: r.refused?.reason ?? "No price right now." });
+            const q = r.quote, h = (v: string, dec: number) => formatUnits(BigInt(v), dec);
+            return send(res, 200, { from: from.symbol, to: to.symbol, pay: h(q.sell_amount, from.decimals), get: h(q.buy_amount, to.decimals), min: h(q.min_buy_amount, to.decimals),
+              usd: q.usd_value, fee_usd: q.fee_usd, fee_bps: q.fee_bps, ...(r.warning ? { warning: r.warning } : {}) });
+          }
+          const r = await w.swap(req, { ownerApproved: true });
+          if (!r.ok) return send(res, 400, { error: r.refused?.reason ?? "The swap didn't go through." });
+          return send(res, 200, { ok: true, tx: r.tx, chain });
+        } catch (e) { return send(res, 400, { error: (e as Error).message }); }
+      }
       // A trade idea from the Claude chat: the owner's tap is the approval; limits and token checks still apply.
       if (p === "/api/ideas") {
         const id = String(b.id ?? ""), act = String(b.action ?? "");
@@ -553,12 +565,6 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       if (p === "/api/sell/send") return send(res, 200, await w.cashOutSend(password, String(b.ref ?? "")));
       if (p === "/api/move" && !/^\d+$/.test(String(b.receive_min ?? ""))) return send(res, 400, { error: "Get a quote first." });
       if (p === "/api/move") return send(res, 200, await w.move(password, String(b.asset) as any, String(b.from) as Chain, String(b.to) as Chain, String(b.amount ?? ""), b.receive_min === undefined ? undefined : String(b.receive_min)));
-      if (p === "/api/stake") {
-        const action = String(b.action);
-        if (action === "stake") return send(res, 200, await w.stakeAction(password, { action, sol: Number(b.sol), vote: String(b.vote ?? "") }));
-        if (action === "unstake" || action === "withdraw") return send(res, 200, await w.stakeAction(password, { action, account: String(b.account ?? "") }));
-        return send(res, 400, { error: "Unknown action." });
-      }
       if (p === "/api/withdraw") {
         const chain = String(b.chain) as Chain;
         if (!CHAINS.includes(chain)) return send(res, 400, { error: "Pick a chain." });

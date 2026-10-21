@@ -115,7 +115,6 @@ const ELIZA_NAMES: Record<string, { name: string; similes: string[] }> = {
   token_hide: { name: "TOLLKIT_TOKEN_HIDE", similes: ["HIDE_TOKEN", "REMOVE_TOKEN"] },
   always_on: { name: "TOLLKIT_ALWAYS_ON", similes: ["KEEP_RUNNING", "RUN_WHILE_CLOSED", "SERVER_RUN"] },
   move_quote: { name: "TOLLKIT_MOVE_QUOTE", similes: ["BRIDGE_QUOTE", "MOVE_BETWEEN_CHAINS_QUOTE"] },
-  stake_info: { name: "TOLLKIT_STAKE_INFO", similes: ["STAKING_STATUS", "VALIDATORS"] },
   buy_link: { name: "TOLLKIT_BUY_LINK", similes: ["BUY_CRYPTO", "ONRAMP", "COINBASE_CHECKOUT"] },
   setup_request: { name: "TOLLKIT_SETUP_REQUEST", similes: ["ASK_OWNER", "CHANGE_LIMITS", "REQUEST_WITHDRAWAL", "REQUEST_MOVE", "REQUEST_STAKE"] },
   setup_requests: { name: "TOLLKIT_SETUP_REQUESTS", similes: ["MY_REQUESTS", "REQUEST_STATUS"] },

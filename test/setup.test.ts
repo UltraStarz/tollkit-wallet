@@ -42,7 +42,7 @@ const call = async (c: Client, name: string, args: Record<string, unknown> = {})
 
 // ── Surface: every setup tool exists, for connected apps and for Tollkit AI; nothing can apply a request or reveal keys.
 const names = ACTIONS.map((a) => a.name);
-const setupTools = ["bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "stake_info", "buy_link", "setup_request", "setup_requests", "setup_cancel"];
+const setupTools = ["bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "buy_link", "setup_request", "setup_requests", "setup_cancel"];
 check(setupTools.every((n) => names.includes(n)), "all setup tools are defined", names);
 check(setupTools.every((n) => ADVISOR_TOOLS.includes(n)), "Tollkit AI (advisor) gets the same setup tools");
 check(!names.some((n) => /policy|limit|backup|reveal|password|approve|withdraw$|^move$|^stake$|connect_app/.test(n)), "no tool changes limits, moves funds, approves, connects apps or reveals keys directly");

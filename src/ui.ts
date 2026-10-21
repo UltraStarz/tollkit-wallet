@@ -411,6 +411,7 @@ input[type=checkbox],input[type=radio]{width:auto;padding:0}
 .sbchip,.sbsw,.rcsw,.aorow,label.toggle{position:relative}.sbchip input,.sbsw input,.rcsw input{left:0;top:0;width:1px;height:1px;margin:0}.card{overflow:clip}
 .rcc.ovl{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}.ap-ovl{color:var(--warn)}
 .rcm .rcc{white-space:nowrap}.rcc.al{display:inline-flex;align-items:center;gap:4px;color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
+.swpick{display:flex;flex-wrap:wrap;gap:6px}.swpick .bsb{display:inline-flex;align-items:center;gap:6px}.swpick .ic.tok{width:20px;height:20px;min-width:20px;font-size:9px}.swpick .ic.tok svg,.swpick .ic.tok img{width:20px;height:20px}.swflip{display:flex;justify-content:center;margin:10px 0 -2px}.swflip .b{width:36px;height:36px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center}
 </style></head><body>
 <div class="aur" aria-hidden="true"><div class="drift"><i></i><i></i><i></i></div></div>
 <div class="wrap"><div class="card">
@@ -532,9 +533,9 @@ var BUY={o:null,chain:null,asset:"USDC",amt:"50",custom:"",test:false,err:null,b
 var BUYA={base:["USDC","ETH"],ethereum:["USDC","ETH"],solana:["USDC","SOL"]};
 // Coinbase buy and cash out: Base, Ethereum and Solana (Arbitrum and Polygon wait for Coinbase's network names to be confirmed).
 function rampChains(){var ch=((S.policy&&S.policy.chains)||["base"]).filter(function(c){return BUYA[c]});return ch.length?ch:["base"]}
-var WICO={withdraw:'<path d="M12 20V8m0 0l-5 5m5-5l5 5M5 4h14"/>',buy:'<path d="M12 5v14M5 12h14"/>',receive:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>',stake:'<path d="M4 17l6-6 4 4 6-6M14 9h6v6"/>',move:'<path d="M7 7h12l-3-3M17 17H5l3 3"/>',sell:'<rect x="3" y="6.5" width="18" height="11" rx="2.2"/><circle cx="12" cy="12" r="2.4"/><path d="M6.5 12h.01M17.5 12h.01"/>'};
+var WICO={withdraw:'<path d="M12 20V8m0 0l-5 5m5-5l5 5M5 4h14"/>',buy:'<path d="M12 5v14M5 12h14"/>',receive:'<path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/>',stake:'<path d="M4 17l6-6 4 4 6-6M14 9h6v6"/>',move:'<path d="M7 7h12l-3-3M17 17H5l3 3"/>',swap:'<path d="M20 8a8 8 0 0 0-14.6-2.5M4 16a8 8 0 0 0 14.6 2.5"/><path d="M20 3.5V8h-4.5M4 20.5V16h4.5"/>',sell:'<rect x="3" y="6.5" width="18" height="11" rx="2.2"/><circle cx="12" cy="12" r="2.4"/><path d="M6.5 12h.01M17.5 12h.01"/>'};
 function wTile(k,label,fn){return '<button class="wtile" onclick="'+fn+'"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+WICO[k]+'</svg></i>'+label+'</button>'}
-function walletActions(){var ch=(S.policy&&S.policy.chains)||[];return '<div class="wact">'+wTile("buy","Buy","openBuy()")+wTile("sell","Sell","openSell()")+wTile("receive","Receive","goReceive()")+(ch.length>1?wTile("move","Move","openMove()"):"")+(ch.indexOf("solana")>=0?wTile("stake","Stake","openStake()"):"")+wTile("withdraw","Withdraw","go('withdraw')")+'</div>'}
+function walletActions(){var ch=(S.policy&&S.policy.chains)||[];return '<div class="wact">'+wTile("buy","Buy","openBuy()")+wTile("sell","Sell","openSell()")+wTile("receive","Receive","goReceive()")+(ch.length>1?wTile("move","Move","openMove()"):"")+wTile("swap","Swap","openSwap()")+wTile("withdraw","Withdraw","go('withdraw')")+'</div>'}
 function goReceive(){go("receive")}
 // The AI app using the wallet right now (last 2 minutes), or recently (last 10), for the top bar. The in-app chat doesn't count: you're watching it.
 function abLeft(app){var b=(S.app_budgets||[]).filter(function(x){return x.app===app})[0];return b?" · "+usd(b.left_usd)+" of "+usd(b.weekly_usd)+" left this week":""}
@@ -551,33 +552,45 @@ h+='<div class="rcv-addr" id="rcvaddr">'+esc(a)+'</div><div style="display:flex;
 h+='<div class="stnote">'+(sol?"This address is for Solana only. In the app you\'re sending from, pick Solana as the network.":"This one address works on "+EVMNAMES+". In the app you\'re sending from, pick "+nm+" as the network.")+'</div>';
 return h}
 function openBuy(){var ch=rampChains();BUY.chain=BUY.chain&&ch.indexOf(BUY.chain)>=0?BUY.chain:ch[0];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.err=null;BUY.done=null;BUY.busy=false;if(!BUY.o){BUY.o=document.createElement("div");BUY.o.className="aio";BUY.o.innerHTML='<div class="aidlg" role="dialog" aria-modal="true" aria-label="Buy crypto"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';BUY.o.addEventListener("mousedown",function(e){if(e.target===BUY.o)closeBuy()});BUY.o.addEventListener("click",buyClick);document.body.appendChild(BUY.o)}buyRender()}
-var STK={o:null,data:null,vals:null,err:null,ok:null,busy:null,amt:"",vote:"",pw:""};
-function openStake(){STK.err=null;STK.ok=null;STK.busy=null;STK.pw="";if(!STK.o){STK.o=document.createElement("div");STK.o.className="aio";STK.o.innerHTML='<div class="aidlg" role="dialog" aria-modal="true" aria-label="Stake SOL"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';STK.o.addEventListener("mousedown",function(e){if(e.target===STK.o)closeStake()});STK.o.addEventListener("click",stkClick);document.body.appendChild(STK.o)}stkRender();stkLoad();if(!STK.vals)api("/validators").then(function(r){STK.vals=r.validators;stkRender()}).catch(function(e){STK.err=e.message;stkRender()})}
-function closeStake(){if(STK.o){STK.o.remove();STK.o=null}}
-document.addEventListener("keydown",function(e){if(STK.o&&e.key==="Escape")closeStake()});
-function stkLoad(){return api("/stake").then(function(d){STK.data=d;stkRender()}).catch(function(e){STK.err=e.message;stkRender()})}
-function sol(l){var n=Number(l)/1e9;return n.toLocaleString(undefined,{maximumFractionDigits:n<1?6:4})+" SOL"}
-function hrs(s){s=Number(s)||0;return s>=3600?"about "+Math.round(s/3600)+" h":"about "+Math.max(1,Math.round(s/60))+" min"}
-var STLBL={activating:["Starting","stc"],active:["Earning","stc active"],deactivating:["Unstaking","stc"],inactive:["Ready to withdraw","stc ready"]};
-function stkRender(){if(!STK.o)return;var d=STK.data,h='<h2>Stake SOL</h2><p class="ailead">Stake SOL with a validator to earn rewards. It stays under this wallet\'s control: unstake any time, then withdraw once the current epoch ends.</p>';
-if(!d)h+='<div class="sm mut">Loading your stakes…</div>';else{
-h+='<div class="ailbl">Your stakes</div>'+(d.accounts.length?d.accounts.map(function(a){var lb=STLBL[a.status]||[a.status,"stc"];var act=a.status==="active"||a.status==="activating"?'<button class="b g sbtn" data-su="'+esc(a.address)+'"'+(STK.busy?" disabled":"")+'>Unstake</button>':a.status==="inactive"?'<button class="b sbtn" data-sw="'+esc(a.address)+'"'+(STK.busy?" disabled":"")+'>Withdraw</button>':"";
-return '<div class="stk">'+tokIcon("SOL","solana")+'<div style="min-width:0"><div>'+sol(a.status==="inactive"?a.lamports:(a.delegated||a.lamports))+'</div><div class="sm mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(a.validator||(a.voter?short(a.voter):"Not delegated"))+'</div></div><div class="r"><span class="'+lb[1]+'">'+lb[0]+'</span>'+act+'</div></div>'}).join(""):'<div class="sm mut">No stakes yet.</div>')+
-'<div class="stnote">Epoch '+d.epoch.epoch+' ends in '+hrs(d.epoch.seconds_left)+'. New stakes start earning, and unstaked SOL can be withdrawn, after it ends.</div>'}
-h+='<div class="ailbl" style="margin-top:16px">New stake</div><div class="grid2"><div><label for="stamt">Amount (SOL)</label><input id="stamt" inputmode="decimal" placeholder="'+(d?d.min_delegation/1e9:1)+' or more" value="'+esc(STK.amt)+'" oninput="STK.amt=this.value.replace(/[^0-9.]/g,\'\')"></div><div><label for="stval">Validator</label><select id="stval" onchange="STK.vote=this.value">'+(STK.vals?'<option value="">Pick one</option>'+STK.vals.map(function(v){return '<option value="'+esc(v.vote)+'"'+(STK.vote===v.vote?" selected":"")+'>'+esc((v.name||short(v.vote))+" · "+v.commission+"% fee")+'</option>'}).join(""):'<option value="">Loading…</option>')+'</select></div></div>'+
-'<div class="stnote">Validators are listed by how much SOL is staked with them. The fee is the share of rewards the validator keeps. '+(d?'About '+sol(d.rent_reserve)+' stays in the stake account for rent and comes back when you withdraw.':'')+'</div>'+
-'<label for="stpw">Password</label><input id="stpw" type="password" autocomplete="current-password" value="'+esc(STK.pw)+'" oninput="STK.pw=this.value">'+
-(STK.err?'<div class="msg err">'+esc(STK.err)+'</div>':'')+(STK.ok?'<div class="msg okk">'+esc(STK.ok)+'</div>':'')+
-'<button class="b aigoap" data-sgo'+(STK.busy?" disabled":"")+'>'+(STK.busy==="stake"?"Staking…":"Stake")+'</button>';
-var fid=document.activeElement&&document.activeElement.id,body=STK.o.querySelector(".aibody");body.innerHTML=h;if(fid&&/^st(amt|pw)$/.test(fid)){var i=document.getElementById(fid);i.focus();i.setSelectionRange(i.value.length,i.value.length)}}
-function stkClick(e){var t=e.target.closest("button");if(!t)return;if(t.classList.contains("aix"))return closeStake();
-if(t.hasAttribute("data-sgo"))stkDo({action:"stake",sol:Number(STK.amt),vote:STK.vote});
-else if(t.hasAttribute("data-su"))stkDo({action:"unstake",account:t.getAttribute("data-su")});
-else if(t.hasAttribute("data-sw"))stkDo({action:"withdraw",account:t.getAttribute("data-sw")})}
-function stkDo(b){STK.err=null;STK.ok=null;if(!STK.pw){STK.err="Enter your password.";stkRender();return}
-if(b.action==="stake"){if(!(b.sol>0)){STK.err="Enter how much SOL to stake.";stkRender();return}if(!b.vote){STK.err="Pick a validator.";stkRender();return}}
-b.password=STK.pw;STK.busy=b.action;stkRender();
-api("/stake",b).then(function(){STK.busy=null;STK.pw="";if(b.action==="stake")STK.amt="";STK.ok=b.action==="stake"?"Staked. It starts earning after this epoch ends.":b.action==="unstake"?"Unstaking. You can withdraw it after this epoch ends.":"Withdrawn to your wallet.";stkLoad();refresh();loadBal()}).catch(function(e){STK.busy=null;STK.err=e.message;stkRender()})}
+// 0.9.1: Swap. One coin for another on one network, through the same checks as any trade (limits, token check, fee).
+var SWCORE={base:["ETH","USDC"],ethereum:["ETH","USDC","USDT"],arbitrum:["ETH","USDC"],polygon:["POL","USDC"],solana:["SOL","USDC","USDT"]};
+var SW={o:null,chain:null,from:null,to:null,amt:"",q:null,qerr:null,qbusy:false,err:null,ok:null,busy:false,t:null,seq:0};
+function swChains(){return ((S.policy&&S.policy.chains)||[]).filter(function(c){return SWCORE[c]})}
+// Coins to pick on a network: its core coins, then tokens on Home that passed the check or that you added. v = what the server gets.
+function swToks(c){var o=(SWCORE[c]||[]).map(function(x){return {v:x,s:x,l:null}});((S.holdings&&S.holdings.tokens)||[]).forEach(function(h){if(h.chain!==c||!h.symbol)return;if(h.trust==="unlisted"&&!h.watched)return;if(o.some(function(x){return x.s.toUpperCase()===String(h.symbol).toUpperCase()}))return;o.push({v:h.address,s:h.symbol,l:h.logo||null})});return o}
+function swTok(v){var t=swToks(SW.chain).filter(function(x){return x.v===v})[0];return t||{v:v,s:v,l:null}}
+function swHave(c,v){var t=swTok(v),n=mvHave(c,t.s);if(n!==null)return n;var h=((S.holdings&&S.holdings.tokens)||[]).filter(function(x){return x.chain===c&&(x.address===v||String(x.symbol).toUpperCase()===String(t.s).toUpperCase())})[0];return h?Number(h.amount):null}
+function openSwap(){SW.err=null;SW.ok=null;SW.busy=false;var ch=swChains();if(ch.indexOf(SW.chain)<0)SW.chain=ch.indexOf("solana")>=0?"solana":ch[0];var ts=swToks(SW.chain);if(!SW.from||!ts.some(function(x){return x.v===SW.from}))SW.from=ts[0]&&ts[0].v;if(!SW.to||SW.to===SW.from||!ts.some(function(x){return x.v===SW.to}))SW.to=(ts.filter(function(x){return x.v!==SW.from})[0]||{}).v;
+if(!SW.o){SW.o=document.createElement("div");SW.o.className="aio";SW.o.innerHTML='<div class="aidlg" role="dialog" aria-modal="true" aria-label="Swap"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';SW.o.addEventListener("mousedown",function(e){if(e.target===SW.o)closeSwap()});SW.o.addEventListener("click",swClick);document.body.appendChild(SW.o)}swRender();swQuote()}
+function closeSwap(){if(SW.o){SW.o.remove();SW.o=null}}
+document.addEventListener("keydown",function(e){if(SW.o&&e.key==="Escape")closeSwap()});
+function swQuote(){clearTimeout(SW.t);SW.q=null;SW.qerr=null;var a=Number(SW.amt);if(!(a>0)||!SW.from||!SW.to){SW.qbusy=false;swRender();return}SW.qbusy=true;swRender();var my=++SW.seq;
+SW.t=setTimeout(function(){api("/swap/quote",{chain:SW.chain,from:SW.from,to:SW.to,amount:SW.amt}).then(function(q){if(my!==SW.seq)return;SW.q=q;SW.qbusy=false;swRender()}).catch(function(e){if(my!==SW.seq)return;SW.qerr=e.message;SW.qbusy=false;swRender()})},450)}
+function swNum(v,s){var n=Number(v);return n.toLocaleString(undefined,{maximumFractionDigits:n>=1000?2:n>=1?4:6})+" "+s}
+function swRender(){if(!SW.o)return;var ch=swChains(),ts=swToks(SW.chain),have=swHave(SW.chain,SW.from),q=SW.q,F=swTok(SW.from),T=swTok(SW.to);
+var pick=function(attr,cur,skip){return '<div class="swpick">'+ts.filter(function(x){return x.v!==skip}).map(function(x){return '<button '+attr+'="'+esc(x.v)+'" class="bsb'+(cur===x.v?" on":"")+'">'+tokIcon(x.s,null,x.l)+esc(x.s)+'</button>'}).join("")+'</div>'};
+var h='<h2>Swap</h2><p class="ailead">Trade one coin for another in this wallet. Your trading limits apply.</p>'+
+'<div class="ailbl">Network</div><div class="bseg">'+ch.map(function(c){return '<button data-wc="'+c+'" class="bsb'+(SW.chain===c?" on":"")+'">'+chainIcon(c)+esc(CHAIN_NAMES[c]||c)+'</button>'}).join("")+'</div>'+
+'<div class="ailbl">You pay</div>'+pick("data-wf",SW.from,null)+
+'<div class="mvamt"><input id="swamt" inputmode="decimal" placeholder="0.00" value="'+esc(SW.amt)+'" oninput="SW.amt=this.value.replace(/[^0-9.]/g,\'\');swQuote()"><span class="mut sm">'+esc(F.s)+'</span>'+(have>0?'<button class="b g sbtn" data-wmax>Max</button>':'')+'</div>'+
+(have!==null?'<div class="sm mut" style="margin-top:6px">You have '+swNum(have,F.s)+' on '+esc(CHAIN_NAMES[SW.chain]||SW.chain)+'</div>':'')+
+'<div class="swflip"><button class="b g sbtn" data-wx aria-label="Swap the two coins" title="Flip">'+'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3"/></svg></button></div>'+
+'<div class="ailbl">You get</div>'+pick("data-wt",SW.to,SW.from);
+if(SW.qbusy)h+='<div class="mvq sm mut">Getting a price…</div>';
+else if(SW.qerr)h+='<div class="msg err">'+esc(SW.qerr)+'</div>';
+else if(q)h+='<div class="mvq"><div class="mvr"><span>You pay</span><b>'+swNum(q.pay,q.from)+'</b></div><div class="mvr"><span>You get about</span><b>'+swNum(q.get,q.to)+'</b></div><div class="mvr tot"><span>At least</span><b>'+swNum(q.min,q.to)+'</b></div><div class="mvr"><span>TOLLkit fee'+(q.fee_bps?" ("+(q.fee_bps/100)+"%)":"")+'</span><span>'+(q.fee_usd?fmtUsd(q.fee_usd):"$0.00")+'</span></div>'+(q.usd?'<div class="mvr"><span>Worth about</span><span>'+fmtUsd(q.usd)+'</span></div>':'')+'</div>'+(q.warning?'<div class="msg err">'+esc(q.warning)+'</div>':'');
+h+=(SW.err?'<div class="msg err">'+esc(SW.err)+'</div>':'')+(SW.ok?'<div class="msg okk">'+SW.ok+'</div>':'')+
+'<button class="b aigoap" data-wgo'+(SW.busy||!q?" disabled":"")+'>'+(SW.busy?"Swapping…":q?"Swap "+swNum(q.pay,q.from)+" for "+esc(q.to):"Swap")+'</button>';
+var fid=document.activeElement&&document.activeElement.id;SW.o.querySelector(".aibody").innerHTML=h;if(fid==="swamt"){var i=document.getElementById(fid);i.focus();i.setSelectionRange(i.value.length,i.value.length)}}
+function swClick(e){var t=e.target.closest("button");if(!t)return;if(t.classList.contains("aix"))return closeSwap();
+if(t.hasAttribute("data-wc")){SW.chain=t.getAttribute("data-wc");SW.from=null;SW.to=null;SW.amt="";openSwap();return}
+if(t.hasAttribute("data-wf")){SW.from=t.getAttribute("data-wf");if(SW.to===SW.from)SW.to=(swToks(SW.chain).filter(function(x){return x.v!==SW.from})[0]||{}).v;swQuote()}
+else if(t.hasAttribute("data-wt")){SW.to=t.getAttribute("data-wt");swQuote()}
+else if(t.hasAttribute("data-wx")){var a=SW.from;SW.from=SW.to;SW.to=a;SW.amt="";swQuote()}
+else if(t.hasAttribute("data-wmax")){var hv=swHave(SW.chain,SW.from),nat=/^(ETH|SOL|POL)$/.test(swTok(SW.from).s);if(hv>0){var keep=nat?(SW.chain==="solana"?0.01:SW.chain==="ethereum"?0.003:0.0005):0;SW.amt=String(Math.max(0,Math.floor((hv-keep)*1e6)/1e6))}swQuote()}
+else if(t.hasAttribute("data-wgo"))swGo()}
+function swGo(){SW.err=null;SW.ok=null;if(!SW.q)return;SW.busy=true;swRender();
+api("/swap",{chain:SW.chain,from:SW.from,to:SW.to,amount:SW.amt}).then(function(r){SW.busy=false;SW.amt="";SW.q=null;SW.ok='Swapped.'+(r.tx&&EXP[r.chain]?' <a target="_blank" rel="noopener" href="'+EXP[r.chain]+esc(r.tx)+'">View transaction</a>':'');swRender();refresh();loadBal()}).catch(function(e){SW.busy=false;SW.err=e.message;swRender()})}
 var MV={o:null,asset:"USDC",from:null,to:null,amt:"",pw:"",q:null,qerr:null,qbusy:false,err:null,ok:null,busy:false,moves:null,t:null,seq:0};
 function mvChains(){var ch=(S.policy&&S.policy.chains)||[];return MV.asset==="ETH"?ch.filter(function(c){return c==="base"||c==="ethereum"}):ch}
 function openMove(){MV.err=null;MV.ok=null;MV.busy=false;MV.pw="";var ch=mvChains();if(ch.indexOf(MV.from)<0)MV.from=ch[0];if(ch.indexOf(MV.to)<0||MV.to===MV.from)MV.to=ch.filter(function(c){return c!==MV.from})[0];

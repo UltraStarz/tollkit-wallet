@@ -31,7 +31,6 @@ export const SetupKinds = {
   withdraw_address: z.object({ action: z.enum(["add", "remove"]), chain: z.enum(CHAIN_ENUM), address: Addr, label: z.string().max(40).optional() }).strict(),
   withdraw: z.object({ chain: z.enum(CHAIN_ENUM), token: z.string().min(2).max(64), to: Addr, amount: z.string().regex(/^\d+(\.\d+)?$/) }).strict(),
   move: z.object({ asset: z.enum(["USDC", "ETH"]), from: z.enum(CHAIN_ENUM), to: z.enum(CHAIN_ENUM), amount: z.string().regex(/^\d+(\.\d+)?$/) }).strict(),
-  stake: z.object({ action: z.enum(["stake", "unstake", "withdraw"]), sol: z.number().positive().optional(), vote: z.string().max(64).optional(), account: z.string().max(64).optional() }).strict(),
   cash_out: z.object({ chain: z.enum(CHAIN_ENUM), asset: z.enum(["USDC", "ETH", "SOL"]), amount: z.string().regex(/^\d+(\.\d+)?$/) }).strict(),
   connect_app: z.object({ app: z.enum(["claude", "claude-code", "cursor", "vscode", "codex", "gemini"]) }).strict(),
   app_budget: z.object({ app: z.string().min(1).max(40), weekly_usd: z.number().positive().max(1_000_000).nullable() }).strict(),
@@ -69,7 +68,6 @@ export function describeSetup(kind: SetupKind, p: Record<string, any>): string {
     case "withdraw_address": return p.action === "add" ? `Save ${p.label ? `"${p.label}" ` : ""}${p.address} as a withdrawal address on ${chainName(p.chain)}.` : `Remove the withdrawal address ${p.address} on ${chainName(p.chain)}.`;
     case "withdraw": return `Withdraw ${p.amount} ${p.token} on ${chainName(p.chain)} to ${p.to}.`;
     case "move": return `Move ${p.amount} ${p.asset} from ${chainName(p.from)} to ${chainName(p.to)}.`;
-    case "stake": return p.action === "stake" ? `Stake ${p.sol} SOL${p.vote ? ` with validator ${p.vote}` : ""}.` : p.action === "unstake" ? `Unstake the stake account ${p.account}.` : `Withdraw the unstaked SOL from ${p.account}.`;
     case "cash_out": return `Cash out ${p.amount} ${p.asset} on ${chainName(p.chain)} to your bank through Coinbase.`;
     case "connect_app": return `Connect ${p.app} to this wallet.`;
     case "app_budget": return p.weekly_usd === null ? `Remove ${p.app}'s weekly budget.` : `Give ${p.app} a weekly budget of ${usd(p.weekly_usd)}.`;
@@ -111,10 +109,6 @@ export class Setups {
     const parsed = schema.safeParse(params ?? {});
     if (!parsed.success) throw new Error("The form is incomplete: " + parsed.error.issues.map((i) => `${i.path.join(".") || "params"}: ${i.message}`).join("; "));
     if (kind === "limits" && !Object.keys(parsed.data).length) throw new Error("Say which limit to change.");
-    if (kind === "stake") {
-      const p = parsed.data as any;
-      if (p.action === "stake" ? !(p.sol > 0) : !p.account) throw new Error(p.action === "stake" ? "Say how much SOL to stake." : "Say which stake account.");
-    }
     const t = this.now();
     const r: SetupRequest = {
       id: randomBytes(6).toString("hex"), kind, params: parsed.data as Record<string, unknown>, reason: String(reason ?? "").slice(0, 300), by,
