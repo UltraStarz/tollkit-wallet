@@ -41,6 +41,7 @@ export const SUPERBOT = {
   file: "superbot.json",
   stepPath: "/superbot/step",
   signalsPath: "/signals",
+  snapRetryMs: 2 * 60_000,
   stepPriceUsd: 0.005,
   keepDecisions: 200,
   keepReports: 30,
@@ -92,7 +93,7 @@ interface State {
   paper_rules: string[];
   halted: { reason: string; at: string; until: string | null } | null;
   marks: { day: string; day_start: number; week: string; week_start: number } | null;
-  stats: { cycles: number; steps: number; step_usd: number; last_cycle: string | null; last_step: string | null; last_snapshot: string | null; last_error: string | null; last_report: string | null };
+  stats: { cycles: number; steps: number; step_usd: number; last_cycle: string | null; last_step: string | null; last_snapshot: string | null; last_error: string | null; last_report: string | null; snap_fails?: number };
 }
 
 export interface SuperBotDeps {
@@ -264,7 +265,16 @@ export class SuperBot {
       const after = this.load();
       if (after.halted) return;
       const snap = await this.snapshot();
-      if (!snap) { await this.update((x) => { x.stats.last_error = "No signal snapshot from Tollkit's server."; }); return; }
+      if (!snap) {
+        // One missed reply is usually a server restart: check again in 2 minutes, and only show a problem after two misses in a row.
+        await this.update((x) => {
+          const n = (x.stats.snap_fails ?? 0) + 1; x.stats.snap_fails = n;
+          if (n >= 2) x.stats.last_error = "No signal snapshot from Tollkit's server.";
+          x.stats.last_cycle = nowIso(t - x.settings.rethink_minutes * 60_000 + SUPERBOT.snapRetryMs);
+        });
+        return;
+      }
+      if (after.stats.snap_fails) await this.update((x) => { x.stats.snap_fails = 0; });
       const moved = !!snap.changes?.moved && snap.id !== after.stats.last_snapshot;
       const stale = !after.stats.last_step || t - Date.parse(after.stats.last_step) >= SUPERBOT.forceStepMinutes * 60_000;
       if (force || moved || stale) await this.step(snap);

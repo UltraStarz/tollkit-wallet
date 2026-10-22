@@ -223,7 +223,16 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   W.setSignals(() => { throw new Error("down"); });
   W.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
   await W.bot.cycle(true);
-  check(/No signal snapshot/.test(W.bot.view().stats.last_error ?? ""), "no snapshot: says so, nothing charged");
+  const v1 = W.bot.view();
+  check(!v1.stats.last_error && v1.stats.snap_fails === 1, "one missed snapshot: no warning yet", v1.stats);
+  W.advance(60_000);
+  await W.bot.tick();
+  check(W.bot.view().stats.snap_fails === 1, "not retried before 2 minutes");
+  W.advance(60_000);
+  await W.bot.tick();
+  await new Promise((r) => setTimeout(r, 30));
+  check(W.bot.view().stats.snap_fails === 2, "retried 2 minutes later", W.bot.view().stats);
+  check(/No signal snapshot/.test(W.bot.view().stats.last_error ?? ""), "two misses in a row: says so, nothing charged");
   W.setSignals(() => ({ id: "s2", at: "x", changes: { moved: true } }));
   W.setNow("2026-10-21T00:10:00Z");
   await W.bot.cycle(true);
