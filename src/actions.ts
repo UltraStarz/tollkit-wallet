@@ -61,7 +61,7 @@ export const TokenArgs = z.object({ chain: z.enum(CHAIN_ENUM), address: z.string
 export const BotArgs = z.object({
   chain: z.enum(CHAIN_ENUM),
   token: z.string().min(2).max(64).describe("ETH, SOL, POL or a token address/mint the owner has added"),
-  template: z.enum(["dca", "dip", "protect", "trail", "ladder", "grid"]),
+  template: z.enum(["dca", "dip", "protect", "trail", "ladder", "grid", "smart_dca", "rebalance", "infinity_grid", "twap"]),
   params: z.record(z.union([z.number(), z.string()])).optional().describe("The template's fields (bot_templates); defaults otherwise"),
 });
 

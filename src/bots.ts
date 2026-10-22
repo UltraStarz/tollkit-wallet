@@ -29,6 +29,16 @@ export const TEMPLATES: Template[] = [
     fields: [{ key: "step1", label: "First sale at a gain of (%)", kind: "pct", default: 10, min: 1, max: 1000 }, { key: "step2", label: "Second at (%)", kind: "pct", default: 25, min: 1, max: 1000 }, { key: "step3", label: "Last at (%)", kind: "pct", default: 50, min: 1, max: 1000 }] },
   { id: "grid", name: "Grid trader", blurb: "Buys a little at each level as the price falls through a range and sells each one a level higher. Works best when the price moves sideways.", risk: "If the price drops out of the range, it holds what it bought; if it rises out, it stops buying.",
     fields: [{ key: "amount_usd", label: "Dollars per level", kind: "usd", default: 20, min: 1 }, { key: "range_pct", label: "Range around today's price (± %)", kind: "pct", default: 10, min: 1, max: 90 }, { key: "levels", label: "Levels", kind: "int", default: 8, min: 3, max: 40 }] },
+  { id: "smart_dca", name: "Smart DCA", blurb: "Buys, then buys more each time the price drops a step, so the average cost falls. Sells everything once the price is a set % over that average, then starts again.", risk: "In a long slide it ends up holding the coin at a loss until the price comes back.",
+    fields: [{ key: "amount_usd", label: "First buy ($)", kind: "usd", default: 20, min: 1 }, { key: "step_pct", label: "Buy more after each drop of (%)", kind: "pct", default: 3, min: 0.5, max: 50 }, { key: "safety", label: "Extra buys at most", kind: "int", default: 4, min: 0, max: 10 },
+      { key: "scale", label: "Each extra buy", kind: "choice", default: "1.5", choices: [["1", "Same size"], ["1.5", "1.5× the last"], ["2", "2× the last"]] }, { key: "profit_pct", label: "Sell all at a gain over the average of (%)", kind: "pct", default: 3, min: 0.5, max: 1000 }] },
+  { id: "rebalance", name: "Rebalancer", blurb: "Keeps a pot split between the coin and USDC. When the price moves the mix off target, it trades back: selling some after a rise, buying after a drop.", risk: "In a strong trend it keeps selling a rising coin or buying a falling one.",
+    fields: [{ key: "amount_usd", label: "Pot ($)", kind: "usd", default: 100, min: 10 }, { key: "target_pct", label: "Share in the coin (%)", kind: "pct", default: 50, min: 5, max: 95 }, { key: "band_pct", label: "Rebalance after a drift of (points)", kind: "pct", default: 5, min: 1, max: 40 }] },
+  { id: "infinity_grid", name: "Infinity grid", blurb: "Holds a set dollar amount of the coin. Every step up it sells the extra; every step down it buys back. No top to the range.", risk: "Below its floor it stops buying and holds; in a crash the coin it holds loses value.",
+    fields: [{ key: "amount_usd", label: "Dollars to keep in the coin", kind: "usd", default: 100, min: 10 }, { key: "step_pct", label: "Step (%)", kind: "pct", default: 2, min: 0.5, max: 50 }, { key: "floor_pct", label: "Stop buying below today's price minus (%)", kind: "pct", default: 30, min: 1, max: 95 }] },
+  { id: "twap", name: "Split order", blurb: "Buys or sells a large amount in equal parts spread over time, so one big trade doesn't move the price against you.", risk: "The price can move while the parts are filling.",
+    fields: [{ key: "side", label: "Buy or sell", kind: "choice", default: "buy", choices: [["buy", "Buy"], ["sell", "Sell"]] }, { key: "amount_usd", label: "Dollars to buy", kind: "usd", default: 100, min: 2 }, { key: "sell_percent", label: "Share of your holding to sell (%)", kind: "pct", default: 50, min: 1, max: 100 },
+      { key: "pieces", label: "Parts", kind: "int", default: 10, min: 2, max: 100 }, { key: "hours", label: "Over how many hours", kind: "int", default: 5, min: 1, max: 168 }] },
   { id: "alert", name: "Alert", blurb: "Tells you when the price crosses a level, moves a lot in a day, or an indicator (RSI, 50-hour average) flips. Never trades.", risk: "Only a notification: nothing is bought or sold. Works while the wallet app is running.",
     fields: [{ key: "condition", label: "Tell me when", kind: "choice", default: "above", choices: [["above", "It goes above a price"], ["below", "It falls below a price"], ["move", "It moves a lot in a day"], ["rsi_high", "It looks overbought (RSI over 70)"], ["rsi_low", "It looks oversold (RSI under 30)"], ["ma_up", "It crosses above its 50-hour average"], ["ma_down", "It crosses below its 50-hour average"]] },
       { key: "pct", label: "How far (%): from today's price, or the day's move", kind: "pct", default: 5, min: 0.5, max: 50 }] },
@@ -48,7 +58,7 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
     if (!Number.isFinite(n) || (f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max) || (f.kind === "int" && !Number.isInteger(n))) throw new Error(`${f.label}: ${f.min !== undefined ? `from ${f.min}` : ""}${f.max !== undefined ? ` to ${f.max}` : ""}.`);
     v[f.key] = n;
   }
-  const needsPrice = templateId !== "dca";
+  const needsPrice = !["dca", "smart_dca", "rebalance", "twap"].includes(templateId);
   if (needsPrice && !(price && price > 0)) throw new Error("No price for this token right now, so the bot's levels can't be set. Try again in a minute.");
   const bot = randomUUID().slice(0, 8), T = token.length > 12 ? `${token.slice(0, 4)}…` : token.toUpperCase();
   const name = `${tpl.name} · ${T}`;
@@ -82,6 +92,10 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
       break;
     }
     case "grid": rules = [{ ...base, kind: "grid", amount_usd: n("amount_usd"), lower_price: round(p * (1 - n("range_pct") / 100)), upper_price: round(p * (1 + n("range_pct") / 100)), levels: n("levels") }]; break;
+    case "smart_dca": rules = [{ ...base, kind: "smart_dca", amount_usd: n("amount_usd"), step_pct: n("step_pct"), safety: n("safety"), scale: Number(v.scale), profit_pct: n("profit_pct") }]; break;
+    case "rebalance": rules = [{ ...base, kind: "rebalance", amount_usd: n("amount_usd"), target_pct: n("target_pct"), band_pct: n("band_pct") }]; break;
+    case "infinity_grid": rules = [{ ...base, kind: "infinity_grid", amount_usd: n("amount_usd"), step_pct: n("step_pct"), lower_price: round(p * (1 - n("floor_pct") / 100)) }]; break;
+    case "twap": rules = [v.side === "sell" ? { ...base, kind: "twap", side: "sell", sell_percent: n("sell_percent"), pieces: n("pieces"), hours: n("hours") } : { ...base, kind: "twap", side: "buy", amount_usd: n("amount_usd"), pieces: n("pieces"), hours: n("hours") }]; break;
     case "alert": {
       const c = v.condition as string, pct = n("pct");
       rules = [{ ...base, kind: "alert", alert: c as any, ...(c === "above" ? { trigger_price: round(p * (1 + pct / 100)) } : c === "below" ? { trigger_price: round(p * (1 - pct / 100)) } : c === "move" ? { alert_value: pct } : {}) }];
@@ -117,7 +131,7 @@ export function summarize(rules: Rule[]): BotSummary[] {
     const price = rs.map((r) => r.state.last_price).find((x) => typeof x === "number") ?? null;
     const value = price !== null ? held * price : null;
     const st = rs.map((r) => r.status);
-    const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => r.kind === "grid" || r.kind === "dca") ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
+    const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => ["grid", "dca", "smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind)) ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
     const last = rs.flatMap((r) => r.state.fills.filter((x) => x.ok).map((x) => x.ts)).sort().at(-1) ?? null;
     const result = spent > 0 && value !== null ? got + value - spent : spent > 0 && held === 0 ? got - spent : null;
     out.push({

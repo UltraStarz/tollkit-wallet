@@ -355,12 +355,14 @@ export async function applyFills(store: RuleStore, fills: ServerFill[]) {
     for (const f of fills) {
       const r = rules.find((x) => x.id === f.rule_id);
       if (!r || (f.tx && r.state.fills.some((x) => x.tx === f.tx))) continue;
+      const bot = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind);
       r.state.fills.push({ ts: f.ts, ok: f.ok, tx: f.tx, usd: f.usd, units: f.units, side: f.side, reason: f.ok ? undefined : f.reason });
       r.state.fills = r.state.fills.slice(-50);
       if (!f.ok) { r.state.fail_count = (r.state.fail_count ?? 0) + 1; r.state.last_error = f.reason; continue; }
       r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined;
       if (f.side === "buy") { r.state.spent_usd = (r.state.spent_usd ?? 0) + (f.usd ?? 0); r.state.bought_units = (r.state.bought_units ?? 0) + (f.units ?? 0); }
       else { r.state.received_usd = (r.state.received_usd ?? 0) + (f.usd ?? 0); r.state.sold_units = (r.state.sold_units ?? 0) + (f.units ?? 0); }
+      if (bot) { if ((f as any).profit !== undefined) { r.state.round_trips = (r.state.round_trips ?? 0) + 1; r.state.grid_profit_usd = (r.state.grid_profit_usd ?? 0) + (f as any).profit; } continue; } // bots: the server's state copy says when they're done (src/alwayson-sol.ts)
       if (r.kind === "dca") {
         const step = r.every === "hour" ? 3600_000 : r.every === "week" ? 7 * 86_400_000 : 86_400_000;
         r.state.next_run = new Date(Date.parse(f.ts) + step).toISOString();

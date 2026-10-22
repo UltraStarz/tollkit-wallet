@@ -29,7 +29,7 @@ function market() {
 }
 
 // --- templates
-check(TEMPLATES.map((t) => t.id).join() === "dca,dip,protect,trail,ladder,grid,alert", "six bots and the Alert in the catalog");
+check(TEMPLATES.map((t) => t.id).join() === "dca,dip,protect,trail,ladder,grid,smart_dca,rebalance,infinity_grid,twap,alert", "the bots, the split order and the Alert in the catalog");
 const dca = buildBot("dca", "ETH", "base", { amount_usd: 25, every: "week" }, undefined);
 check(dca.rules.length === 1 && dca.rules[0]!.kind === "dca" && dca.rules[0]!.bot === dca.bot && dca.rules[0]!.template === "dca", "steady buyer: one recurring buy, no price needed");
 const grid = buildBot("grid", "ETH", "base", { amount_usd: 20, range_pct: 10, levels: 5 }, 2500);

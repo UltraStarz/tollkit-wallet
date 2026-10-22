@@ -16,8 +16,9 @@ import { z } from "zod";
 import { CHAIN_ENUM } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
+import { botProblem, type BotState } from "./botlogic.js";
 
-export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid", "alert"] as const;
+export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid", "alert", "smart_dca", "rebalance", "infinity_grid", "twap"] as const;
 /** 0.9.1: what an alert watches. Alerts only notify; they never trade. Indicators use hourly prices. */
 export const ALERT_TYPES = ["above", "below", "move", "rsi_high", "rsi_low", "ma_up", "ma_down"] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
@@ -75,6 +76,18 @@ export const RuleInput = z.object({
   alert_value: z.number().positive().max(100).optional(),
   /** 0.9.1: made by Autopilot for a paper trial; never trades real coins. */
   paper: z.boolean().optional(),
+  /** 0.9.3 bots (src/botlogic.ts). Smart DCA: buy again every step_pct lower, up to `safety` extra buys, each `scale`
+   *  times the last; sell all at profit_pct over the average. Infinity grid: step_pct. Rebalancer: target_pct coin,
+   *  band_pct drift. Split order (twap): side, pieces over hours. */
+  step_pct: z.number().min(0.2).max(50).optional(),
+  safety: z.number().int().min(0).max(10).optional(),
+  scale: z.number().min(1).max(3).optional(),
+  profit_pct: z.number().min(0.2).max(1000).optional(),
+  target_pct: z.number().min(5).max(95).optional(),
+  band_pct: z.number().min(1).max(40).optional(),
+  side: z.enum(["buy", "sell"]).optional(),
+  pieces: z.number().int().min(2).max(100).optional(),
+  hours: z.number().min(0.25).max(168).optional(),
 });
 export type RuleInput = z.infer<typeof RuleInput>;
 
@@ -112,6 +125,8 @@ export interface Rule extends RuleInput {
     grid?: { units: (number | null)[]; cost: (number | null)[]; atomic: (string | null)[] };
     /** Grid: completed buy-then-sell round trips and their profit. */
     round_trips?: number; grid_profit_usd?: number;
+    /** 0.9.3: Smart DCA, rebalancer, infinity grid and split orders (src/botlogic.ts). */
+    bot?: BotState;
   };
 }
 
@@ -133,6 +148,10 @@ export function describeRule(r: RuleInput): string {
         : r.alert === "ma_up" ? "crosses above its 50-hour average" : "crosses below its 50-hour average";
       return `Alert me when ${t} ${w}${on}`;
     }
+    case "smart_dca": return `Smart DCA: buy ${$(r.amount_usd)} of ${t}, then ${r.safety} more ${r.safety === 1 ? "time" : "times"} every ${r.step_pct}% lower (each ${r.scale}× the last); sell it all ${r.profit_pct}% above the average cost, and repeat${on}`;
+    case "rebalance": return `Rebalance ${$(r.amount_usd)} to ${r.target_pct}% ${t} / ${100 - (r.target_pct ?? 0)}% USDC whenever it drifts ${r.band_pct} points${on}`;
+    case "infinity_grid": return `Infinity grid: keep ${$(r.amount_usd)} of ${t}, selling the extra every ${r.step_pct}% up and buying back every ${r.step_pct}% down${r.lower_price ? ` (no buys under ${$(r.lower_price)})` : ""}${on}`;
+    case "twap": return r.side === "sell" ? `Split sell: ${sell} in ${r.pieces} parts over ${r.hours} ${r.hours === 1 ? "hour" : "hours"}${on}` : `Split buy: ${$(r.amount_usd)} of ${t} in ${r.pieces} parts over ${r.hours} ${r.hours === 1 ? "hour" : "hours"}${on}`;
     case "grid": return `Grid: buy ${$(r.amount_usd)} of ${t} at each of ${r.levels ?? "?"} levels from ${$(r.lower_price)} to ${$(r.upper_price)}, and sell each one a level higher${on}`;
     case "dca": {
       const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -153,6 +172,11 @@ export function ruleProblem(r: RuleInput): string | null {
     if (r.amount_usd || r.sell_percent || r.sell_amount) return "Alerts never trade, so they take no amounts.";
     if (/^(USDC|USDT)$/i.test(r.token)) return "Pick a token that moves; stablecoins stay near $1.";
     return null;
+  }
+  if (["smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind)) {
+    if (/^(USDC|USDT)$/i.test(r.token)) return "Bots trade an asset against USDC; the token can't be a stablecoin.";
+    if (r.kind === "twap" && r.side === "sell" && r.amount_usd) return "A split sell takes sell_percent, not amount_usd.";
+    return botProblem(r as any);
   }
   if (r.kind === "grid") {
     if (!r.amount_usd) return "A grid needs amount_usd (dollars per level).";

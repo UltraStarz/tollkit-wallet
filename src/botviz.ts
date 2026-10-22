@@ -110,6 +110,27 @@ export function botLevels(rs: Rule[]): Level[] {
     } else if (r.kind === "grid" && r.lower_price && r.upper_price && r.levels) {
       gridLevels(r).forEach((p, i) => out.push({ price: p, kind: "grid", label: i === 0 ? "Grid bottom" : i === r.levels! - 1 ? "Grid top" : `Grid level ${i + 1}`, live }));
     } else if (r.kind === "dca" && r.max_price) out.push({ price: r.max_price, kind: "cap", label: "Skips buys above", live });
+    else for (const m of botMarks(r)) out.push({ ...m, live });
+  }
+  return out;
+}
+
+/** 0.9.3: where a Smart DCA, rebalancer or infinity grid acts next, from its own state. */
+function botMarks(r: Rule): { price: number; kind: Level["kind"]; label: string; text: string }[] {
+  const b = r.state.bot ?? {}, held = Math.max(0, (r.state.bought_units ?? 0) - (r.state.sold_units ?? 0)), out: { price: number; kind: Level["kind"]; label: string; text: string }[] = [];
+  if (r.kind === "smart_dca" && held > 0 && b.cost) {
+    const avg = b.cost / held;
+    out.push({ price: avg * (1 + (r.profit_pct ?? 0) / 100), kind: "sell", label: `Sells all (+${r.profit_pct}%)`, text: `Sells everything at ${fmt(avg * (1 + (r.profit_pct ?? 0) / 100))}` });
+    if ((b.buys ?? 0) < (r.safety ?? 0) && b.ref) { const p = b.ref * (1 - (r.step_pct ?? 0) / 100); out.push({ price: p, kind: "buy", label: `Extra buy ${(b.buys ?? 0) + 1}/${r.safety}`, text: `Buys ${fmt((r.amount_usd ?? 0) * Math.pow(r.scale ?? 1, (b.buys ?? 0) + 1))} more at ${fmt(p)}` }); }
+  } else if (r.kind === "rebalance" && b.started && held > 0) {
+    const t = (r.target_pct ?? 50) / 100, band = (r.band_pct ?? 5) / 100, cash = b.cash ?? 0, at = (share: number) => (share * cash) / ((1 - share) * held);
+    if (t + band < 1) out.push({ price: at(t + band), kind: "sell", label: "Sells to target", text: `Sells some at ${fmt(at(t + band))}` });
+    if (cash > 0 && t - band > 0) out.push({ price: at(t - band), kind: "buy", label: "Buys to target", text: `Buys some at ${fmt(at(t - band))}` });
+  } else if (r.kind === "infinity_grid" && b.started && b.ref) {
+    const st = (r.step_pct ?? 2) / 100;
+    out.push({ price: b.ref * (1 + st), kind: "sell", label: `Sells the extra (+${r.step_pct}%)`, text: `Sells the extra at ${fmt(b.ref * (1 + st))}` });
+    if (!r.lower_price || b.ref * (1 - st) >= r.lower_price) out.push({ price: b.ref * (1 - st), kind: "buy", label: `Buys back (−${r.step_pct}%)`, text: `Buys back at ${fmt(b.ref * (1 - st))}` });
+    if (r.lower_price) out.push({ price: r.lower_price, kind: "cap", label: "No buys below", text: "" });
   }
   return out;
 }
@@ -136,6 +157,13 @@ export function botNext(rs: Rule[], price: number | null, now = Date.now()): Nex
       const buys = L.slice(0, -1).filter((p, i) => (g?.atomic?.[i] ?? null) === null && p <= price);
       if (sells.length) { const p = Math.min(...sells); moves.push({ text: `Sells a level at ${fmt(p)}`, price: p, dist_pct: dist(p) }); }
       if (buys.length) { const p = Math.max(...buys); moves.push({ text: `Buys a level at ${fmt(p)}`, price: p, dist_pct: dist(p) }); }
+    } else if (r.kind === "twap") {
+      const b = r.state.bot ?? {}, n = r.pieces ?? 1, part = r.side === "sell" ? "Sells" : `Buys ${fmt((r.amount_usd ?? 0) / n)}`;
+      moves.push({ text: `${part}: part ${(b.pieces ?? 0) + 1} of ${n}`, at: b.next_at ? new Date(b.next_at).toISOString() : new Date(now).toISOString() });
+    } else if (["smart_dca", "rebalance", "infinity_grid"].includes(r.kind)) {
+      const b = r.state.bot ?? {};
+      if (!b.started && !(r.kind === "smart_dca" && (r.state.bought_units ?? 0) > (r.state.sold_units ?? 0))) moves.push({ text: r.kind === "rebalance" ? `Buys ${fmt((r.amount_usd ?? 0) * (r.target_pct ?? 50) / 100)} to set up its mix` : `Buys ${fmt(r.amount_usd ?? 0)} to start`, at: new Date(now).toISOString() });
+      else for (const m of botMarks(r)) if (m.text) moves.push({ text: m.text, price: m.price, dist_pct: dist(m.price) });
     }
   }
   if (!moves.length) return null;
@@ -189,7 +217,7 @@ export async function replay(o: { template: string; chain: Chain; token: string;
   const candles = await hourlyCandles(product, days * 24, o.fetch, o.now);
   const start = candles[0]!, end = candles.at(-1)!;
   const built = buildBot(o.template, o.token, o.chain, o.params, start.o);
-  const sells = ["protect", "trail", "ladder"].includes(o.template);
+  const sells = ["protect", "trail", "ladder"].includes(o.template) || (o.template === "twap" && o.params.side === "sell");
   const hold = sells ? Math.min(1_000_000, Math.max(1, o.hold_usd ?? 100)) : 0;
 
   let clock = start.t, price = start.o;

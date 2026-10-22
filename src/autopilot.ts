@@ -17,7 +17,8 @@ import path from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { DEFAULT_RPC, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
-import { BUY_KINDS, gridLevels, nextRun, RuleStore, type Rule } from "./rules.js";
+import { BUY_KINDS, nextRun, RuleStore, type Rule } from "./rules.js";
+import { applyFill, decide, isBotKind, type BotState } from "./botlogic.js";
 import { KNOWN, resolveToken, toAtomic, type Token } from "./tokens.js";
 import type { Price } from "./prices.js";
 import type { SwapRequest } from "./swap.js";
@@ -139,7 +140,7 @@ export class Autopilot {
     const p = await this.price(r.chain, t);
     if (p === undefined) { await this.record(r.id, { checked: true }); return; }
     try { this.o.onPrice?.(r, p); } catch { /* charts never break trading */ }
-    if (r.kind === "grid") { await this.record(r.id, { price: p, checked: true }); await this.grid(r, t, p); return; }
+    if (isBotKind(r.kind)) { await this.record(r.id, { price: p, checked: true }); await this.bot(r, t, p); return; }
     if (r.kind === "alert") { await this.record(r.id, { price: p, checked: true }); await this.alert(r, t, p); return; }
     let high = r.state.high;
     if (r.kind === "trailing_stop") high = Math.max(high ?? p, p);
@@ -216,58 +217,61 @@ export class Autopilot {
   }
 
   /**
-   * Grid: levels L0 < L1 < ... from lower_price to upper_price. Slot i buys amount_usd at L(i) and sells those
-   * units at L(i+1), then can buy again. One trade per check: sells first (a filled slot whose sell level is
-   * reached), then the level the price has just come down to. Below the range it doesn't buy.
+   * 0.9.3: grids, Smart DCA, rebalancers, infinity grids and split orders. One trade per check, decided by
+   * src/botlogic.ts (the same code Tollkit's server runs for them 24/7 on Solana). A bot sells only coins it bought
+   * itself, except a split sell, which sells a share of what the owner holds (Autopilot's coins left alone).
    */
-  private async grid(r: Rule, t: Token, p: number) {
-    const L = gridLevels(r), g = r.state.grid ?? { units: Array(L.length - 1).fill(null), cost: Array(L.length - 1).fill(null), atomic: Array(L.length - 1).fill(null) };
+  private async bot(r: Rule, t: Token, p: number) {
     if (r.state.next_run && Date.parse(r.state.next_run) > this.now()) return; // backing off after a failure
-    const usdc = KNOWN[r.chain].USDC!;
-    const sellAt = g.atomic.findIndex((a, i) => a !== null && p >= L[i + 1]!);
-    if (sellAt >= 0) {
-      const req: SwapRequest = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: g.atomic[sellAt]!, slippage_bps: this.exec.slippageBps };
-      if (await this.overShare(r, (Number(g.atomic[sellAt]!) / 10 ** t.decimals) * p)) return;
-      const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
-      if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
-      const usd = res.quote?.usd_value ?? undefined, units = Number(req.sell_amount) / 10 ** t.decimals;
-      const updated = await this.store.mutate((rs) => {
-        const x = rs.find((y) => y.id === r.id)!, gg = x.state.grid!;
-        const profit = usd !== undefined && gg.cost[sellAt] != null ? usd - gg.cost[sellAt]! : 0;
-        gg.units[sellAt] = null; gg.cost[sellAt] = null; gg.atomic[sellAt] = null;
-        x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: "sell", units });
-        x.state.fills = x.state.fills.slice(-50);
-        tally(x, "sell", usd, units);
-        x.state.round_trips = (x.state.round_trips ?? 0) + 1; x.state.grid_profit_usd = (x.state.grid_profit_usd ?? 0) + profit;
-        x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined; x.state.next_run = undefined;
-        return { ...x };
-      });
-      this.o.onEvent?.({ type: "filled", rule: updated, detail: `Grid sold level ${sellAt + 1} at about $${p}${usd ? ` for $${usd.toFixed(2)}` : ""}` });
+    const usdc = KNOWN[r.chain].USDC!, now = this.now();
+    const st: BotState = { ...(r.state.bot ?? {}), ...(r.kind === "grid" && r.state.grid ? { grid: r.state.grid } : {}) };
+    let avail: bigint | undefined;
+    if (r.kind === "twap" && r.side === "sell" && st.sell_total === undefined) {
+      let bal = await this.exec.balance(r.chain, t);
+      if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
+      avail = sellableFor(r, bal, this.store.list(), t, this.exec.mode === "paper");
+    }
+    const a = decide(r as any, st, p, now, { decimals: t.decimals, avail });
+    if (!a) {
+      if (r.kind === "twap" && r.side === "sell" && avail !== undefined && avail <= 0n) await this.hold(r, now + 5 * 60_000, nothingToSell(r, t.symbol, 0n));
       return;
     }
-    if (p < L[0]!) return;
-    // Buy the level the price has just reached: at or below it, but less than one step below (lower levels wait
-    // for the price to get there; levels above today's price were never reached on the way down).
-    const step = L[1]! - L[0]!;
-    let buyAt = -1;
-    for (let i = L.length - 2; i >= 0; i--) if (g.atomic[i] === null && p <= L[i]! && L[i]! - p < step) { buyAt = i; break; }
-    if (buyAt < 0) return;
-    const req: SwapRequest = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.exec.slippageBps };
-    if (await this.overShare(r, r.amount_usd!)) return;
-    const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
-    if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
-    const usd = res.quote?.usd_value ?? undefined, atomic = String(res.quote?.buy_amount ?? "0"), units = Number(atomic) / 10 ** t.decimals;
-    const updated = await this.store.mutate((rs) => {
+    const save = async (fn: (x: Rule, next: BotState) => void, next: BotState) => this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id)!;
-      x.state.grid ??= { units: Array(L.length - 1).fill(null), cost: Array(L.length - 1).fill(null), atomic: Array(L.length - 1).fill(null) };
-      x.state.grid.units[buyAt] = units; x.state.grid.cost[buyAt] = usd ?? r.amount_usd!; x.state.grid.atomic[buyAt] = atomic;
-      x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: "buy", units });
-      x.state.fills = x.state.fills.slice(-50);
-      tally(x, "buy", usd, units);
-      x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined; x.state.next_run = undefined;
+      if (x.kind === "grid") { x.state.grid = next.grid; const { grid: _g, ...rest } = next; x.state.bot = rest; } else x.state.bot = next;
+      fn(x, next);
       return { ...x };
     });
-    this.o.onEvent?.({ type: "filled", rule: updated, detail: `Grid bought level ${buyAt + 1} at about $${p}${usd ? ` for $${usd.toFixed(2)}` : ""}` });
+    if (a.side === "mark") { await save(() => {}, applyFill(r as any, st, a, { usd: 0, got: 0n }, p, now, t.decimals).state); return; }
+    let req: SwapRequest;
+    if (a.side === "buy") req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(a.usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps };
+    else {
+      let amt = BigInt(a.atomic);
+      if (r.kind !== "grid") {
+        let bal = await this.exec.balance(r.chain, t);
+        if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
+        if (amt > bal) amt = bal;
+        if (amt <= 0n) { await this.hold(r, now + 5 * 60_000, nothingToSell(r, t.symbol, bal)); return; }
+      }
+      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps };
+    }
+    if (await this.overShare(r, a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p)) return;
+    const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
+    if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
+    const usd = res.quote?.usd_value ?? (a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p);
+    const got = a.side === "buy" ? BigInt(String(res.quote?.buy_amount ?? "0")) : BigInt(req.sell_amount);
+    const units = Number(got) / 10 ** t.decimals;
+    const out = applyFill(r as any, st, a, { usd, got }, p, now, t.decimals);
+    const updated = await save((x) => {
+      x.state.fills.push({ ts: new Date(now).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: a.side, units });
+      x.state.fills = x.state.fills.slice(-50);
+      tally(x, a.side, usd, units);
+      if (a.side === "buy") x.state.bought_atomic = (BigInt(x.state.bought_atomic ?? "0") + got).toString();
+      if (out.profit !== undefined) { x.state.round_trips = (x.state.round_trips ?? 0) + 1; x.state.grid_profit_usd = (x.state.grid_profit_usd ?? 0) + out.profit; }
+      x.state.runs += 1; x.state.failures = 0; x.state.last_error = undefined; x.state.next_run = undefined; x.state.hold_until = undefined;
+      if (out.done) x.status = "done";
+    }, out.state);
+    this.o.onEvent?.({ type: "filled", rule: updated, detail: `${a.why} at about $${p}${usd ? ` (${a.side === "buy" ? "spent" : "got"} $${usd.toFixed(2)})` : ""}${res.tx ? ` (${res.tx})` : ""}` });
   }
 
   /**

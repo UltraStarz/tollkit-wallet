@@ -19,6 +19,14 @@ let e1 = ""; try { await sendAndConfirm(b.c, tx(), [kp], { pollMs: 1 }); } catch
 check(/failed/.test(e1), "a failed transaction throws");
 const c = conn([null], 101);
 let e2 = ""; try { await sendAndConfirm(c.c, tx(), [kp], { pollMs: 1 }); } catch (e) { e2 = (e as Error).message; }
-check(/wasn't confirmed in time/.test(e2), "gives up once the blockhash expires");
+check(/dropped this transaction \(SIG…SIG\), so nothing changed/.test(e2), "expired and never landed: says nothing changed", e2);
+const d = conn([null, { confirmationStatus: "confirmed" }], 101);
+check(await sendAndConfirm(d.c, tx(), [kp], { pollMs: 1 }) === "SIG", "expired but found on the last look: counts as done");
+const f = conn([null, { err: { InstructionError: [0, "Custom"] } }], 101);
+let e3 = ""; try { await sendAndConfirm(f.c, tx(), [kp], { pollMs: 1 }); } catch (e) { e3 = (e as Error).message; }
+check(/failed/.test(e3) && !/nothing changed/.test(e3), "expired, last look shows it failed: says failed", e3);
+const g = conn([null], 10);
+let e4 = ""; try { await sendAndConfirm(g.c, tx(), [kp], { pollMs: 1, maxMs: 30 }); } catch (e) { e4 = (e as Error).message; }
+check(/still waiting/.test(e4) && !/nothing changed/.test(e4), "not expired yet but out of time: doesn't claim nothing happened", e4);
 console.log(`\nsolconfirm: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

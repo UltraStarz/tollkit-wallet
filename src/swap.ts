@@ -16,6 +16,7 @@ import { AddressLookupTableAccount, ComputeBudgetProgram, Connection, Keypair, P
 import { AbiCoder, Contract, Interface, JsonRpcProvider, ZeroAddress, type Wallet, type HDNodeWallet } from "ethers";
 import { KNOWN } from "./tokens.js";
 import { sendingProvider, waitMined } from "./evmsend.js";
+import { pollSolana } from "./solconfirm.js";
 import { ALLOWANCE_HOLDER, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, STABLES, SWAP_FEE_BPS, WSOL, isStable, type Chain, type EvmChain } from "./chains.js";
 
 type Fetch = typeof fetch;
@@ -323,14 +324,7 @@ async function executeBuilt(q: SwapQuote, keys: { solana: Keypair }, deps: ExecD
   await verifySwapTx(q, { evm: "", solana: keys.solana.publicKey }, { ...deps, ...deps.verify, vtx: tx, extraLamports: feeLamports });
   tx.sign([keys.solana]);
   const sig = await conn.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed", maxRetries: 3 });
-  const until = Date.now() + 90_000;
-  for (;;) {
-    const st = (await conn.getSignatureStatuses([sig])).value[0];
-    if (st?.err) throw new Error(`swap ${sig} failed: ${JSON.stringify(st.err)}`);
-    if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return sig;
-    if (Date.now() > until || (await conn.getBlockHeight("confirmed")) > lastValidBlockHeight) throw new Error(`Solana swap ${sig} wasn't confirmed in time. Check it on an explorer before trying again.`);
-    await new Promise((r) => setTimeout(r, deps.pollMs ?? 1500));
-  }
+  return pollSolana(conn, sig, lastValidBlockHeight, "swap", { pollMs: deps.pollMs });
 }
 
 /** Sign and send. Returns the transaction hash / signature. */

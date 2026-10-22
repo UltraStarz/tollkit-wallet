@@ -145,6 +145,10 @@ export function committedUsd(template: string, params: Record<string, unknown>):
     case "dca": { const t = Number(params.times) || 0; return a * (t > 0 ? t : 10); }
     case "dip": return a;
     case "grid": return a * Math.max(1, (Number(params.levels) || 2) - 1);
+    // 0.9.3: Smart DCA's first buy plus every extra one; a rebalancer's pot; an infinity grid's amount plus a buy-back.
+    case "smart_dca": { const k = Number(params.scale) || 1, n = Math.max(0, Number(params.safety) || 0); let t = 0; for (let i = 0; i <= n; i++) t += a * k ** i; return t; }
+    case "rebalance": return a;
+    case "infinity_grid": return a * 1.5;
     default: return 0;
   }
 }
@@ -417,7 +421,7 @@ export class SuperBot {
     return {
       limits: { budget_usd: s.settings.budget_usd, per_trade_usd: s.settings.per_trade_usd, max_token_pct: s.settings.max_token_pct, max_strategies: s.settings.max_strategies, slippage_bps: s.settings.slippage_bps, paper_period: `${s.settings.paper_days} days or ${s.settings.paper_trades} trades` },
       allowed: { chains: s.settings.chains, tokens: s.settings.tokens.map((x) => ({ ...x, price_usd: prices[`${x.chain}:${x.token}`] ?? null })) },
-      templates: TEMPLATES.filter((x) => x.id !== "alert").map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
+      templates: TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap").map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
       strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
@@ -483,7 +487,7 @@ export class SuperBot {
         if (!s.settings.chains.includes(chain)) return { applied: false, outcome: `${a.chain} is not an allowed network` };
         const tok = s.settings.tokens.find((x) => x.chain === chain && x.token.toLowerCase() === String(a.token ?? "").toLowerCase());
         if (!tok) return { applied: false, outcome: `${a.token} is not on the allowed list for ${chainName(chain)}` };
-        if (a.template === "alert" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
+        if (a.template === "alert" || a.template === "twap" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
         if (running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
