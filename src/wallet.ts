@@ -29,6 +29,7 @@ import { KNOWN, type Token } from "./tokens.js";
 import { RuleStore } from "./rules.js";
 import { IdeaStore } from "./ideas.js";
 import { AlwaysOn } from "./alwayson.js";
+import { SolAlwaysOn } from "./alwayson-sol.js";
 import { PaperBook } from "./paper.js";
 import { liveBalance, type Executor } from "./autopilot.js";
 import { Staking, type StakingOptions } from "./stake.js";
@@ -46,6 +47,8 @@ export interface WalletOptions {
   proxy?: string;
   /** Tests: the ETH price "Keep running when closed" bases its floors on. */
   alwaysPrice?: (sym: string) => Promise<number | undefined>;
+  /** Tests: stands in for Solana in alwaysSol(). */
+  alwaysSolChain?: import("./alwayson-sol.js").SolChain;
   rpc?: Partial<Record<Chain, string>>;
   /** Override for tests: send a withdrawal. */
   send?: (r: SendRequest, keys: Keys) => Promise<string>;
@@ -469,6 +472,13 @@ export class TollkitWallet {
     });
   }
   private ao?: AlwaysOn;
+
+  /** 0.9.2: the same on Solana, under a token allowance this wallet signs (src/alwayson-sol.ts). */
+  alwaysSol(): SolAlwaysOn {
+    return this.aos ??= new SolAlwaysOn({ key: () => this.keys.solana, address: this.addresses.solana, dir: this.o.dir, rpc: this.rpc("solana"), fetch: this.f,
+      proxy: this.o.proxy ?? DEFAULT_PROXY, rules: () => this.rules(), ...(this.o.alwaysSolChain ? { chain: this.o.alwaysSolChain } : {}) });
+  }
+  private aos?: SolAlwaysOn;
 
   /** Websites using this wallet through the Tollkit browser extension. Approvals happen in the dashboard. */
   dapps(): DappBridge {

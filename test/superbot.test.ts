@@ -25,6 +25,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   let now = Date.parse("2026-10-20T08:00:00Z");
   const store = new RuleStore(dir);
   const always = { on: new Set<string>(), isOn: (id: string) => always.on.has(id), set: (id: string, on: boolean) => { if (on) always.on.add(id); else always.on.delete(id); }, config: async () => ({ enabled: true, chains: ["base"], delegate: "0x1" }), serverRuns: () => false, anyOn: () => always.on.size > 0 };
+  const alwaysSol = { on: new Map<string, number | undefined>(), isOn: (id: string) => alwaysSol.on.has(id), set: (id: string, on: boolean, b?: number) => { if (on) alwaysSol.on.set(id, b); else alwaysSol.on.delete(id); }, config: async () => ({ enabled: true, delegate: "So1" }) };
   const calls: any[] = [];
   const notes: string[] = [];
   let decision = o.decision ?? (() => ({ assessment: "Nothing moved.", market_view: "neutral", confidence: 0.3, actions: [{ type: "keep", reason: "Quiet.", sources: [] }] }));
@@ -33,6 +34,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
     dir, policy: { chains: ["base", "solana"] },
     rules: () => store,
     always: () => always,
+    alwaysSol: () => alwaysSol,
     pay: async (url: string, init: any) => {
       const body = JSON.parse(init.body);
       calls.push({ url, body });
@@ -43,7 +45,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   };
   const fetch = (async (url: string) => Response.json(signals())) as any;
   const bot = new SuperBot(w, { dir, proxy: "https://api.test/wallet", fetch, now: () => now, price: async () => o.price ?? 2500, knownToken: async (_c, t) => ["ETH", "SOL", "USDC"].includes(t.toUpperCase()), notify: async (t) => { notes.push(t); } });
-  return { dir, store, bot, calls, notes, always, setNow: (iso: string) => { now = Date.parse(iso); }, advance: (ms: number) => { now += ms; }, setDecision: (f: () => any) => { decision = f; }, setSignals: (f: () => any) => { signals = f; } };
+  return { dir, store, bot, calls, notes, always, alwaysSol, setNow: (iso: string) => { now = Date.parse(iso); }, advance: (ms: number) => { now += ms; }, setDecision: (f: () => any) => { decision = f; }, setSignals: (f: () => any) => { signals = f; } };
 }
 
 // ─── on, first cycle, a keep decision ───────────────────────────────────────
@@ -160,6 +162,27 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   await W2.bot.cycle(true);
   const v2 = W2.bot.view();
   check(v2.strategies[0].stage === "paper" && v2.decisions.some((d) => d.by === "rule" && /budget/.test(d.actions[0].outcome)), "$200 committed does not fit a $100 budget: stays on paper", v2.decisions.find((d) => d.by === "rule")?.actions[0]);
+}
+
+// ─── 0.9.2: a live Solana SOL strategy goes to Solana 24/7, under the Autopilot budget ───
+{
+  const W = world({ price: 107, decision: () => ({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dca", chain: "solana", token: "SOL", params: { amount_usd: 10, every: "day", times: 2 }, reason: "Steady.", sources: ["s"] }] }) });
+  await W.bot.enable({ budget_usd: 100, daily_loss_pct: 5, always_on: true });
+  await new Promise((r) => setTimeout(r, 30));
+  const st = W.bot.view().strategies[0];
+  check(!!st && W.alwaysSol.on.size === 0, "a paper SOL strategy never goes 24/7", [...W.alwaysSol.on]);
+  await W.store.mutate((rules) => { const r = rules.find((x) => x.bot === st.bot)!; r.state.ok_count = 25; r.state.spent_usd = 20; r.state.bought_units = 0.19; r.state.last_price = 107; });
+  W.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
+  W.advance(8 * 86_400_000);
+  await W.bot.cycle(true);
+  const v = W.bot.view();
+  check(v.strategies[0].stage === "live" && W.alwaysSol.on.size === 1 && [...W.alwaysSol.on.values()][0] === 100 && W.always.on.size === 0, "live: handed to Solana 24/7 (not Base), with the $100 Autopilot budget as its allowance", [v.strategies[0].stage, [...W.alwaysSol.on]]);
+  await W.bot.setSettings({ always_on: false });
+  check(W.alwaysSol.on.size === 0, "the 24/7 switch off takes live strategies off the server right away", [...W.alwaysSol.on]);
+  await W.bot.setSettings({ always_on: true });
+  check(W.alwaysSol.on.size === 1, "and back on hands them over again", [...W.alwaysSol.on]);
+  await W.bot.disable();
+  check(W.alwaysSol.on.size === 0, "turning Autopilot off takes it off Solana 24/7", [...W.alwaysSol.on]);
 }
 
 // ─── loss stops and the kill switch ─────────────────────────────────────────

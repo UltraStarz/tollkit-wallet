@@ -174,7 +174,7 @@ export const ACTIONS = [
         const made = await w.rules().addBot(rules, "agent", auto, ctx?.app);
         w.hooks.rulesChanged?.();
         return { ok: true, bot: b.built.bot, name: b.built.name, status: auto ? "active" : "proposed", rules: made.map(showRule),
-          note: auto ? "The bot is on. It trades while the wallet is open, or on Tollkit's server if the owner turns on Keep running when closed." : "The bot is waiting for the owner to turn it on in the wallet (Bots tab)." };
+          note: auto ? "The bot is on. It trades while the wallet is open, or on Tollkit's server if the owner turns on Keep running when closed." : "The bot is waiting for the owner to turn it on in the wallet (Bots tab for Buy the dip, ladders and grids; Orders tab for the rest)." };
       } catch (e) { return bad(e); }
     } }),
   def({ name: "bots_status", spends: false, schema: NoArgs,
@@ -328,6 +328,6 @@ export async function proposeRules(w: TollkitWallet, a: z.infer<typeof ProposeAr
   w.hooks.rulesChanged?.();
   return {
     ok: true, rules: made, unparsed,
-    note: auto ? "These rules are on. The autopilot runs while the wallet's dashboard or `tollkit-wallet autopilot` is running." : "These rules are waiting for the owner to turn them on in the dashboard (Bots tab) or with `tollkit-wallet rule on <id>`.",
+    note: auto ? "These rules are on. The autopilot runs while the wallet's dashboard or `tollkit-wallet autopilot` is running." : "These rules are waiting for the owner to turn them on in the dashboard (Orders tab) or with `tollkit-wallet rule on <id>`.",
   };
 }

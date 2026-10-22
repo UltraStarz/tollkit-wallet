@@ -33,6 +33,7 @@ import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
 import { buildBot, summarize, TEMPLATES, type BotSummary } from "./bots.js";
 import { serverRunnable } from "./alwayson.js";
+import { solRunnable } from "./alwayson-sol.js";
 import type { Rule, RuleStore } from "./rules.js";
 import type { TollkitWallet } from "./wallet.js";
 
@@ -209,6 +210,13 @@ export class SuperBot {
     const settings = parseSettings(body, s.settings);
     for (const t of settings.tokens) if (!(await this.d.knownToken(t.chain, t.token))) throw new Error(`Add ${t.token} on ${chainName(t.chain)} on Home first (Add a token runs Tollkit's scam check).`);
     await this.update((st) => { st.settings = settings; });
+    // 0.9.2: the 24/7 switch applies to strategies already live, both ways, right away.
+    if (settings.always_on !== s.settings.always_on && s.enabled) {
+      const all = this.w.rules().list(), live = s.strategies.filter((x) => x.stage === "live").flatMap((x) => this.rulesOf(s, x, all)).filter((r) => r.status === "active");
+      if (settings.always_on) await this.handToAlwaysOn(live);
+      else for (const r of live) if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false);
+      this.d.onRulesChanged?.();
+    }
     return this.view();
   }
   /** The kill switch: every strategy's rules are cancelled, Always On is turned off for them, the bot stops. */
@@ -286,7 +294,7 @@ export class SuperBot {
     if (weekLoss >= weekCap) { why = `Weekly loss stop: down $${r2(weekLoss)} this week (limit $${r2(weekCap)}).`; const d = new Date(t); d.setUTCDate(d.getUTCDate() + (8 - ((d.getUTCDay() + 6) % 7)) % 7 || 7); d.setUTCHours(0, 0, 0, 0); until = d.toISOString(); }
     else if (dayLoss >= dayCap) { why = `Daily loss stop: down $${r2(dayLoss)} today (limit $${r2(dayCap)}).`; until = `${today}T00:00:00.000Z`; until = nowIso(Date.parse(until) + 86_400_000); }
     if (!why) return;
-    for (const st of s.strategies) if (st.stage === "live") for (const r of this.rulesOf(s, st, all)) if (r.status === "active") { await this.w.rules().setStatus(r.id, "paused").catch(() => {}); if (this.w.always().isOn(r.id)) this.w.always().set(r.id, false); }
+    for (const st of s.strategies) if (st.stage === "live") for (const r of this.rulesOf(s, st, all)) if (r.status === "active") { await this.w.rules().setStatus(r.id, "paused").catch(() => {}); if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false); }
     await this.update((x) => { x.halted = { reason: why!, at: nowIso(t), until }; });
     await this.log("rule", why, [{ type: "pause", reason: why, sources: [`live result $${liveResult}`], applied: true, outcome: `live strategies paused until ${until}` }]);
     this.d.onRulesChanged?.();
@@ -323,7 +331,7 @@ export class SuperBot {
   /** Cancel a strategy's open rules (and Always On for them). */
   private async stopRules(st: Strategy, all: Rule[], note: string) {
     for (const r of this.openRules(this.rulesOf(this.load(), st, all))) {
-      if (this.w.always().isOn(r.id)) this.w.always().set(r.id, false);
+      if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false);
       await this.w.rules().setStatus(r.id, "cancelled").catch(() => {});
       await this.w.rules().mutate((rules) => { const x = rules.find((y) => y.id === r.id); if (x) x.state.note = note.slice(0, 120); }).catch(() => {});
     }
@@ -371,12 +379,26 @@ export class SuperBot {
     return null;
   }
 
+  /** 0.9.2: the 24/7 switch for a rule's network: Base and the other EVM networks, or Solana (src/alwayson-sol.ts). */
+  private ao(r: Pick<Rule, "chain">): { isOn(id: string): boolean; set(id: string, on: boolean, budget?: number): void } {
+    const sol = r.chain === "solana" ? (this.w as any).alwaysSol?.() : null;
+    return sol ?? this.w.always();
+  }
+
   private async handToAlwaysOn(rules: Rule[]) {
     const s = this.load();
     if (!s.settings.always_on) return;
-    let cfg; try { cfg = await this.w.always().config(); } catch { return; }
-    if (!cfg?.enabled) return;
-    for (const r of rules) if (!serverRunnable(r, cfg.chains as EvmChain[])) this.w.always().set(r.id, true, s.settings.budget_usd);
+    const evm = rules.filter((r) => r.chain !== "solana"), sol = rules.filter((r) => r.chain === "solana");
+    if (evm.length) {
+      let cfg; try { cfg = await this.w.always().config(); } catch { cfg = null; }
+      if (cfg?.enabled) for (const r of evm) if (!serverRunnable(r, cfg.chains as EvmChain[])) this.w.always().set(r.id, true, s.settings.budget_usd);
+    }
+    // Solana: buys under a USDC allowance of the Autopilot budget; sells set aside only SOL Autopilot's strategies bought.
+    const so = (this.w as any).alwaysSol?.();
+    if (sol.length && so) {
+      let cfg; try { cfg = await so.config(); } catch { cfg = null; }
+      if (cfg?.enabled) for (const r of sol) if (!solRunnable(r)) so.set(r.id, true, s.settings.budget_usd);
+    }
   }
 
   // ─── the strategist ──────────────────────────────────────────────────────
@@ -429,7 +451,7 @@ export class SuperBot {
         if (!st || st.stage === "retired") return { applied: false, outcome: "no such running strategy" };
         const want = a.type === "pause" ? "paused" : "active", from = a.type === "pause" ? "active" : "paused";
         let n = 0;
-        for (const r of this.rulesOf(s, st, all)) if (r.status === from) { await this.w.rules().setStatus(r.id, want); n++; if (a.type === "pause" && this.w.always().isOn(r.id)) this.w.always().set(r.id, false); }
+        for (const r of this.rulesOf(s, st, all)) if (r.status === from) { await this.w.rules().setStatus(r.id, want); n++; if (a.type === "pause" && this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false); }
         await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); y?.history.push({ ts: nowIso(this.now()), note: `${a.type}: ${a.reason}` }); });
         return { applied: n > 0, outcome: n ? `${n} rule${n === 1 ? "" : "s"} ${want}` : `nothing to ${a.type}` };
       }

@@ -55,6 +55,8 @@ export class Watcher {
   constructor(private readonly w: TollkitWallet, private readonly o: { rpc?: Partial<Record<Chain, string>>; logsRpc?: Partial<Record<EvmChain, string>>; intervalMs?: number; fetch?: typeof fetch } = {}) {
     this.file = path.join(walletHome(w.dir), "live.json");
     if (existsSync(this.file)) { try { this.ev = JSON.parse(readFileSync(this.file, "utf8")); } catch { this.ev = []; } }
+    // 0.9.2: drop Solana "deposits" saved without a transaction (left by a failed balance read; they never confirm).
+    this.ev = this.ev.filter((e) => !(e.chain === "solana" && e.direction === "in" && !e.tx));
   }
 
   onEvent(cb: (e: LiveEvent) => void) { this.listeners.push(cb); }
@@ -165,8 +167,9 @@ export class Watcher {
     const accounts = new Map<string, PublicKey>([["native", owner]]);
     for (const mint of Object.keys(STABLES.solana)) {
       const ata = ataOf(owner, new PublicKey(mint)); accounts.set(mint, ata);
-      const b = await conn.getTokenAccountBalance(ata, "confirmed").catch(() => null);
-      next.set(mint, BigInt(b?.value.amount ?? "0"));
+      // 0.9.2: a failed read keeps the last balance. Reading it as 0 made the next good read look like a deposit of everything.
+      const b = await conn.getTokenAccountBalance(ata, "confirmed").then((x) => BigInt(x.value.amount), (e) => (/could not find account|Invalid param: not a Token account/i.test(String((e as Error)?.message ?? e)) ? 0n : null));
+      next.set(mint, b ?? s.balances.get(mint) ?? 0n);
     }
     if (s.primed) {
       for (const [k, v] of next) {
@@ -174,6 +177,7 @@ export class Watcher {
         if (v <= before) continue;
         const sigs = await conn.getSignaturesForAddress(accounts.get(k)!, { limit: 5 }, "confirmed").catch(() => []);
         const sig = sigs.find((x) => !x.err && !this.ev.some((e) => e.tx === x.signature));
+        if (!sig) continue; // no transaction behind it: not shown as a deposit (it could never be confirmed)
         if (this.ownSwap("solana", sig?.signature)) continue;
         this.emit({ id: `solana:${sig?.signature ?? k + ":" + s.head}`, chain: "solana", direction: "in", token: this.sym("solana", k), amount: formatUnits(v - before, this.dec("solana", k)), tx: sig?.signature, block: sig?.slot ?? s.head, first_seen: new Date().toISOString(), status: "confirmed", confirmations: 0 });
       }

@@ -83,7 +83,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const tape = new PriceTape(w.dir);
   // 0.9.0: the Autopilot's paper strategies run on a second, paper autopilot; the live one leaves them alone.
   let superbot: SuperBot | null = null;
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
     // 0.9.1: alerts reach Telegram when it's linked (the screen shows them on the rule card and as a toast).
     onEvent: (e) => { if (e.type !== "alert") return; const t = loadTelegram(w.dir); if (t) void notify(t, `TOLLkit alert: ${e.detail}`).catch(() => {}); } }) : null;
   autopilot?.start();
@@ -99,8 +99,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   };
   // "Keep running when closed": hand the switched-on rules to Tollkit's server and bring back what it traded.
   const alwaysSync = async () => {
-    if (!w.always().anyOn()) return;
-    try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
+    if (w.always().anyOn()) try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
+    if (w.alwaysSol().anyOn()) try { await w.alwaysSol().sync(); } catch (e) { w.alwaysSol().noteError((e as Error).message); }
   };
   const alwaysTimer = o.watch === false ? null : setInterval(() => void alwaysSync(), 5 * 60_000);
   // 0.8.0: an AI tool added or changed rules; start them now rather than at the next tick.
@@ -110,7 +110,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const tf: typeof fetch = (w as any).f ?? fetch;
   if (o.watch !== false) void refreshCatalog(w.dir, tf);
   const toolsTimer = o.watch === false ? null : setInterval(() => void refreshCatalog(w.dir, tf), 6 * 3600_000);
-  if (alwaysTimer) setTimeout(() => { void w.always().config().then(() => alwaysSync()).catch(() => {}); }, 3_000);
+  if (alwaysTimer) setTimeout(() => { void Promise.all([w.always().config(), w.alwaysSol().config()]).then(() => alwaysSync()).catch(() => {}); }, 3_000);
   // The Autopilot tab's AI chat and scheduled check-ins (runs while the dashboard is open).
   const ai = o.ai === false ? null : o.ai ?? new AiAssistant(w, { dir: w.dir });
   const aiTimer = ai ? setInterval(() => void ai.tick().catch(() => {}), 60_000) : null;
@@ -241,7 +241,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
           ideas: w.ideas().list().slice(-60),
-          always: w.always().view(),
+          always: w.always().view(), always_sol: w.alwaysSol().view(),
           bots: botsView(), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
@@ -440,7 +440,25 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       }
       if (p === "/api/always") {
         try {
-          if (b.action === "off") { await w.always().off(); return send(res, 200, { always: w.always().view() }); }
+          if (b.action === "off") {
+            // Each network on its own: one failing doesn't keep the other on.
+            const errs: string[] = [];
+            if (b.chain !== "solana") await w.always().off().catch((e) => errs.push((e as Error).message));
+            if (b.chain !== "evm" && w.alwaysSol().anyOn()) await w.alwaysSol().off().catch((e) => errs.push(`Solana: ${(e as Error).message}`));
+            if (errs.length) return send(res, 400, { error: errs.join(" ") });
+            return send(res, 200, { always: w.always().view(), always_sol: w.alwaysSol().view() });
+          }
+          const rule = b.id ? w.rules().get(String(b.id)) : undefined;
+          if (rule?.chain === "solana" || b.chain === "solana") {
+            const sc = await w.alwaysSol().config();
+            if (b.on === true && !sc?.enabled) return send(res, 400, { error: sc ? sc.reason ?? "Not available yet." : "Can't reach Tollkit's server right now." });
+            w.alwaysSol().set(String(b.id ?? ""), b.on === true, b.budget_usd === undefined ? undefined : Number(b.budget_usd));
+            await alwaysSync();
+            const v = w.alwaysSol().view(), prob = rule ? v.problems[rule.id] : undefined;
+            // A rule that couldn't be set up is switched back off, with the reason.
+            if (b.on === true && rule && prob && !v.running.includes(rule.id)) { w.alwaysSol().set(rule.id, false); return send(res, 400, { error: prob }); }
+            return send(res, 200, { always_sol: w.alwaysSol().view() });
+          }
           const cfg = await w.always().config();
           if (b.on === true && !cfg?.enabled) return send(res, 400, { error: cfg ? cfg.reason ?? "Not available yet." : "Can't reach Tollkit's server right now." });
           w.always().set(String(b.id ?? ""), b.on === true, b.budget_usd === undefined ? undefined : Number(b.budget_usd));
