@@ -26,7 +26,7 @@ import { existsSync } from "node:fs";
 import { passwordFile } from "./paths.js";
 import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLink, type AppId } from "./connect.js";
 import { AiAssistant, setAiTier } from "./ai.js";
-import { Holdings, priceChart, coinId, erc20Info, type ChartRange } from "./holdings.js";
+import { Holdings, priceChart, coinId, erc20Info, toCandles, type ChartRange, type OHLC } from "./holdings.js";
 import { KNOWN } from "./tokens.js";
 import { checkToken, findListed, isCoreToken, loadExtraLists, searchEvm, searchSolana, solanaInfo } from "./tokenlist.js";
 import { buildBot, maybeShare, setShare, shareSettings, summarize, TEMPLATES } from "./bots.js";
@@ -261,11 +261,13 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!token) return send(res, 400, { error: "Which bot or token?" });
         const days = Math.min(30, Math.max(1, Number(url.searchParams.get("days")) || 7));
         const product = coinbaseProduct(token);
-        let series: [number, number][] = [], source: string | null = null;
-        if (product) { try { series = (await hourlyCandles(product, days * 24)).map((k) => [k.t, k.c]); source = "Coinbase, hourly"; } catch { /* fall back to the tape */ } }
+        // Candles: Coinbase's hourly candles (4-hour past a week). Other tokens get the line.
+        let series: [number, number][] = [], candles: OHLC[] = [], source: string | null = null;
+        const csize = (days > 7 ? 4 : 1) * 3_600_000;
+        if (product) { try { const hc = await hourlyCandles(product, days * 24); series = hc.map((k) => [k.t, k.c]); candles = toCandles(hc, csize); source = "Coinbase"; } catch { /* fall back to the tape */ } }
         if (!series.length) { series = tape.series(chain, token, Date.now() - days * 86_400_000); source = series.length ? "Prices this wallet saw" : null; }
         const price = rs.map((r) => r.state.last_price).find((x) => typeof x === "number") ?? series.at(-1)?.[1] ?? null;
-        return send(res, 200, { token, chain, source, series, price, levels: botLevels(rs), trades: botTrades(rs, 50).filter((t) => t.ok && t.price), next: rs.length ? botNext(rs, price) : null, started: rs.map((r) => r.created_at).sort()[0] ?? null });
+        return send(res, 200, { token, chain, source, series, candles, price, levels: botLevels(rs), trades: botTrades(rs, 50).filter((t) => t.ok && t.price), next: rs.length ? botNext(rs, price) : null, started: rs.map((r) => r.created_at).sort()[0] ?? null });
       }
       // Receive: this wallet's own addresses, each with a QR code to scan from another wallet or an exchange.
       if (req.method === "GET" && p === "/api/receive") {

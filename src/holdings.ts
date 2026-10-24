@@ -182,16 +182,103 @@ export class Holdings {
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 }
 
-/** Ranges for the price chart. DefiLlama span/period pairs, checked against the live API on 2026-10-14. */
-export const CHART_RANGES = { "1D": { span: 24, period: "1h" }, "1W": { span: 42, period: "4h" }, "1M": { span: 30, period: "1d" }, "1Y": { span: 52, period: "1w" } } as const;
+/**
+ * Ranges for the price chart. DefiLlama span/period pairs (checked against the live API on 2026-10-24: 96x15m,
+ * 168x1h, 180x4h and 365x1d all return every point, for coingecko ids and chain:address tokens alike).
+ * `candle` is the candle size in seconds: 24 hourly, 42 four-hour, 30 daily or 52 weekly candles. The candles
+ * themselves are real trading candles, never built from these points (see realCandles).
+ */
+export const CHART_RANGES = { "1D": { span: 96, period: "15m", candle: 3600 }, "1W": { span: 168, period: "1h", candle: 14400 }, "1M": { span: 180, period: "4h", candle: 86400 }, "1Y": { span: 365, period: "1d", candle: 604800 } } as const;
+
+/** A candle: [time, open, high, low, close, volume?]. Time is the candle's start, in the same unit as the input. */
+export type OHLC = [number, number, number, number, number] | [number, number, number, number, number, number];
+/**
+ * Groups prices into candles of `size` (same unit as the times). Rows are finer candles ({t, o, h, l, c}): the
+ * candle opens at its first row's open, closes at its last row's close, and its high and low cover every row. Rows
+ * can also be single prices ({t, p}); then a candle opens at the previous candle's close. Empty buckets are skipped.
+ */
+export function toCandles(rows: ({ t: number; p: number } | { t: number; o: number; h: number; l: number; c: number; v?: number })[], size: number): OHLC[] {
+  const out: OHLC[] = [];
+  let prev: number | null = null;
+  for (const r of [...rows].sort((a, b) => a.t - b.t)) {
+    const o = "p" in r ? r.p : r.o, h = "p" in r ? r.p : r.h, l = "p" in r ? r.p : r.l, c = "p" in r ? r.p : r.c;
+    if (!(o > 0 && h > 0 && l > 0 && c > 0)) continue;
+    const b = Math.floor(r.t / size) * size, k = out[out.length - 1];
+    const v = "v" in r && typeof r.v === "number" && r.v >= 0 ? r.v : null;
+    if (k && k[0] === b) { k[2] = Math.max(k[2], h); k[3] = Math.min(k[3], l); k[4] = c; if (v !== null) (k as number[])[5] = ((k as number[])[5] ?? 0) + v; }
+    else { const op = "p" in r ? prev ?? o : o; out.push(v === null ? [b, op, Math.max(op, h), Math.min(op, l), c] : [b, op, Math.max(op, h), Math.min(op, l), c, v]); }
+    prev = c;
+  }
+  return out;
+}
 export type ChartRange = keyof typeof CHART_RANGES;
 
-export async function priceChart(coin: string, range: ChartRange, f: Fetch = fetch): Promise<{ coin: string; symbol?: string; range: ChartRange; points: { t: number; p: number }[] }> {
+/** Coinbase Exchange products for the native coins (public candles API, no key; checked live on 2026-10-24). */
+const COINBASE: Record<string, string> = { "coingecko:ethereum": "ETH-USD", "coingecko:solana": "SOL-USD", "coingecko:polygon-ecosystem-token": "POL-USD" };
+/** GeckoTerminal network ids (api.geckoterminal.com/api/v2/networks, checked 2026-10-24). */
+const GT_NET: Record<string, string> = { base: "base", ethereum: "eth", arbitrum: "arbitrum", polygon: "polygon_pos", solana: "solana" };
+const GT = "https://api.geckoterminal.com/api/v2", GT_H = { accept: "application/json;version=20230302" };
+const poolCache = new Map<string, { at: number; pool: string; name: string }>();
+const candleCache2 = new Map<string, { at: number; v: { candles: OHLC[]; source: string; size: number } }>();
+
+/**
+ * Real trading candles for the chart, oldest first, times in seconds:
+ *   - ETH, SOL and POL: Coinbase Exchange, GET /products/{id}/candles?granularity= (rows are
+ *     [time, low, high, open, close, volume], newest first, up to 300 per request).
+ *   - Any other token: GeckoTerminal, the token's top DEX pool (GET /networks/{net}/tokens/{addr}/pools), then
+ *     GET /networks/{net}/pools/{pool}/ohlcv/{hour|day}?aggregate=&limit=&currency=usd&token={addr}
+ *     (rows are [time, open, high, low, close, volume], newest first).
+ * Sizes, as trading apps show them: 1D 15-minute (96), 1W hourly (168), 1M 6-hour from Coinbase or 4-hour from
+ * GeckoTerminal, 1Y daily (365). Volume rides along as the sixth value. Nothing is made up: no candles when
+ * neither source has the token (the chart then shows the line).
+ */
+export async function realCandles(coin: string, range: ChartRange, f: Fetch = fetch, now = Date.now()): Promise<{ candles: OHLC[]; source: string | null; size: number | null }> {
+  const key = coin + range, hit = candleCache2.get(key);
+  if (hit && now - hit.at < 5 * 60_000) return hit.v;
+  const get = async (u: string, h: Record<string, string> = { accept: "application/json" }) => { const r = await f(u, { headers: h, signal: AbortSignal.timeout(12_000) }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); };
+  let out: { candles: OHLC[]; source: string; size: number } | null = null;
+  try {
+    const product = COINBASE[coin];
+    if (product) {
+      const day = 86_400, end = Math.floor(now / 1000);
+      const cb = async (gran: number, from: number, to: number) => ((await get(`https://api.exchange.coinbase.com/products/${product}/candles?granularity=${gran}&start=${new Date(from * 1000).toISOString()}&end=${new Date(to * 1000).toISOString()}`)) as number[][])
+        .filter((x) => Array.isArray(x) && x.length >= 5).map((x) => ({ t: x[0]!, l: x[1]!, h: x[2]!, o: x[3]!, c: x[4]!, v: x[5] }));
+      const [gran, n] = range === "1D" ? [900, 96] : range === "1W" ? [3600, 168] : range === "1M" ? [21_600, 120] : [day, 365];
+      const rows = range === "1Y" ? [...(await cb(day, end - 366 * day, end - 250 * day)), ...(await cb(day, end - 250 * day, end))] : await cb(gran, end - (n + 1) * gran, end);
+      out = { candles: toCandles(rows, gran).slice(-n), source: "Coinbase", size: gran };
+    } else {
+      const m = /^(base|ethereum|arbitrum|polygon|solana):([0-9A-Za-z]{32,44})$/.exec(coin);
+      if (m) {
+        const net = GT_NET[m[1]!]!, addr = m[2]!;
+        let pool = poolCache.get(coin);
+        if (!pool || now - pool.at > 3_600_000) {
+          const top = ((await get(`${GT}/networks/${net}/tokens/${addr}/pools?page=1`, GT_H)) as any)?.data?.[0];
+          const id = String(top?.attributes?.address ?? "");
+          if (!id) throw new Error("no pool");
+          pool = { at: now, pool: id, name: String(top?.attributes?.name ?? "") };
+          poolCache.set(coin, pool);
+        }
+        const tf = range === "1D" ? "minute?aggregate=15&limit=96" : range === "1W" ? "hour?aggregate=1&limit=168" : range === "1M" ? "hour?aggregate=4&limit=180" : "day?aggregate=1&limit=365";
+        const list = (((await get(`${GT}/networks/${net}/pools/${pool.pool}/ohlcv/${tf}&currency=usd&token=${addr}`, GT_H)) as any)?.data?.attributes?.ohlcv_list ?? []) as number[][];
+        const rows = list.filter((x) => Array.isArray(x) && x.length >= 5).map((x) => ({ t: x[0]!, o: x[1]!, h: x[2]!, l: x[3]!, c: x[4]!, v: x[5] }));
+        const size = range === "1D" ? 900 : range === "1W" ? 3600 : range === "1M" ? 14_400 : 86_400;
+        out = { candles: toCandles(rows, size), source: `GeckoTerminal${pool.name ? ` (${pool.name})` : ""}`, size };
+      }
+    }
+  } catch { out = null; }
+  const v = out && out.candles.length > 1 ? out : { candles: [] as OHLC[], source: null as string | null, size: null as number | null };
+  if (v.candles.length) candleCache2.set(key, { at: now, v: v as { candles: OHLC[]; source: string; size: number } });
+  return v;
+}
+
+export async function priceChart(coin: string, range: ChartRange, f: Fetch = fetch): Promise<{ coin: string; symbol?: string; range: ChartRange; points: { t: number; p: number }[]; candles: OHLC[]; candle_source: string | null; candle_size: number | null }> {
   if (!/^(coingecko:[a-z0-9-]+|(base|ethereum|arbitrum|polygon|solana):[0-9A-Za-z]{32,44})$/.test(coin)) throw new Error("Unknown coin.");
   const r = CHART_RANGES[range];
   if (!r) throw new Error("Pick 1D, 1W, 1M or 1Y.");
   const res = await f(`${LLAMA}/chart/${coin}?span=${r.span}&period=${r.period}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(12_000) });
   if (!res.ok) throw new Error(`Price history isn't available right now (HTTP ${res.status}).`);
   const c = (await res.json())?.coins?.[coin];
-  return { coin, symbol: c?.symbol, range, points: (c?.prices ?? []).map((x: any) => ({ t: Number(x.timestamp), p: Number(x.price) })).filter((x: any) => x.p > 0) };
+  const points: { t: number; p: number }[] = (c?.prices ?? []).map((x: any) => ({ t: Number(x.timestamp), p: Number(x.price) })).filter((x: any) => x.p > 0);
+  const k = await realCandles(coin, range, f);
+  return { coin, symbol: c?.symbol, range, points, candles: k.candles, candle_source: k.source, candle_size: k.size };
 }

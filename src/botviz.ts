@@ -22,6 +22,7 @@ import { buildBot } from "./bots.js";
 import type { Token } from "./tokens.js";
 import type { SwapRequest } from "./swap.js";
 import type { SwapResult } from "./wallet.js";
+import { toCandles, type OHLC } from "./holdings.js";
 
 // ── Prices ─────────────────────────────────────────────────────────────────────────────────────────────────────
 export interface Candle { t: number; o: number; h: number; l: number; c: number }
@@ -181,10 +182,13 @@ export function botTrades(rs: Rule[], limit = 50): Trade[] {
 }
 
 // ── Replay ─────────────────────────────────────────────────────────────────────────────────────────────────────
-/** Rules in memory, for a replay: same behavior as the wallet's store, no files. */
+/**
+ * Rules in memory, for a replay: same behavior as the wallet's store, no files. The store's folder is an empty one
+ * inside the wallet's own folder: "/nonexistent-replay" failed on macOS, where the disk's top folder is read-only.
+ */
 class MemoryRules extends RuleStore {
   private rows: Rule[] = [];
-  constructor() { super("/nonexistent-replay"); }
+  constructor() { super(path.join(walletHome(), "replay")); }
   override list(): Rule[] { return structuredClone(this.rows); }
   override async mutate<T>(fn: (rules: Rule[]) => T): Promise<T> { const rs = structuredClone(this.rows); const out = fn(rs); this.rows = rs; return out; }
 }
@@ -192,6 +196,8 @@ class MemoryRules extends RuleStore {
 export interface ReplayResult {
   token: string; product: string; from: string; to: string; start_price: number; end_price: number; change_pct: number;
   prices: [number, number][];
+  /** The same hours as candles (4-hour past a week): [time, open, high, low, close]. */
+  candles: OHLC[];
   levels: Level[];
   rules: string[];
   trades: { ts: string; side: "buy" | "sell"; price: number; usd: number }[];
@@ -270,6 +276,7 @@ export async function replay(o: { template: string; chain: Chain; token: string;
     token: tok.symbol, product, from: new Date(start.t).toISOString(), to: new Date(end.t + 3_600_000).toISOString(),
     start_price: start.o, end_price: end.c, change_pct: Math.round(((end.c - start.o) / start.o) * 1000) / 10,
     prices: candles.map((k) => [k.t, k.c]),
+    candles: toCandles(candles, (days > 7 ? 4 : 1) * 3_600_000),
     levels,
     rules: built.rules.map((r) => describeRule(r)),
     trades,
