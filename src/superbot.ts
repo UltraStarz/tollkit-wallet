@@ -36,6 +36,7 @@ import { serverRunnable } from "./alwayson.js";
 import { solRunnable } from "./alwayson-sol.js";
 import type { Rule, RuleStore } from "./rules.js";
 import type { TollkitWallet } from "./wallet.js";
+import { SUPERBOT_SYSTEM, DECIDE_TOOL, checkDecision, strategistUser } from "./strategist.js";
 
 export const SUPERBOT = {
   file: "superbot.json",
@@ -104,6 +105,11 @@ export interface SuperBotDeps {
   knownToken: (chain: Chain, token: string) => Promise<boolean>;
   onRulesChanged?: () => void;
   notify?: (text: string) => Promise<void>;
+  /**
+   * 0.9.5, the phone app: decide with the owner's own AI key instead of paying Tollkit's server per decision.
+   * `label` names the model (null until a key is added); `run` makes one forced `decide` call (app/own-ai.ts).
+   */
+  decide?: { label(): string | null; run(system: string, user: string, tool: typeof DECIDE_TOOL): Promise<{ input: unknown; model: string }> };
 }
 
 const nowIso = (ms: number) => new Date(ms).toISOString();
@@ -197,6 +203,7 @@ export class SuperBot {
         live_result_usd: r2(live.reduce((a, x) => a + (x.result_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
       next_cycle: s.enabled && s.stats.last_cycle ? nowIso(Date.parse(s.stats.last_cycle) + s.settings.rethink_minutes * 60_000) : null,
       x_note: "X (Twitter) needs a paid key and isn't available yet.",
+      ...(this.d.decide ? { brain: { own: true, label: this.d.decide.label() } } : {}),
     };
   }
 
@@ -439,6 +446,7 @@ export class SuperBot {
     const context = this.context(s, all, prices);
     let body = JSON.stringify({ snapshot_id: snap.id, context });
     if (body.length > SUPERBOT.maxContextChars) { context.recent_decisions = []; context.retired_recently = []; body = JSON.stringify({ snapshot_id: snap.id, context }); }
+    if (this.d.decide) return this.stepOwn(snap, context);
     const r = await this.w.pay(`${this.d.proxy}${SUPERBOT.stepPath}`, { method: "POST", headers: { "content-type": "application/json" }, body }, { publicOnly: true, by: "superbot" });
     const j: any = r.response ? await r.response.json().catch(() => null) : null;
     if (!(r.paid || r.owner) || !r.response?.ok || !j?.decision) {
@@ -451,6 +459,23 @@ export class SuperBot {
     const applied: AppliedAction[] = [];
     for (const a of j.decision.actions as any[]) applied.push({ ...a, ...(await this.apply(a).catch((e) => ({ applied: false, outcome: (e as Error).message }))) });
     await this.log("strategist", j.decision.assessment, applied, { snapshot_id: j.snapshot_id ?? snap.id, market_view: j.decision.market_view, confidence: j.decision.confidence, model: j.model ?? null, cost_usd: cost });
+    if (applied.some((a) => a.applied && a.type !== "keep")) this.d.onRulesChanged?.();
+  }
+
+  /** 0.9.5: one decision on the owner's own AI key; the provider bills them, so nothing is paid here. */
+  private async stepOwn(snap: any, context: any) {
+    const fail = (why: string) => this.update((x) => { x.stats.last_error = `AI step: ${why}`.slice(0, 300); x.stats.last_snapshot = snap.id; });
+    if (!this.d.decide!.label()) return void await this.update((x) => { x.stats.last_error = "Add your AI key on the AI tab so Autopilot can decide."; });
+    if (!snap?.id || !snap.pulse) return void await fail("the market snapshot was incomplete");
+    let user = strategistUser(snap, context);
+    if (JSON.stringify(context).length > SUPERBOT.maxContextChars) { context.recent_decisions = []; context.retired_recently = []; user = strategistUser(snap, context); }
+    let got: { input: unknown; model: string }, decision: ReturnType<typeof checkDecision>;
+    try { got = await this.d.decide!.run(SUPERBOT_SYSTEM, user, DECIDE_TOOL); decision = checkDecision(got.input); }
+    catch (e) { return void await fail((e as Error).message); }
+    await this.update((x) => { x.stats.steps++; x.stats.last_step = nowIso(this.now()); x.stats.last_snapshot = snap.id; x.stats.last_error = null; });
+    const applied: AppliedAction[] = [];
+    for (const a of decision.actions as any[]) applied.push({ ...a, ...(await this.apply(a).catch((e) => ({ applied: false, outcome: (e as Error).message }))) });
+    await this.log("strategist", decision.assessment, applied, { snapshot_id: snap.id, market_view: decision.market_view, confidence: decision.confidence, model: got.model, cost_usd: 0 });
     if (applied.some((a) => a.applied && a.type !== "keep")) this.d.onRulesChanged?.();
   }
 

@@ -25,7 +25,7 @@ import { CHAINS as ALL_CHAINS, chainName, type Chain } from "./chains.js";
 import { existsSync } from "node:fs";
 import { passwordFile } from "./paths.js";
 import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLink, type AppId } from "./connect.js";
-import { AiAssistant, setAiTier } from "./ai.js";
+import { AiAssistant, setAiTier, IMAGE_TYPES, MAX_IMAGES, type ChatImage } from "./ai.js";
 import { Holdings, priceChart, coinId, erc20Info, toCandles, type ChartRange, type OHLC } from "./holdings.js";
 import { KNOWN } from "./tokens.js";
 import { checkToken, findListed, isCoreToken, loadExtraLists, searchEvm, searchSolana, solanaInfo } from "./tokenlist.js";
@@ -38,7 +38,7 @@ import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.j
 import { budgetView, setBudget } from "./appbudget.js";
 import { Setups, showSetup, needsPassword, type SetupRequest } from "./setups.js";
 import { catalogView, refreshCatalog, setHidden } from "./tollkit-tools.js";
-import { SuperBot } from "./superbot.js";
+import { SuperBot, type SuperBotDeps } from "./superbot.js";
 import { loadTelegram } from "./wallet.js";
 import { notify } from "./telegram.js";
 
@@ -73,7 +73,11 @@ export interface RemoteConnect {
 
 export async function startDashboard(w: TollkitWallet, password: string, o: { port?: number; host?: string; watch?: boolean; autopilot?: boolean; connectApps?: boolean; ai?: AiAssistant | false; holdings?: Holdings | false;
   /** Connect your AI through a hosted address instead of app settings files (the browser extension). */
-  remote?: RemoteConnect } = {}): Promise<DashboardHandle> {
+  remote?: RemoteConnect;
+  /** 0.9.4, the phone: the owner's own AI key and model (app/own-ai.ts). */
+  ownAi?: { save(b: Record<string, unknown>): Promise<void>; setModel(m: unknown, which?: unknown): Promise<void>; remove(): Promise<void>;
+    /** 0.9.5: Autopilot decides on the same key (appsrc/superbot.ts, SuperBotDeps.decide). */
+    decider?(): NonNullable<SuperBotDeps["decide"]> } } = {}): Promise<DashboardHandle> {
   const watcher = o.watch === false ? null : new Watcher(w);
   watcher?.start();
   const prices = o.watch === false ? null : new PriceFeed();
@@ -148,6 +152,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     knownToken,
     onRulesChanged: () => { void autopilot?.tick(); void paperPilot?.tick(); void alwaysSync(); },
     notify: tg ? (t) => notify(tg, t) : undefined,
+    ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });
   if (o.watch !== false) superbot.start();
   const token = randomBytes(24).toString("hex");
@@ -294,7 +299,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         return send(res, 200, w.receiptsCsv(), "text/csv; charset=utf-8");
       }
       if (req.method !== "POST") return send(res, 405, { error: "method" });
-      const b = await readBody(req);
+      // 0.9.4: a chat message can carry up to 4 pictures (each already shrunk on the phone).
+      const b = await readBody(req, p === "/api/ai/chat" ? 12 * 1024 * 1024 : 64 * 1024);
       if (p === "/api/approve") {
         const ok = decide(w.dir, String(b.id ?? ""), b.decision === "approved" ? "approved" : "denied");
         return send(res, ok ? 200 : 409, ok ? { ok } : { error: "That request was already answered or has expired." });
@@ -535,9 +541,18 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       // AI chat: messages only lead to suggested rules, which the owner turns on.
       if (p === "/api/ai/chat") {
         if (!ai) return send(res, 400, { error: "AI chat is off here." });
-        const text = String(b.text ?? "").slice(0, 4000), bad = ai.precheck(text);
+        const text = String(b.text ?? "").slice(0, 4000);
+        const pics = Array.isArray(b.images) ? b.images : [];
+        if (pics.length > MAX_IMAGES) return send(res, 400, { error: `Up to ${MAX_IMAGES} pictures per message.` });
+        const images: ChatImage[] = [];
+        for (const x of pics) {
+          if (!x || !(IMAGE_TYPES as readonly string[]).includes(x.media_type) || typeof x.data !== "string" || x.data.length > 7_000_000 || !/^[A-Za-z0-9+/]+=*$/.test(x.data)) return send(res, 400, { error: "That picture can't be sent. Use a JPEG, PNG, WebP or GIF." });
+          images.push({ media_type: x.media_type, data: x.data });
+        }
+        const thumbs = (Array.isArray(b.thumbs) ? b.thumbs : []).filter((t: unknown) => typeof t === "string" && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(t) && t.length < 120_000).slice(0, images.length);
+        const bad = ai.precheck(text, images.length);
         if (bad) return send(res, 400, { error: bad.message, code: bad.code });
-        void ai.send(text).catch(() => {});
+        void ai.send(text, "chat", images.length ? { images, thumbs } : {}).catch(() => {});
         return send(res, 200, { ok: true });
       }
       if (p === "/api/ai/checkin") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); ai.setCheckin(Number(b.hours)); return send(res, 200, { ok: true }); }
@@ -552,6 +567,17 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       // 0.8.4: Fast (2¢ a step) or Smart (4¢); fuel limits still apply, so it needs no password.
       if (p === "/api/ai/tier") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); setAiTier(w.dir, b.tier); return send(res, 200, { ok: true }); }
       if (p === "/api/ai/fuel") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); ai.setFuelMode(String(b.mode)); return send(res, 200, { ok: true }); }
+      // 0.9.4: the owner's own AI key. It stays on this device and only goes to the AI company they picked.
+      if (p === "/api/ai/own") {
+        if (!o.ownAi || !ai) return send(res, 400, { error: "Your own AI key isn't used here." });
+        if (ai.busy) return send(res, 409, { error: "Wait for the AI to finish." });
+        const act = String(b.action ?? "");
+        if (act === "save") await o.ownAi.save({ provider: b.provider, model: b.model, key: b.key });
+        else if (act === "model") await o.ownAi.setModel(b.model, b.which === "auto" ? "auto" : "chat");
+        else if (act === "remove") await o.ownAi.remove();
+        else return send(res, 400, { error: "Unknown action." });
+        return send(res, 200, { ok: true });
+      }
       if (p === "/api/ai/new") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); if (ai.busy) return send(res, 409, { error: "Wait for the AI to finish." }); ai.newChat(); return send(res, 200, { ok: true }); }
       // Everything below changes money rules or moves funds: password again, every time.
       if (typeof b.password !== "string" || b.password !== password) return send(res, 403, { error: "Wrong password." });

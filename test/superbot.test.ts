@@ -242,5 +242,32 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   check(v.reports.length === 2 && v.reports[0].date === "2026-10-21" && /Autopilot, 2026-10-21/.test(v.reports[0].text) && W.notes.some((n) => n.startsWith("Autopilot, 2026-10-21")), "the first cycle of a new day sends yesterday's report", v.reports);
 }
 
+// ─── 0.9.5: the phone app decides on the owner's own AI key (no payment) ────
+{
+  const dir = tmp();
+  let now = Date.parse("2026-10-20T08:00:00Z");
+  const store = new RuleStore(dir);
+  const off = { on: new Set<string>(), isOn: () => false, set: () => {}, config: async () => null, serverRunnable: () => false };
+  const pays: any[] = [], asks: any[] = [];
+  let label: string | null = null;
+  const w: any = { dir, policy: { chains: ["base", "solana"] }, rules: () => store, always: () => off, alwaysSol: () => off, pay: async (url: string) => { pays.push(url); throw new Error("must not pay"); } };
+  const snap = () => ({ id: `snap-${now}`, at: new Date(now).toISOString(), changes: { moved: true }, pulse: { fear_greed: { value: 55, classification: "Greed" }, majors: [{ coin: "ETH", perp_mark_usd: 2500, change_24h_pct: 1.2 }] }, news: { eth: { mood: "neutral", summary: "quiet", themes: [], headlines: [{ title: "ETH steady" }] } }, social: {} });
+  const fetch = (async () => Response.json(snap())) as any;
+  const bot = new SuperBot(w, { dir, proxy: "https://api.test/wallet", fetch, now: () => now, price: async () => 2500, knownToken: async (_c, t) => ["ETH", "SOL", "USDC"].includes(t.toUpperCase()),
+    decide: { label: () => label, run: async (system, user, tool) => { asks.push({ system, user, tool }); return { input: { assessment: "Quiet market.", market_view: "neutral", confidence: 0.4, actions: [{ type: "keep", reason: "Nothing moved enough.", sources: ["ETH +1.2% 24h"] }] }, model: "claude-haiku-5-5" }; } } });
+  await bot.enable({ budget_usd: 100, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  let v: any = bot.view();
+  check(v.brain?.own === true && v.brain.label === null && /Add your AI key on the AI tab/.test(v.stats.last_error ?? "") && asks.length === 0 && pays.length === 0, "no key yet: Autopilot says to add one, and nothing is paid", v.stats);
+  label = "Haiku 5.5 on your Anthropic key";
+  now += 61 * 60_000;
+  await bot.tick();
+  v = bot.view();
+  check(asks.length === 1 && pays.length === 0, "with a key: one decision on the owner's key, nothing paid to Tollkit", { asks: asks.length, pays });
+  check(/strategist inside a Tollkit Wallet/.test(asks[0].system) && asks[0].tool.name === "decide" && /Signal snapshot snap-/.test(asks[0].user) && /"fear_greed"/.test(asks[0].user) && /budget_usd/.test(asks[0].user), "the same instructions, decide tool, snapshot and limits as Tollkit's strategist");
+  check(v.decisions[0].by === "strategist" && v.decisions[0].model === "claude-haiku-5-5" && v.decisions[0].cost_usd === 0 && v.stats.step_usd === 0 && v.stats.last_error === null, "logged with its model, costing the wallet nothing", v.decisions[0]);
+  check(v.brain.label === "Haiku 5.5 on your Anthropic key", "the Autopilot screen can name the model");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

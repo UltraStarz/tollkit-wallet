@@ -35,9 +35,15 @@ export interface FuelCtl {
   setMode(m: "ask" | "auto"): void;
   topUp(plan: FuelPlan): Promise<{ ok: boolean; reason?: string; tx?: string }>;
 }
-export interface ChatMsg { id: string; role: "you" | "ai"; text: string; ts: string; rules?: string[]; swaps?: string[]; checkin?: boolean; error?: boolean; quiet?: boolean; fuel?: FuelPlan }
+export interface ChatMsg { id: string; role: "you" | "ai"; text: string; ts: string; rules?: string[]; swaps?: string[]; checkin?: boolean; error?: boolean; quiet?: boolean; fuel?: FuelPlan;
+  /** 0.9.4: small previews of the pictures the owner attached (the pictures themselves go to the AI once). */
+  images?: string[] }
+/** 0.9.4: a picture the owner attached, base64, for an AI that can see images. */
+export type ChatImage = { media_type: "image/jpeg" | "image/png" | "image/webp" | "image/gif"; data: string };
+export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
+export const MAX_IMAGES = 4;
 interface ChatFile { session_id?: string; messages: ChatMsg[]; checkin: { every_hours: number; last?: string } }
-export interface RunOpts { sessionId?: string; cwd: string; mcpConfig: string; system: string }
+export interface RunOpts { sessionId?: string; cwd: string; mcpConfig: string; system: string; images?: ChatImage[] }
 export type Runner = (prompt: string, o: RunOpts) => Promise<{ text: string; sessionId?: string }>;
 
 export const CHECKIN_HOURS = [0, 1, 4, 12, 24];
@@ -105,20 +111,26 @@ export function claudeRunner(exe: string, timeoutMs = 240_000): Runner {
   });
 }
 
-type Provider = { id: string; name: string; note: string; setup?: string; tiers?: boolean };
+type Provider = { id: string; name: string; note: string; setup?: string; tiers?: boolean; images?: boolean };
 export class AiAssistant {
   private file: string;
   busy: { kind: "chat" | "checkin"; since: string; note?: string } | null = null;
   private approving = false;
   constructor(private readonly w: TollkitWallet, private readonly o: { dir?: string; runner?: Runner; exe?: string | null; now?: () => number; fetch?: typeof fetch;
     /** Who answers, when it isn't Claude Code on this computer (the browser extension uses Claude through Tollkit's server). */
-    provider?: Provider | (() => Provider);
-    fuel?: FuelCtl } = {}) {
+    provider?: Provider | (() => Provider | null);
+    fuel?: FuelCtl;
+    /** 0.9.4, the phone: the owner's own AI account. The runner exists once they've added a key. */
+    getRunner?: () => Runner | null;
+    /** What the page shows to set up or change the owner's own AI (app/own-ai.ts). */
+    own?: () => unknown;
+    /** Shown when there's no AI to answer yet. */
+    noAi?: string } = {}) {
     this.file = path.join(walletHome(o.dir), "ai", "chat.json");
   }
   private now() { return this.o.now?.() ?? Date.now(); }
   private exe(): string | null { return this.o.exe !== undefined ? this.o.exe : which("claude"); }
-  private runner(): Runner | null { if (this.o.runner) return this.o.runner; const e = this.exe(); return e ? claudeRunner(e) : null; }
+  private runner(): Runner | null { if (this.o.getRunner) return this.o.getRunner(); if (this.o.runner) return this.o.runner; const e = this.exe(); return e ? claudeRunner(e) : null; }
 
   private load(): ChatFile {
     try { if (existsSync(this.file)) return JSON.parse(readFileSync(this.file, "utf8")); } catch { /* start over */ }
@@ -139,6 +151,7 @@ export class AiAssistant {
       busy: this.busy, messages: c.messages.slice(-60), checkin: { every_hours: every, last: c.checkin.last ?? null, next },
       fuel: this.o.fuel ? { mode: this.o.fuel.mode() } : null,
       tier: aiTier(this.o.dir),
+      ...(this.o.own ? { own: this.o.own() } : {}),
     };
   }
 
@@ -150,23 +163,25 @@ export class AiAssistant {
   newChat() { const c = this.load(); c.session_id = undefined; c.messages = []; this.save(c); }
 
   /** Why a message can't be sent right now, or null. */
-  precheck(text = "x"): { code: string; message: string } | null {
-    if (!this.runner()) return { code: "no_ai", message: "To chat here, install Claude Code on this computer and sign in once (run `claude` in Terminal)." };
+  precheck(text = "x", images = 0): { code: string; message: string } | null {
+    if (!this.runner()) return { code: "no_ai", message: this.o.noAi ?? "To chat here, install Claude Code on this computer and sign in once (run `claude` in Terminal)." };
     if (!existsSync(passwordFile(this.o.dir))) return { code: "needs_password", message: "Type your wallet password once so the AI can read your wallet." };
     if (this.busy) return { code: "busy", message: "The AI is still working on the last message." };
-    if (!text.trim()) return { code: "empty", message: "Type a message." };
+    if (!text.trim() && !images) return { code: "empty", message: "Type a message." };
     return null;
   }
 
   /** Sends one message (or runs a check-in) and waits for the answer. */
-  async send(text: string, kind: "chat" | "checkin" = "chat", opts: { again?: boolean } = {}): Promise<ChatMsg> {
-    const bad = this.precheck(text);
+  async send(text: string, kind: "chat" | "checkin" = "chat", opts: { again?: boolean; images?: ChatImage[]; thumbs?: string[] } = {}): Promise<ChatMsg> {
+    const images = (opts.images ?? []).slice(0, MAX_IMAGES);
+    const bad = this.precheck(text, images.length);
     if (bad) throw Object.assign(new Error(bad.message), { code: bad.code });
     const run = this.runner()!;
     const t = text.trim().slice(0, 4000);
     this.busy = { kind, since: new Date(this.now()).toISOString() };
     const c = this.load();
-    if (kind === "chat" && !opts.again) { c.messages.push({ id: randomUUID().slice(0, 8), role: "you", text: t, ts: new Date(this.now()).toISOString() }); this.save(c); }
+    const thumbs = (opts.thumbs ?? []).slice(0, MAX_IMAGES);
+    if (kind === "chat" && !opts.again) { c.messages.push({ id: randomUUID().slice(0, 8), role: "you", text: t, ts: new Date(this.now()).toISOString(), ...(thumbs.length ? { images: thumbs } : {}) }); this.save(c); }
     const before = new Set(this.w.rules().list().map((r) => r.id)), ideasBefore = new Set(this.w.ideas().list().map((i) => i.id));
     const cwd = path.join(walletHome(this.o.dir), "ai"); mkdirSync(cwd, { recursive: true, mode: 0o700 });
     const l = launchConfig(this.o.dir);
@@ -174,9 +189,11 @@ export class AiAssistant {
     let msg: ChatMsg;
     try {
       let r: { text: string; sessionId?: string };
-      const prompt = kind === "chat" ? `Owner: ${t}` : t; // never starts with "-", so it can't be read as a flag
-      try { r = await run(prompt, { sessionId: c.session_id, cwd, mcpConfig, system: SYSTEM }); }
-      catch (e) { if (!(e as any).resumeFailed) throw e; r = await run(prompt, { cwd, mcpConfig, system: SYSTEM }); }
+      const said = t || (images.length === 1 ? "(sent a picture)" : "(sent pictures)");
+      const prompt = kind === "chat" ? `Owner: ${said}` : t; // never starts with "-", so it can't be read as a flag
+      const pics = images.length ? { images } : {};
+      try { r = await run(prompt, { sessionId: c.session_id, cwd, mcpConfig, system: SYSTEM, ...pics }); }
+      catch (e) { if (!(e as any).resumeFailed) throw e; r = await run(prompt, { cwd, mcpConfig, system: SYSTEM, ...pics }); }
       const fresh = this.load();
       if (r.sessionId) fresh.session_id = r.sessionId;
       const made = this.w.rules().list().filter((x) => !before.has(x.id) && x.created_by === "agent").map((x) => x.id);
