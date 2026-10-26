@@ -17,12 +17,12 @@ import { AbiCoder, Contract, Interface, JsonRpcProvider, ZeroAddress, type Walle
 import { KNOWN } from "./tokens.js";
 import { sendingProvider, waitMined } from "./evmsend.js";
 import { pollSolana } from "./solconfirm.js";
-import { ALLOWANCE_HOLDER, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, STABLES, SWAP_FEE_BPS, WSOL, isStable, type Chain, type EvmChain } from "./chains.js";
+import { ALLOWANCE_HOLDER, BOT_FEE_BPS, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, STABLES, SWAP_FEE_BPS, WSOL, isStable, type Chain, type EvmChain } from "./chains.js";
 
 type Fetch = typeof fetch;
 export const DEFAULT_PROXY = "https://api.tollkit.dev/wallet";
 
-export interface SwapRequest { chain: Chain; sell_token: string; buy_token: string; sell_amount: string; slippage_bps: number }
+export interface SwapRequest { chain: Chain; sell_token: string; buy_token: string; sell_amount: string; slippage_bps: number; /** 0.9.6: a Grid / Smart DCA bot's trade (0.25% fee). */ bot?: boolean }
 export interface SwapQuote {
   chain: Chain; venue: "0x" | "jupiter";
   sell_token: string; buy_token: string; sell_amount: string; buy_amount: string; min_buy_amount: string;
@@ -46,6 +46,12 @@ export interface SwapQuote {
  * with Jupiter's own default fee instead (developers.jup.ag/docs/swap/fees: "the order still returns but executes
  * without your fees"), and Tollkit's fee is sent separately.
  */
+/** The fee the server set for a router-path swap: none (Tollkit's own wallet), the bot rate, or the usual rate. Never more. */
+export function inlineFeeBps(v: unknown): number {
+  const n = Number(v);
+  return n === 0 ? 0 : n === BOT_FEE_BPS ? BOT_FEE_BPS : SWAP_FEE_BPS;
+}
+
 export function jupiterFeeInRoute(raw: any): boolean {
   return !!raw?.referralAccount && Number(raw?.platformFee?.feeBps ?? raw?.feeBps) === SWAP_FEE_BPS;
 }
@@ -61,12 +67,12 @@ export function feeTokenFor(chain: Chain, sell: string, buy: string): string {
 }
 
 /** Tollkit's 0.5% in lamports: straight from the SOL side when there is one, else the trade's dollar value at SOL's price. */
-export function solFeeLamports(q: Pick<SwapQuote, "sell_token" | "buy_token" | "sell_amount" | "buy_amount">, usd: number | null, solUsd: number | null): bigint {
-  const bps = BigInt(SWAP_FEE_BPS);
+export function solFeeLamports(q: Pick<SwapQuote, "sell_token" | "buy_token" | "sell_amount" | "buy_amount">, usd: number | null, solUsd: number | null, feeBps: number = SWAP_FEE_BPS): bigint {
+  const bps = BigInt(feeBps);
   if (q.sell_token === WSOL) return (BigInt(q.sell_amount) * bps) / 10000n;
   if (q.buy_token === WSOL) return (BigInt(q.buy_amount) * bps) / 10000n;
   if (!(usd && usd > 0) || !(solUsd && solUsd > 0)) throw new Error("No SOL price right now to work out Tollkit's fee. Try again in a minute.");
-  return BigInt(Math.ceil(((usd * SWAP_FEE_BPS) / 10000 / solUsd) * 1e9));
+  return BigInt(Math.ceil(((usd * feeBps) / 10000 / solUsd) * 1e9));
 }
 
 const decimalsOf = (chain: Chain, token: string) =>
@@ -93,19 +99,21 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
     u.search = new URLSearchParams({ inputMint: req.sell_token, outputMint: req.buy_token, amount: req.sell_amount, taker, slippageBps: String(req.slippage_bps) }).toString();
     const j = await getJson(f, u.toString());
     const inRoute = jupiterFeeInRoute(j);
-    if (!inRoute && opts.build !== false) {
+    // 0.9.6: a bot trade always takes the router path, where Tollkit's fee is the wallet's own transfer and can be
+    // 0.25% (Jupiter's referral fee on /order can't go below 0.5%).
+    if ((!inRoute || req.bot) && opts.build !== false) {
       // No Tollkit fee account for the coin Jupiter would take the fee in: build the swap from Jupiter's router
       // instructions instead, so Tollkit's 0.5% (in SOL) goes in the same transaction. If that path isn't
       // available, fall back to the order with the fee sent right after (below).
       try {
         const bu = new URL(`${proxy}/swap/solana/build`);
-        bu.search = new URLSearchParams({ inputMint: req.sell_token, outputMint: req.buy_token, amount: req.sell_amount, taker, slippageBps: String(req.slippage_bps) }).toString();
+        bu.search = new URLSearchParams({ inputMint: req.sell_token, outputMint: req.buy_token, amount: req.sell_amount, taker, slippageBps: String(req.slippage_bps), ...(req.bot ? { bot: "1" } : {}) }).toString();
         const b = await getJson(f, bu.toString());
         if (b?.swapInstruction && b?.tollkit_fee && typeof b.tollkit_fee.recipient === "string") {
           return withUsd({
             chain: "solana", venue: "jupiter", sell_token: req.sell_token, buy_token: req.buy_token,
             sell_amount: String(b.inAmount ?? req.sell_amount), buy_amount: String(b.outAmount), min_buy_amount: String(b.otherAmountThreshold ?? b.outAmount),
-            fee_bps: Number(b.tollkit_fee.bps) === 0 ? 0 : SWAP_FEE_BPS, venue_fee_bps: 0, usd_value: null, fee_usd: null,
+            fee_bps: inlineFeeBps(b.tollkit_fee.bps), venue_fee_bps: 0, usd_value: null, fee_usd: null,
             raw: { build: b, swapUsdValue: j.swapUsdValue, inUsdValue: j.inUsdValue }, fee_inline: true, route: "Metis",
           });
         }
@@ -121,7 +129,7 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
     return withUsd(q);
   }
   const u = new URL(`${proxy}/swap/evm/quote`);
-  u.search = new URLSearchParams({ chainId: String(EVM_CHAIN_ID[req.chain]), sellToken: req.sell_token, buyToken: req.buy_token, sellAmount: req.sell_amount, taker, slippageBps: String(req.slippage_bps), feeToken: feeTokenFor(req.chain, req.sell_token, req.buy_token) }).toString();
+  u.search = new URLSearchParams({ chainId: String(EVM_CHAIN_ID[req.chain]), sellToken: req.sell_token, buyToken: req.buy_token, sellAmount: req.sell_amount, taker, slippageBps: String(req.slippage_bps), feeToken: feeTokenFor(req.chain, req.sell_token, req.buy_token), ...(req.bot ? { bot: "1" } : {}) }).toString();
   const j = await getJson(f, u.toString());
   const sell = BigInt(j.sellAmount ?? req.sell_amount), buy = BigInt(j.buyAmount ?? "0");
   // A fee is a share of the side it's taken from: the amount sold, or what was bought before the fee came off.

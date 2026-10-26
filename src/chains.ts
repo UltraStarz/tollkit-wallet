@@ -59,3 +59,9 @@ export const isStable = (chain: Chain, token: string) =>
 
 /** Tollkit's fee on swaps: flat, the same everywhere, shown before every trade. */
 export const SWAP_FEE_BPS = 50;
+/**
+ * 0.9.6: trades placed by the wallet's own Grid, Infinity grid and Smart DCA bots ask for 0.25%, so tight grids still
+ * earn after fees. The server applies it (bot=1 on the quote); the wallet never accepts more than SWAP_FEE_BPS.
+ */
+export const BOT_FEE_BPS = 25;
+export const LOW_FEE_BOTS: readonly string[] = ["grid", "infinity_grid", "smart_dca"];

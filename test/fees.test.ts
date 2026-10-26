@@ -169,5 +169,53 @@ async function wallet(o: { feeBps: number; balance: bigint; sendFails?: boolean 
   void simTx;
 }
 
+// --- 0.9.6: a Grid / Smart DCA bot trade asks for 0.25%
+{
+  const urls: string[] = [];
+  // Solana: even when Jupiter's route would carry Tollkit's fee, a bot trade goes to the router path with bot=1.
+  const fb = (async (u: string) => {
+    urls.push(u); const url = new URL(u);
+    if (url.pathname.endsWith("/order")) return Response.json(order({ feeBps: 50, feeMint: USDC, inAmount: "10000000", outAmount: "60000000", usd: 10 }));
+    return Response.json({ inAmount: "10000000", outAmount: "60000000", otherAmountThreshold: "59700000", swapInstruction: { programId: "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", accounts: [], data: "" },
+      tollkit_fee: { bps: url.searchParams.get("bot") === "1" ? 25 : 50, recipient: FEE_TO } });
+  }) as unknown as typeof fetch;
+  const q = await getQuote({ chain: "solana", sell_token: USDC, buy_token: WSOL, sell_amount: "10000000", slippage_bps: 100, bot: true }, "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", { fetch: fb, proxy: "https://p" });
+  check(q.fee_inline === true && q.fee_bps === 25 && urls.some((u) => u.includes("/swap/solana/build") && u.includes("bot=1")), "a Solana bot trade: router path, 0.25%", { fee: q.fee_bps, urls });
+  check(solFeeLamports({ sell_token: USDC, buy_token: WSOL, sell_amount: "0", buy_amount: "1000000000" }, null, null, q.fee_bps) === 2_500_000n, "the bot fee on 1 SOL bought: 0.0025 SOL");
+  urls.length = 0;
+  const n = await getQuote({ chain: "solana", sell_token: USDC, buy_token: WSOL, sell_amount: "10000000", slippage_bps: 100 }, "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", { fetch: fb, proxy: "https://p" });
+  check(n.fee_bps === 50 && !urls.some((u) => u.includes("bot=1")), "a normal swap is unchanged: 0.5%, no bot mark");
+  // A server that answers with any other number gets the usual 0.5%, never more.
+  const odd = (async (u: string) => new URL(u).pathname.endsWith("/order") ? fb(u) : Response.json({ inAmount: "10000000", outAmount: "60000000", swapInstruction: { programId: "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", accounts: [], data: "" }, tollkit_fee: { bps: 300, recipient: FEE_TO } })) as unknown as typeof fetch;
+  const o = await getQuote({ chain: "solana", sell_token: USDC, buy_token: WSOL, sell_amount: "10000000", slippage_bps: 100, bot: true }, "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", { fetch: odd, proxy: "https://p" });
+  check(o.fee_bps === 50, "an unexpected fee from the server is capped at 0.5%");
+  // Base: the bot mark goes on the 0x quote request.
+  let evmUrl = "";
+  const fe = (async (u: string) => { evmUrl = u; return Response.json({ sellAmount: "10000000", buyAmount: "4000000000000000", minBuyAmount: "3960000000000000", fees: { integratorFee: { amount: "25000", token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" } }, transaction: { to: "0x0000000000001fF3684f28c67538d4D072C22734", data: "0x" } }); }) as unknown as typeof fetch;
+  const e = await getQuote({ chain: "base", sell_token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", buy_token: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", sell_amount: "10000000", slippage_bps: 100, bot: true }, "0x1111111111111111111111111111111111111111", { fetch: fe, proxy: "https://p" });
+  check(new URL(evmUrl).searchParams.get("bot") === "1" && e.fee_bps === 25, "a Base bot trade asks 0x for the bot fee and reads 0.25% back", { evmUrl, fee: e.fee_bps });
+}
+
+// --- 0.9.6: Unwrap turns wrapped SOL back into plain SOL by closing its token account(s)
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), "twu-"));
+  await createKeystore(PW, { dir, scrypt: { N: 1 << 10, r: 8, p: 1 } });
+  const w = await TollkitWallet.open(PW, { dir, approve: null });
+  const acct = Keypair.generate().publicKey;
+  let accounts = [{ pubkey: acct, account: { data: { parsed: { info: { tokenAmount: { amount: "255587500" } } } } } }];
+  const conn: any = { getParsedTokenAccountsByOwner: async () => ({ value: accounts }) };
+  let sent: any = null;
+  const r = await w.unwrapSol({ conn, send: async (tx) => { sent = tx; return "UnwrapSig"; } });
+  const ix = sent?.instructions?.[0];
+  check(r.tx === "UnwrapSig" && r.sol === "0.2555875" && sent.instructions.length === 1 && ix.programId.toBase58() === "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" && ix.data[0] === 9 && ix.keys[0].pubkey.equals(acct) && ix.keys[1].pubkey.toBase58() === w.addresses.solana,
+    "Unwrap closes the wrapped-SOL account back to the owner (0.2555875 SOL)", r);
+  accounts = [];
+  let none = ""; try { await w.unwrapSol({ conn, send: async () => "x" }); } catch (e) { none = (e as Error).message; }
+  check(/no wrapped SOL/.test(none), "nothing to unwrap: says so");
+  (w as any).alwaysSol = () => ({ anyOn: () => true });
+  let held = ""; try { await w.unwrapSol({ conn, send: async () => "x" }); } catch (e) { held = (e as Error).message; }
+  check(/24\/7/.test(held) && /Revoke/.test(held), "SOL set aside for 24/7 sells: points to Revoke instead");
+}
+
 console.log(`\nfees: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

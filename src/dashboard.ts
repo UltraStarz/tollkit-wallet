@@ -446,6 +446,11 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           return send(res, 400, { error: "Unknown action." });
         } catch (e) { return send(res, 400, { error: (e as Error).message }); }
       }
+      // 0.9.6: wrapped SOL back to plain SOL (the owner tapped Unwrap on Home).
+      if (p === "/api/unwrap-sol") {
+        try { return send(res, 200, { ok: true, ...(await w.unwrapSol()) }); }
+        catch (e) { return send(res, 400, { error: (e as Error).message.slice(0, 300) }); }
+      }
       if (p === "/api/always") {
         try {
           if (b.action === "off") {

@@ -158,5 +158,18 @@ const solOf = (req: SwapRequest) => Number(req.sell_amount) / 1e9;
   check(tw.rules[0]!.kind === "twap" && tw.rules[0]!.side === "sell" && tw.rules[0]!.sell_percent === 25 && tw.rules[0]!.pieces === 10 && tw.rules[0]!.hours === 5, "Split order template", tw.rules[0]);
 }
 
+// --- 0.9.6: Grid and Smart DCA trades ask for the bot fee (bot: true); other bots don't
+{
+  const d = await run({ kind: "smart_dca", amount_usd: 20, step_pct: 3, safety: 2, scale: 2, profit_pct: 3 });
+  await d.at(100);
+  check(d.m.state.swaps[0]?.bot === true, "a Smart DCA trade is marked as a bot trade (0.25%)");
+  const g = await run({ kind: "grid", amount_usd: 20, lower_price: 90, upper_price: 110, levels: 5 });
+  await g.at(100); await g.at(94); await g.at(89);
+  check(g.m.state.swaps.length > 0 && g.m.state.swaps.every((x: any) => x.bot === true), "grid trades are marked as bot trades", g.m.state.swaps);
+  const rb = await run({ kind: "rebalance", amount_usd: 100, target_pct: 50, band_pct: 5 });
+  await rb.at(100);
+  check(rb.m.state.swaps.length > 0 && rb.m.state.swaps.every((x: any) => !x.bot), "a rebalancer's trades pay the usual fee", rb.m.state.swaps);
+}
+
 console.log(`\nbotlogic: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

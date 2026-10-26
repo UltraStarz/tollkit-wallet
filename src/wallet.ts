@@ -7,6 +7,7 @@
 import { plainError } from "./errors.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { createCloseAccountInstruction } from "@solana/spl-token";
 import { sendAndConfirm } from "./solconfirm.js";
 import { PriceFeed } from "./prices.js";
 import { Contract, JsonRpcProvider, formatUnits, parseUnits } from "ethers";
@@ -199,6 +200,11 @@ export class TollkitWallet {
             const raw = accts.value.reduce((s, x) => s + BigInt(x.account.data.parsed.info.tokenAmount.amount), 0n);
             rows.push({ token: meta.symbol, amount: formatUnits(raw, meta.decimals) });
           }
+          // 0.9.6: wrapped SOL (a token account in this wallet: SOL set aside for 24/7 sells, or left by a swap) is the
+          // owner's too. Listed on its own line, only when there is some.
+          const ws = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(WSOL) });
+          const wraw = ws.value.reduce((s, x) => s + BigInt(x.account.data.parsed.info.tokenAmount.amount), 0n);
+          if (wraw > 0n) rows.push({ token: "WSOL", amount: formatUnits(wraw, 9) });
           out[c] = rows;
         } else {
           const p = new JsonRpcProvider(this.rpc(c), EVM_CHAIN_ID[c], { staticNetwork: true });
@@ -239,7 +245,25 @@ export class TollkitWallet {
     try { to = new PublicKey(to).toBase58(); } catch { throw new Error("Tollkit's fee address isn't available right now. Try again in a minute."); }
     let solUsd = this.o.solFee?.solUsd ?? null;
     if (solUsd === null && q.sell_token !== WSOL && q.buy_token !== WSOL) { const pf = new PriceFeed({ fetch: this.f }); await pf.refresh(); solUsd = pf.snapshot().prices.SOL?.usd ?? null; }
-    return { lamports: solFeeLamports(q, q.usd_value, solUsd), to };
+    return { lamports: solFeeLamports(q, q.usd_value, solUsd, q.fee_bps), to };
+  }
+
+  /**
+   * 0.9.6: turn wrapped SOL back into plain SOL by closing this wallet's wrapped-SOL token accounts (the SPL Token
+   * program pays the whole balance and the account rent back to the owner). Not while Run 24/7 holds SOL for sells:
+   * Settings → Revoke does that, so the server's allowance ends at the same time.
+   */
+  async unwrapSol(o: { conn?: Pick<Connection, "getParsedTokenAccountsByOwner">; send?: (tx: Transaction) => Promise<string> } = {}): Promise<{ tx: string; sol: string }> {
+    if (!this.policy.chains.includes("solana")) throw new Error("Solana is turned off.");
+    if (this.alwaysSol().anyOn()) throw new Error("This SOL is set aside for your 24/7 sells. Revoke it in Settings to turn it back into plain SOL.");
+    const conn = o.conn ?? new Connection(this.rpc("solana"), "confirmed"), owner = this.keys.solana.publicKey;
+    const ws = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(WSOL) });
+    if (!ws.value.length) throw new Error("There's no wrapped SOL to unwrap.");
+    const tx = new Transaction();
+    let total = 0n;
+    for (const a of ws.value) { total += BigInt(a.account.data.parsed.info.tokenAmount.amount); tx.add(createCloseAccountInstruction(a.pubkey, owner, owner)); }
+    const sig = o.send ? await o.send(tx) : await sendAndConfirm(new Connection(this.rpc("solana"), "confirmed"), tx, [this.keys.solana]);
+    return { tx: sig, sol: formatUnits(total, 9) };
   }
 
   private async sendSolFee(fee: { lamports: bigint; to: string }): Promise<string> {

@@ -15,7 +15,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { DEFAULT_RPC, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
+import { DEFAULT_RPC, LOW_FEE_BOTS, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { BUY_KINDS, nextRun, RuleStore, type Rule } from "./rules.js";
 import { applyFill, decide, isBotKind, type BotState } from "./botlogic.js";
@@ -244,7 +244,9 @@ export class Autopilot {
     });
     if (a.side === "mark") { await save(() => {}, applyFill(r as any, st, a, { usd: 0, got: 0n }, p, now, t.decimals).state); return; }
     let req: SwapRequest;
-    if (a.side === "buy") req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(a.usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps };
+    // 0.9.6: Grid, Infinity grid and Smart DCA trades ask for the bot fee (0.25%).
+    const bot = LOW_FEE_BOTS.includes(r.kind) ? { bot: true } : {};
+    if (a.side === "buy") req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(a.usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps, ...bot };
     else {
       let amt = BigInt(a.atomic);
       if (r.kind !== "grid") {
@@ -253,7 +255,7 @@ export class Autopilot {
         if (amt > bal) amt = bal;
         if (amt <= 0n) { await this.hold(r, now + 5 * 60_000, nothingToSell(r, t.symbol, bal)); return; }
       }
-      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps };
+      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps, ...bot };
     }
     if (await this.overShare(r, a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);

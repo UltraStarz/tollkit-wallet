@@ -132,5 +132,15 @@ check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group &
   check(sent === 1, "at most once a day");
 }
 
+// --- 0.9.6: tighter grid defaults that still earn after the 0.25% bot fee on each side
+{
+  const g = buildBot("grid", "SOL", "solana", {}, 200).rules[0]! as any;
+  const step = (g.upper_price - g.lower_price) / (g.levels - 1), gap = (step / (g.upper_price - step)) * 100;
+  check(g.levels === 16 && g.amount_usd === 25 && Math.abs(g.lower_price - 184) < 0.01 && Math.abs(g.upper_price - 216) < 0.01, "default grid: ±8%, 16 levels, $25 a level", g);
+  check(gap >= 0.7 && gap < 1.2, `default levels are ${gap.toFixed(2)}% apart: 0.2%+ kept after 0.25% on each side`);
+  check(/too close/.test(err(() => buildBot("grid", "SOL", "solana", { range_pct: 3, levels: 12 }, 200))), "a grid under 0.7% apart is refused (it would lose after fees)");
+  check(err(() => buildBot("grid", "SOL", "solana", { range_pct: 5, levels: 12 }, 200)) === "", "a grid about 0.85% apart is allowed");
+}
+
 console.log(`\nbots: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
