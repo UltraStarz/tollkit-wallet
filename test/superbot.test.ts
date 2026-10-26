@@ -17,6 +17,14 @@ check(/15, 30 or 60/.test(err(() => parseSettings({ rethink_minutes: 10 }))), "r
 check(/can't be more than the budget/.test(err(() => parseSettings({ budget_usd: 50, per_trade_usd: 60 }))), "per-trade cap inside the budget");
 check(/network must be turned on/.test(err(() => parseSettings({ chains: ["base"], tokens: [{ chain: "solana", token: "SOL" }] }))), "a token's network must be on");
 check(parseSettings({ budget_usd: 5, per_trade_usd: 5 }).budget_usd === 10 && parseSettings({ daily_loss_pct: 99 }).daily_loss_pct === 50, "numbers are clamped");
+// 0.9.6: pace
+check(s0.pace === "steady" && parseSettings({ pace: "active" }).pace === "active", "pace is steady by default, active when chosen");
+check(/steady or active/.test(err(() => parseSettings({ pace: "turbo" }))), "only steady or active");
+{ const { SUPERBOT_SYSTEM } = await import("../src/strategist.js");
+  check(/limits\.pace/.test(SUPERBOT_SYSTEM) && /0\.25% on each buy and sell placed by grid/.test(SUPERBOT_SYSTEM), "the strategist is told what active pace means and the fees it must clear"); }
+{ const { TEMPLATES } = await import("../src/bots.js");
+  const sd = TEMPLATES.find((t: any) => t.id === "smart_dca")!; const d = (k: string) => (sd.fields as any[]).find((f) => f.key === k).default;
+  check(d("step_pct") === 2 && d("profit_pct") === 2, "Smart DCA defaults: 2% steps, 2% profit"); }
 check(committedUsd("dca", { amount_usd: 10, times: 5 }) === 50 && committedUsd("dca", { amount_usd: 10 }) === 100 && committedUsd("grid", { amount_usd: 20, levels: 6 }) === 100 && committedUsd("protect", { sell_percent: 50 }) === 0, "dollars a strategy commits");
 
 // ─── a fake wallet, server and clock ────────────────────────────────────────
