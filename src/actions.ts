@@ -113,10 +113,10 @@ export const ACTIONS = [
     description: "Balances of the native coin and USDC/USDT on each enabled chain.",
     run: async (w) => w.balances() }),
   def({ name: "swap_quote", spends: false, schema: SwapArgs,
-    description: "Get a checked quote for a spot swap without trading: dollar value, minimum received, Tollkit's 0.5% fee and any venue fee.",
+    description: "Get a checked quote for a spot swap without trading: dollar value, minimum received, Tollkit's 0.5% fee and any venue fee. (Trades by the owner's Grid, Infinity grid and Smart DCA bots pay 0.25% instead.)",
     run: async (w, a) => { try { const { req, sell, buy } = await swapRequest(w, a); return { ...(await w.quote(req)), sell, buy }; } catch (e) { return bad(e); } } }),
   def({ name: "swap", spends: true, schema: SwapArgs,
-    description: "Swap tokens (Base/Ethereum via 0x, Solana via Jupiter) within the owner's limits. Larger trades wait for the owner's approval. Flat 0.5% fee, shown in the result.",
+    description: "Swap tokens (Base/Ethereum via 0x, Solana via Jupiter) within the owner's limits. Larger trades wait for the owner's approval. Tollkit's fee is 0.5% (0.25% for trades the owner's Grid, Infinity grid and Smart DCA bots place), shown in the result.",
     run: async (w, a, ctx) => { try { const { req, sell, buy } = await swapRequest(w, a); return { ...(await w.swap(req, { by: ctx?.app })), sell, buy }; } catch (e) { return bad(e); } } }),
   def({ name: "pay_fetch", spends: true, schema: PayArgs,
     description: "Fetch a URL and pay for it if it asks (x402 or MPP, USDC/USDT on Base, Ethereum or Solana). Checks the seller, screens the recipient against OFAC, stays within the owner's limits. Returns the response body.",
@@ -159,7 +159,7 @@ export const ACTIONS = [
   // Tier 1 (below): done at once. Nothing here moves money or loosens a limit; the owner's limits, approvals and
   // each app's weekly budget still apply to every trade these set up.
   def({ name: "bot_templates", spends: false, schema: NoArgs,
-    description: "The ready-made bots the owner can run (steady buyer/DCA, buy the dip, protect a position, trailing stop, take-profit ladder, grid) with each one's fields, defaults and risk, plus the owner's per-app budgets.",
+    description: "The ready-made bots the owner can run (steady buyer/DCA, buy the dip, protect a position, trailing stop, take-profit ladder, grid, Smart DCA, rebalancer, infinity grid, split order) with each one's fields, defaults and risk, plus the owner's per-app budgets. Fees: trades by Grid, Infinity grid and Smart DCA bots pay Tollkit 0.25% on each buy and each sell (0.5% round trip); every other trade pays 0.5%. A grid's levels must be at least 0.7% apart so each round trip keeps about 0.2% after fees; the default grid is ±8%, 16 levels (about 1.07% apart), $25 a level.",
     run: async (w) => ({ templates: TEMPLATES, app_budgets: budgetView(w.dir), agent_rules: w.policy.agent_rules }) }),
   def({ name: "bot_preview", spends: false, sets: false, schema: BotArgs,
     description: "Preview a bot at today's price without starting it: the plain rules it would make. Use it to show the owner what a bot will do.",
