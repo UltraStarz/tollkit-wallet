@@ -312,6 +312,16 @@ nav button.on .nclaude{opacity:1;transform:translateY(-2px) scale(1.1)}
 .gearb{width:36px;height:36px;border-radius:11px;border:1px solid color-mix(in srgb,var(--line) 80%,transparent);background:color-mix(in srgb,var(--card) 70%,transparent);color:var(--tx);display:grid;place-items:center;flex:none;cursor:pointer;padding:0}
 .chhero .ap-pill{margin-left:auto}
 .oshade{position:fixed;inset:0;z-index:55;background:rgba(5,6,9,.62);backdrop-filter:blur(3px);animation:aifade .2s ease}
+.tkask{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:70;width:min(340px,calc(100vw - 32px));box-sizing:border-box;padding:20px 18px 16px;border-radius:22px;text-align:center;background:linear-gradient(180deg,color-mix(in srgb,var(--acc) 9%,var(--card)),var(--card) 55%);border:1px solid color-mix(in srgb,var(--acc) 25%,var(--line));box-shadow:0 24px 60px rgba(0,0,0,.55);animation:aifade .18s ease}
+.tkask h3{margin:10px 0 6px;font-size:17px;color:var(--tx);text-transform:none;letter-spacing:0}
+.tkask p{margin:0 0 4px;font-size:14px;line-height:1.45;color:var(--mut)}
+.tkask label{text-align:left}
+.tkask-ic{width:44px;height:44px;margin:0 auto;border-radius:14px;display:grid;place-items:center;font-weight:800;font-size:20px;color:#fff;background:linear-gradient(135deg,#4a8eff,#8b7bff)}
+.tkask-ic.bad{background:linear-gradient(135deg,#ff6b6b,#e0484f)}
+.tkask-b{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
+.tkask-b .b{width:100%}
+.b.dz{background:var(--bad);color:#fff}
+.tkask .b:focus{outline:none}.tkask .b:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .osheet{position:fixed;left:0;right:0;bottom:0;z-index:60;max-height:88vh;overflow-y:auto;border-radius:24px 24px 0 0;padding:10px 16px calc(22px + env(safe-area-inset-bottom));background:linear-gradient(180deg,color-mix(in srgb,var(--acc) 10%,var(--card)),var(--card) 40%);border-top:1px solid color-mix(in srgb,var(--acc) 30%,var(--line));box-shadow:0 -14px 44px rgba(0,0,0,.55)}
 .osheet .grab{width:40px;height:5px;border-radius:3px;background:var(--line);margin:0 auto 12px}
 .osheet .ap-top h2{margin:0;font-size:18px}
@@ -1536,7 +1546,20 @@ function sbSave(){var f=SB.f||{},st=S.superbot.settings,body={};["budget_usd","p
 if(f.chains)body.chains=f.chains;if(f.sources)body.sources=f.sources;if(f.always_on!=null)body.always_on=f.always_on;
 if(Array.isArray(f.tokens))body.tokens=f.tokens.filter(function(x){return (f.chains||st.chains).indexOf(x.chain)>=0});
 SB.busy=true;SB.err=null;render();api("/superbot",{action:S.superbot.enabled?"settings":"on",settings:body}).then(function(r){SB.busy=false;SB.edit=false;SB.f=null;S.superbot=r.superbot;flash=[1,S.superbot.enabled?"Autopilot is on. New strategies start on paper.":"Saved."];render()}).catch(function(e){SB.busy=false;SB.err=e.message;render()})}
-function sbAct(a){if(a==="off"&&!confirm("Turn Autopilot off? Every strategy stops and its rules are cancelled."))return;SB.busy=true;render();api("/superbot",{action:a}).then(function(r){SB.busy=false;S.superbot=r.superbot;flash=[1,a==="off"?"Autopilot is off.":a==="resume"?"Resumed.":"Checked."];render()}).catch(function(e){SB.busy=false;flash=[0,e.message];render()})}
+// 0.9.6: the app's own confirm sheet instead of the browser's "chrome-extension://… says" dialog.
+var sbOffOk=false;
+function tkAsk(o){return new Promise(function(done){var old=document.getElementById("tkask");if(old)old.remove();
+var w=document.createElement("div");w.id="tkask";
+w.innerHTML='<div class="oshade"></div><div class="tkask" role="alertdialog" aria-modal="true" aria-labelledby="tkaskh"><div class="tkask-ic'+(o.danger?' bad':'')+'">'+(o.icon||'!')+'</div><h3 id="tkaskh">'+esc(o.title)+'</h3>'+(o.body?'<p>'+esc(o.body)+'</p>':'')+(o.password?'<label for="tkaskpw">Password</label><input id="tkaskpw" type="password" autocomplete="current-password">':'')+'<div class="tkask-b"><button class="b g" data-k="no">'+esc(o.cancel||"Cancel")+'</button><button class="b'+(o.danger?' dz':'')+'" data-k="ok">'+esc(o.ok||"OK")+'</button></div></div>';
+document.body.appendChild(w);var pw=w.querySelector("#tkaskpw");
+function end(v){document.removeEventListener("keydown",key,true);w.remove();done(v)}
+function ok(){if(pw){if(!pw.value){pw.focus();return}end(pw.value)}else end(true)}
+function key(e){if(e.key==="Escape"){e.preventDefault();end(o.password?null:false)}else if(e.key==="Enter"){e.preventDefault();ok()}}
+document.addEventListener("keydown",key,true);
+w.querySelector(".oshade").onclick=function(){end(o.password?null:false)};
+w.querySelector('[data-k="no"]').onclick=function(){end(o.password?null:false)};w.querySelector('[data-k="ok"]').onclick=ok;
+setTimeout(function(){(pw||w.querySelector(o.danger?'[data-k="no"]':'[data-k="ok"]')).focus({focusVisible:false})},30)})}
+function sbAct(a){if(a==="off"&&!sbOffOk){tkAsk({title:"Turn Autopilot off?",body:"Every strategy stops and its rules are cancelled. Coins it bought stay in your wallet.",ok:"Turn off",danger:true}).then(function(y){if(y){sbOffOk=true;sbAct("off")}});return}sbOffOk=false;SB.busy=true;render();api("/superbot",{action:a}).then(function(r){SB.busy=false;S.superbot=r.superbot;flash=[1,a==="off"?"Autopilot is off.":a==="resume"?"Resumed.":"Checked."];render()}).catch(function(e){SB.busy=false;flash=[0,e.message];render()})}
 function pilotPage(){SB.open=true;var b=S.superbot;if(!b)return '<div class="empty mut">Autopilot isn\'t available in this wallet.</div>';return msg()+sbCard(true)}
 // 0.9.2: the 24/7 switch, on Autopilot's own card: live Base ETH and Solana SOL strategies keep trading while closed.
 function apAO(b,live){var on=!!b.settings.always_on,ids=(S.rules||[]).filter(function(r){return rIsAP(r)&&r.status==="active"&&live.some(function(x){return x.bot===r.bot})}).map(function(r){return r.id});
@@ -1638,7 +1661,7 @@ var form=W.length?'<h3>Withdraw</h3><label>To</label><select id="w_to" onchange=
 return '<h3>Saved addresses</h3>'+saved+'<details style="margin-top:10px"><summary class="sm" style="cursor:pointer;color:var(--acc)">Add an address</summary><label>Chain</label><select id="a_ch"><option>base</option><option>solana</option><option>ethereum</option></select><label>Address</label><input id="a_ad" spellcheck="false"><label>Label</label><input id="a_lb" maxlength="40" placeholder="e.g. my Coinbase"><label>Password</label><input id="pw3" type="password" autocomplete="current-password"><div style="margin-top:12px"><button class="b g" onclick="addAddr()">Save address</button></div></details>'+form+msg()}
 function tokOpts(){var s=document.getElementById("w_to");if(!s)return;var a=S.policy.withdraw_addresses[Number(s.value)];document.getElementById("w_tok").innerHTML=TOK[a.chain].map(function(t){return "<option>"+t+"</option>"}).join("")}
 function addAddr(){api("/addresses",{password:document.getElementById("pw3").value,chain:document.getElementById("a_ch").value,address:document.getElementById("a_ad").value.trim(),label:document.getElementById("a_lb").value}).then(function(){flash=[1,"Address saved."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
-function rmAddr(c,a){var pw=prompt("Password to remove this address:");if(!pw)return;api("/addresses",{password:pw,action:"remove",chain:c,address:a}).then(function(){flash=[1,"Removed."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
+function rmAddr(c,a){tkAsk({title:"Remove this address?",body:"It disappears from this wallet. Enter your password to confirm.",ok:"Remove",danger:true,password:true}).then(function(pw){if(!pw)return;api("/addresses",{password:pw,action:"remove",chain:c,address:a}).then(function(){flash=[1,"Removed."];refresh()}).catch(function(e){flash=[0,e.message];render()})})}
 function prepW(){var a=S.policy.withdraw_addresses[Number(document.getElementById("w_to").value)];conf={chain:a.chain,to:a.address,token:document.getElementById("w_tok").value,amount:document.getElementById("w_amt").value.trim(),pw:document.getElementById("pw2").value};if(!conf.amount||!conf.pw){flash=[0,"Enter an amount and your password."];conf=null}render();if(conf){var s=document.getElementById("w_to");s.value=String(S.policy.withdraw_addresses.indexOf(a));tokOpts();document.getElementById("w_tok").value=conf.token;document.getElementById("w_amt").value=conf.amount;document.getElementById("pw2").value=conf.pw}}
 function doW(){var c=conf;conf=null;flash=[1,"Sending…"];render();api("/withdraw",{password:c.pw,chain:c.chain,token:c.token,to:c.to,amount:c.amount}).then(function(r){flash=r.ok?[1,"Sent. Transaction "+r.tx]:[0,r.refused.reason];refresh();loadBal()}).catch(function(e){flash=[0,e.message];render()})}
 function busy(){if(BOT.drag)return true;var el=document.activeElement;if(el&&el.id==="chin"){CH.refocus=el.selectionStart;return !!conf}return el&&(el.tagName==="INPUT"||el.tagName==="SELECT"||el.tagName==="TEXTAREA")||conf}
