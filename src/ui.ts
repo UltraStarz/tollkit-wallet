@@ -46,6 +46,25 @@ button.b:disabled{opacity:.5;cursor:default}
 label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
 input,select{width:100%;background:var(--surf);border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font:inherit}
 input:focus,select:focus{outline:2px solid var(--acc);border-color:transparent}
+/* 0.9.6: no browser up/down arrows on number boxes (they clashed with the dark style); type, or use the arrow keys. */
+input[type=number]{-moz-appearance:textfield;appearance:textfield}
+/* 0.9.6: Settings tidy-up. Group titles with a divider (they were picking up the .sgrp card style), fields whose
+   notes line up, and checkboxes in the app's colors instead of the browser's white boxes. */
+.lgrp{margin-top:12px;padding:14px 14px 8px;border-radius:16px;border:1px solid color-mix(in srgb,var(--line) 75%,transparent);background:linear-gradient(180deg,color-mix(in srgb,var(--surf) 88%,var(--acc) 12%),var(--surf) 70%);box-shadow:0 1px 0 rgba(255,255,255,.03) inset}
+.lgh{display:flex;align-items:center;gap:10px;margin-bottom:2px}.lgh b{display:block;font-size:14px;font-weight:650;color:var(--tx)}.lgh small{display:block;font-size:12px;color:var(--mut);margin-top:1px}
+.lgi{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;flex:none;color:#fff}.lgi svg{width:17px;height:17px}
+.lgi.c1{background:linear-gradient(135deg,#4a8eff,#2f6bff)}.lgi.c2{background:linear-gradient(135deg,#8b7bff,#6a5cff)}.lgi.c3{background:linear-gradient(135deg,#3fd3b0,#1fa98a)}.lgi.c4{background:linear-gradient(135deg,#f5b44a,#e08a1e)}
+.lgrp input[type=number],.lgrp .toggles label{background:color-mix(in srgb,var(--bg) 55%,var(--surf))}
+.lgrp .toggles{margin:10px 0 6px}
+.lf{display:flex;flex-direction:column;min-width:0}.lf label{margin-top:10px}.lf.full{grid-column:1/-1}
+.lsub{min-height:30px}.lsub .sth{margin-top:5px}.lsub .bar{margin-top:5px}
+.toggles input[type=checkbox],.tkt input[type=checkbox],.bkchk input[type=checkbox],.tc-fchk input[type=checkbox],#botshare{-webkit-appearance:none;appearance:none;width:18px;height:18px;flex:none;margin:0;padding:0;border-radius:6px;border:1.5px solid color-mix(in srgb,var(--mut) 55%,transparent);background:var(--surf2);display:inline-grid;place-content:center;cursor:pointer;transition:background .15s,border-color .15s}
+.toggles input[type=checkbox]:checked,.tkt input[type=checkbox]:checked,.bkchk input[type=checkbox]:checked,.tc-fchk input[type=checkbox]:checked,#botshare:checked{background:var(--acc);border-color:var(--acc)}
+.toggles input[type=checkbox]:checked::after,.tkt input[type=checkbox]:checked::after,.bkchk input[type=checkbox]:checked::after,.tc-fchk input[type=checkbox]:checked::after,#botshare:checked::after{content:"";width:9px;height:5px;border:2px solid #fff;border-top:0;border-right:0;transform:translate(0,-1px) rotate(-45deg)}
+.toggles input[type=checkbox]:focus-visible,.tkt input[type=checkbox]:focus-visible,#botshare:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.toggles label{border:1px solid color-mix(in srgb,var(--line) 70%,transparent);cursor:pointer}
+.toggles label:has(input:checked){border-color:color-mix(in srgb,var(--acc) 55%,transparent);background:color-mix(in srgb,var(--acc) 10%,var(--surf))}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .msg{margin-top:10px;font-size:13px;padding:9px 11px;border-radius:10px;background:var(--surf)}.msg.err{color:var(--bad)}.msg.okk{color:var(--ok)}
 .ap{background:var(--surf);border:1px solid var(--acc);border-radius:14px;padding:12px;margin-top:10px;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -1417,12 +1436,14 @@ function ans(id,d){if(Date.now()<APLOCK)return;api("/approve",{id:id,decision:d}
 var LIMD={},LIMPW="";
 function lv(id,def){return Object.prototype.hasOwnProperty.call(LIMD,id)?LIMD[id]:def}
 function limIn(el){if(el.id==="pw1"){LIMPW=el.value;return}LIMD[el.id]=el.type==="checkbox"?el.checked:el.value;var u=document.getElementById("limun");if(u)u.hidden=false}
-function limF(k,lab,hint,spent){var p=S.policy,v=lv("f_"+k,String(p[k])),sub="";
-if(spent!=null){var pct=p[k]>0?Math.min(100,Math.round(spent/p[k]*100)):0;sub='<div class="bar"><i style="width:'+pct+'%"></i></div><div class="sm mut sth">Spent today '+usd(spent)+'</div>'}else if(hint)sub='<div class="sm mut sth">'+hint+'</div>';
-return '<div><label for="f_'+k+'">'+lab+'</label><input id="f_'+k+'" type="number" min="0" step="any" inputmode="decimal" value="'+esc(v)+'" oninput="limIn(this)">'+sub+'</div>'}
+function limF(k,lab,hint,spent,full){var p=S.policy,v=lv("f_"+k,String(p[k])),sub="";
+if(spent!=null){var pct=p[k]>0?Math.min(100,Math.round(spent/p[k]*100)):0;sub='<div class="sm mut sth">Spent today '+usd(spent)+'</div><div class="bar"><i style="width:'+pct+'%"></i></div>'}else if(hint)sub='<div class="sm mut sth">'+hint+'</div>';
+return '<div class="lf'+(full?" full":"")+'"><label for="f_'+k+'">'+lab+'</label><input id="f_'+k+'" type="number" min="0" step="any" inputmode="decimal" value="'+esc(v)+'" oninput="limIn(this)"><div class="lsub">'+sub+'</div></div>'}
+function lgH(c,ic,t,sub){return '<div class="lgh"><span class="lgi '+c+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+LGI[ic]+'</svg></span><div><b>'+t+'</b><small>'+sub+'</small></div></div>'}
+var LGI={"swap": '<path d="M7 7h11l-3-3M17 17H6l3 3"/>', "tools": '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>', "net": '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/>', "shield": '<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/>'};
 function limT(id,on,text){var c=lv(id,on);return '<label><input type="checkbox" id="'+id+'"'+(c?" checked":"")+' onchange="limIn(this)"> '+text+'</label>'}
 function setRow(icon,title,sub,btn){return '<div class="row">'+icon+'<div style="min-width:0"><div>'+title+'</div><div class="sm mut">'+sub+'</div></div><div class="r">'+btn+'</div></div>'}
-var SICO={ai:'<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><rect x="7" y="7" width="10" height="10" rx="2"/>',tg:'<path d="M21 4L3 11l6 2 2 6 3-4 5 4z"/>',bk:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',ext:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/>'};
+var SICO={ai:'<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><rect x="7" y="7" width="10" height="10" rx="2"/>',tg:'<path d="M21 4L3 11l6 2 2 6 3-4 5 4z"/>',bk:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',tools:'<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',ext:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/>'};
 function sIco(k){return '<div class="ic"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+SICO[k]+'</svg></div>'}
 // Python bots (Settings, For developers) get the wallet's bot link (the same one AI apps use).
 var PYO=null,PYPW="",PYMSG=null,PYBUSY=false;
@@ -1552,10 +1573,10 @@ function pyCard(){return '<div class="pycard"><div class="pyct"><span class="tmi
 function pyRow(){return setRow('<div class="ic">'+CODEICO.replace('aria-hidden','width="17" height="17" aria-hidden')+'</div>',"Python bots",'Run your own trading bots in Python, inside your limits. '+pyStatus(),'<button class="b g sbtn" onclick="openPy()">'+((((S.connect||{}).remote||{}).on)?"Setup":"Set up")+'</button>')}
 function settings(){var p=S.policy,sp=S.spent_today||{},dirty=Object.keys(LIMD).length>0;
 var lim='<h3>Spending limits</h3><div class="mut sm">Your AI and autopilot have to stay inside these and can\'t change them. Saving needs your password.</div>'+
-'<div class="sgrp">Swaps</div><div class="grid2">'+limF("per_trade_usd","Per swap ($)","Largest single swap")+limF("daily_trades_usd","Swaps per day ($)",null,sp.trades_usd||0)+limF("approval_above_usd","Ask me above ($)","Bigger swaps wait for your OK")+limF("max_slippage_bps","Max slippage (bps)","100 bps = 1%")+'</div>'+
-'<div class="sgrp">Paying for tools</div><div class="grid2">'+limF("per_payment_usd","Per payment ($)","Largest single payment")+limF("daily_payments_usd","Payments per day ($)",null,sp.payments_usd||0)+limF("per_seller_daily_usd","Per seller per day ($)","Most to any one seller")+'</div>'+
-'<div class="sgrp">Networks</div><div class="toggles">'+ALLCH.map(function(c){return limT("c_"+c,p.chains.indexOf(c)>=0,CHAIN_NAMES[c])}).join("")+'</div>'+
-'<div class="sgrp">Safety</div><div class="toggles stg">'+limT("f_bsw",p.block_seller_warnings,"Block sellers that fail the seller check")+limT("f_ar",p.agent_rules==="auto","Let agents turn on autopilot rules without asking me")+'</div>'+
+'<div class="lgrp">'+lgH("c1","swap","Swaps","Trades by you, your AI and your bots")+'<div class="grid2">'+limF("per_trade_usd","Per swap ($)","Largest single swap")+limF("daily_trades_usd","Swaps per day ($)",null,sp.trades_usd||0)+limF("approval_above_usd","Ask me above ($)","Bigger swaps wait for your OK")+limF("max_slippage_bps","Max slippage (bps)","100 bps = 1%")+'</div></div>'+
+'<div class="lgrp">'+lgH("c2","tools","Paying for tools","What your AI may spend on paid web tools")+'<div class="grid2">'+limF("per_payment_usd","Per payment ($)","Largest single payment")+limF("daily_payments_usd","Payments per day ($)",null,sp.payments_usd||0)+limF("per_seller_daily_usd","Per seller per day ($)","Most to any one seller",null,true)+'</div></div>'+
+'<div class="lgrp">'+lgH("c3","net","Networks","Where the wallet may trade and pay")+'<div class="toggles">'+ALLCH.map(function(c){return limT("c_"+c,p.chains.indexOf(c)>=0,CHAIN_NAMES[c])}).join("")+'</div></div>'+
+'<div class="lgrp">'+lgH("c4","shield","Safety","Extra checks before anything runs")+'<div class="toggles stg">'+limT("f_bsw",p.block_seller_warnings,"Block sellers that fail the seller check")+limT("f_ar",p.agent_rules==="auto","Let agents turn on autopilot rules without asking me")+'</div></div>'+
 '<label for="pw1">Password</label><input id="pw1" type="password" autocomplete="current-password" value="'+esc(LIMPW)+'" oninput="limIn(this)">'+
 '<div class="ssave"><button class="b" onclick="saveLim()">Save limits</button><span id="limun" class="sm warn"'+(dirty?"":" hidden")+'>Unsaved changes</span></div>'+msg();
 var on=((S.connect||{}).apps||[]).filter(function(a){return a.added}).map(function(a){return (AIMETA[a.id]||[0,a.id])[1]});
@@ -1585,7 +1606,7 @@ api("/app-budgets",{app:n,weekly_usd:v}).then(function(){delete ABE[n];flash=[1,
 var TKO=false;
 function tkTools(){var T=S.tollkit_tools;if(!T||!T.tools||!T.tools.length)return "";var on=T.tools.filter(function(t){return !t.hidden}).length;
 var rows=T.tools.map(function(t){return '<label class="tkt"><input type="checkbox"'+(t.hidden?"":" checked")+' onchange="tkHide('+esc(JSON.stringify(t.name))+',!this.checked)"><span class="tkn">'+esc(t.title)+'</span><span class="tkp mut sm">'+usd(t.price_usd)+'</span></label>'}).join("");
-return '<div class="row"><div style="min-width:0"><div>Tollkit tools for your AI</div><div class="sm mut">'+on+' of '+T.tools.length+' offered. Reading pages, search, SEC data, token checks and more; each call is paid from this wallet, inside your payment limits and the app\'s budget. Failed calls are free.</div></div><div class="r"><button class="b g sbtn" onclick="TKO=!TKO;render()">'+(TKO?"Hide":"Choose")+'</button></div></div>'+(TKO?'<div class="tkl">'+rows+'</div>':"")}
+return '<div class="row">'+sIco("tools")+'<div style="min-width:0"><div>TOLLkit tools for your AI</div><div class="sm mut">'+on+' of '+T.tools.length+' offered. Reading pages, search, SEC data, token checks and more; each call is paid from this wallet, inside your payment limits and the app\'s budget. Failed calls are free.</div></div><div class="r"><button class="b g sbtn" onclick="TKO=!TKO;render()">'+(TKO?"Hide":"Choose")+'</button></div></div>'+(TKO?'<div class="tkl">'+rows+'</div>':"")}
 function tkHide(n,h){api("/tollkit-tools",{name:n,hidden:h}).then(function(){refresh()}).catch(function(e){flash=[0,e.message];render()})}
 var EXC=null,EXCN=0;
 function extCode(){api("/extmgr/code",{}).then(function(r){EXC=r.code;EXCN=(S.ext||{}).paired||0;render()}).catch(function(e){flash=[0,e.message];render()})}
