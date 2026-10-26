@@ -159,7 +159,7 @@ export const ACTIONS = [
   // Tier 1 (below): done at once. Nothing here moves money or loosens a limit; the owner's limits, approvals and
   // each app's weekly budget still apply to every trade these set up.
   def({ name: "bot_templates", spends: false, schema: NoArgs,
-    description: "The ready-made bots the owner can run (steady buyer/DCA, buy the dip, protect a position, trailing stop, take-profit ladder, grid, Smart DCA, rebalancer, infinity grid, split order) with each one's fields, defaults and risk, plus the owner's per-app budgets. Fees: trades by Grid, Infinity grid and Smart DCA bots pay Tollkit 0.25% on each buy and each sell (0.5% round trip); every other trade pays 0.5%. A grid's levels must be at least 0.7% apart so each round trip keeps about 0.2% after fees; the default grid is ±8%, 16 levels (about 1.07% apart), $25 a level.",
+    description: "The ready-made bots the owner can run (steady buyer/DCA, buy the dip, protect a position, trailing stop, take-profit ladder, grid, Smart DCA, rebalancer, infinity grid, split order) with each one's fields, defaults and risk, plus the owner's per-app budgets. Fees: trades by Grid, Infinity grid and Smart DCA bots pay Tollkit 0.25% on each buy and each sell (0.5% round trip); every other trade pays 0.5%. A grid's levels must be at least 0.7% apart so each round trip keeps about 0.2% after fees; the default grid is ±8%, 16 levels (about 1.07% apart), $25 a level. Run 24/7 (trading while the wallet is closed) works for bots only on Solana (SOL); on Base it covers ETH orders (steady buys, limits, take-profit, stop-loss), not bots.",
     run: async (w) => ({ templates: TEMPLATES, app_budgets: budgetView(w.dir), agent_rules: w.policy.agent_rules }) }),
   def({ name: "bot_preview", spends: false, sets: false, schema: BotArgs,
     description: "Preview a bot at today's price without starting it: the plain rules it would make. Use it to show the owner what a bot will do.",
@@ -174,7 +174,7 @@ export const ACTIONS = [
         const made = await w.rules().addBot(rules, "agent", auto, ctx?.app);
         w.hooks.rulesChanged?.();
         return { ok: true, bot: b.built.bot, name: b.built.name, status: auto ? "active" : "proposed", rules: made.map(showRule),
-          note: auto ? "The bot is on. It trades while the wallet is open, or on Tollkit's server if the owner turns on Keep running when closed." : "The bot is waiting for the owner to turn it on in the wallet (Bots tab for Buy the dip, ladders and grids; Orders tab for the rest)." };
+          note: auto ? "The bot is on. It trades while the wallet is open. Bots can also run 24/7 on Tollkit's server (Run 24/7), but only on Solana (SOL); on Base and Ethereum they trade only while the wallet is open." : "The bot is waiting for the owner to turn it on in the wallet (Bots tab for Buy the dip, ladders and grids; Orders tab for the rest)." };
       } catch (e) { return bad(e); }
     } }),
   def({ name: "bots_status", spends: false, schema: NoArgs,
