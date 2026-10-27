@@ -49,6 +49,8 @@ export const SUPERBOT = {
   /** Without a "moved" snapshot, a decision is still taken this often. */
   forceStepMinutes: 60,
   rethink: [15, 30, 60] as const,
+  /** 0.9.7 Active pace: a strategy with no trade for this long is tightened by a plain rule. */
+  idleHours: 24,
   maxContextChars: 20_000,
 };
 
@@ -87,6 +89,8 @@ export interface Strategy {
   history: { ts: string; note: string }[];
   /** Results of the stage before this one, kept when a strategy moves between paper and live. */
   past?: { stage: Stage; result_pct: number | null; trades: number }[];
+  /** 0.9.7: when Active pace last tightened it for sitting idle. */
+  tightened_at?: string;
 }
 export interface AppliedAction { type: string; strategy_id?: string; template?: string; chain?: string; token?: string; params?: Record<string, unknown>; reason: string; sources: string[]; applied: boolean; outcome: string }
 export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" }
@@ -148,6 +152,27 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
 }
 
 /** Dollars a strategy can put into buys over its life (sells don't count). Exported for tests. */
+/**
+ * 0.9.7 Active pace: an idle strategy's tighter settings, still wide enough to profit after Tollkit's fee (0.25% a
+ * side on grids, 0.5% on the rest). Null: nothing left to tighten. A grid is also rebuilt around today's price.
+ */
+export function tightened(template: string, p: Record<string, unknown>): Record<string, unknown> | null {
+  const n = (k: string) => Number(p[k]), at = (v: number, min: number) => +Math.max(min, v).toFixed(2);
+  switch (template) {
+    case "dip": { const d = at(n("drop_pct") * 0.6, 1.5), g = at(n("profit_pct") * 0.8, 1.5); return d < n("drop_pct") || g < n("profit_pct") ? { ...p, drop_pct: d, profit_pct: g } : null; }
+    case "grid": { const lv = n("levels"), r = at(n("range_pct") * 0.7, Math.max(1, (0.75 * (lv - 1)) / 2)); return { ...p, range_pct: Math.min(r, n("range_pct")) }; }
+    case "smart_dca": { const st = at(n("step_pct") * 0.7, 1.5), g = at(n("profit_pct") * 0.8, 1.5); return st < n("step_pct") || g < n("profit_pct") ? { ...p, step_pct: st, profit_pct: g } : null; }
+    case "infinity_grid": { const st = at(n("step_pct") * 0.7, 1); return st < n("step_pct") ? { ...p, step_pct: st } : null; }
+    case "rebalance": { const b = at(n("band_pct") * 0.7, 2); return b < n("band_pct") ? { ...p, band_pct: b } : null; }
+    default: return null;
+  }
+}
+function describeChange(a: Record<string, unknown>, b: Record<string, unknown>): string {
+  const label: Record<string, string> = { drop_pct: "dip", profit_pct: "profit", range_pct: "range ±", step_pct: "step", band_pct: "band" };
+  const parts = Object.keys(label).filter((k) => a[k] !== undefined && b[k] !== undefined && Number(a[k]) !== Number(b[k])).map((k) => `${label[k]} ${a[k]}% → ${b[k]}%`);
+  return parts.length ? parts.join(", ") : "its settings";
+}
+
 export function committedUsd(template: string, params: Record<string, unknown>): number {
   const a = Number(params.amount_usd) || 0;
   switch (template) {
@@ -291,7 +316,10 @@ export class SuperBot {
       if (after.stats.snap_fails) await this.update((x) => { x.stats.snap_fails = 0; });
       const moved = !!snap.changes?.moved && snap.id !== after.stats.last_snapshot;
       const stale = !after.stats.last_step || t - Date.parse(after.stats.last_step) >= SUPERBOT.forceStepMinutes * 60_000;
-      if (force || moved || stale) await this.step(snap);
+      // 0.9.7: Active pace tightens idle strategies, and decides at every rethink, not only when the market moved.
+      const active = (after.settings.pace ?? "steady") === "active";
+      if (active) await this.tightenIdle(this.w.rules().list());
+      if (force || moved || stale || active) await this.step(snap);
     } catch (e) {
       await this.update((x) => { x.stats.last_error = (e as Error).message.slice(0, 300); });
     } finally { this.busy = false; }
@@ -368,7 +396,28 @@ export class SuperBot {
   }
 
   /** Rebuild a strategy's rules at today's price in a stage (same template and params). */
-  private async restage(st: Strategy, stage: "paper" | "live", why: string, all: Rule[], params = st.params): Promise<{ applied: boolean; outcome: string }> {
+  /**
+   * 0.9.7 Active pace: a strategy that hasn't traded for a day is rebuilt tighter (and around today's price) by a
+   * plain rule, at most once a day, keeping its stage and its paper clock.
+   */
+  private async tightenIdle(all: Rule[]) {
+    const s = this.load(), t = this.now();
+    for (const st of s.strategies.filter((x) => x.stage !== "retired")) {
+      const sum = this.summaryOf(st, all);
+      const since = Math.max(Date.parse(st.stage_since), sum?.last_trade ? Date.parse(sum.last_trade) : 0, st.tightened_at ? Date.parse(st.tightened_at) : 0);
+      if (t - since < SUPERBOT.idleHours * 3_600_000) continue;
+      const next = tightened(st.template, st.params);
+      if (!next) continue;
+      const params = this.clampParams(s, st.template, next);
+      if (params.note) continue;
+      const why = `No trade in ${SUPERBOT.idleHours} hours on Active pace: tightened ${describeChange(st.params, params.params)} and re-centred on today's price.`;
+      const res = await this.restage(st, st.stage === "live" ? "live" : "paper", why, all, params.params, true);
+      await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
+      await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
+    }
+  }
+
+  private async restage(st: Strategy, stage: "paper" | "live", why: string, all: Rule[], params = st.params, keepClock = false): Promise<{ applied: boolean; outcome: string }> {
     const s = this.load();
     if (stage === "live") {
       const fit = this.fitsBudget(s, st, params);
@@ -382,8 +431,8 @@ export class SuperBot {
     const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: why.slice(0, 200), ...(stage === "paper" ? { paper: true } : {}) })), "agent", true, "superbot");
     await this.update((x) => {
       const y = x.strategies.find((z) => z.id === st.id); if (!y) return;
-      y.past = [...(y.past ?? []), { stage: y.stage, result_pct: sum?.result_pct ?? null, trades: sum?.trades_ok ?? 0 }].slice(-6);
-      y.stage = stage; y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
+      if (!keepClock) y.past = [...(y.past ?? []), { stage: y.stage, result_pct: sum?.result_pct ?? null, trades: sum?.trades_ok ?? 0 }].slice(-6);
+      y.stage = stage; if (!keepClock) y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
       if (stage === "paper") x.paper_rules.push(...made.map((r) => r.id));
     });
     if (stage === "live") await this.handToAlwaysOn(made);

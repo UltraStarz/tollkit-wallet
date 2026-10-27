@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RuleStore } from "../src/rules.js";
-import { committedUsd, DEFAULT_SETTINGS, parseSettings, SUPERBOT, SuperBot } from "../src/superbot.js";
+import { committedUsd, DEFAULT_SETTINGS, parseSettings, SUPERBOT, SuperBot, tightened } from "../src/superbot.js";
 
 let pass = 0, fail = 0;
 const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
@@ -275,6 +275,34 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   check(/strategist inside a Tollkit Wallet/.test(asks[0].system) && asks[0].tool.name === "decide" && /Signal snapshot snap-/.test(asks[0].user) && /"fear_greed"/.test(asks[0].user) && /budget_usd/.test(asks[0].user), "the same instructions, decide tool, snapshot and limits as Tollkit's strategist");
   check(v.decisions[0].by === "strategist" && v.decisions[0].model === "claude-haiku-5-5" && v.decisions[0].cost_usd === 0 && v.stats.step_usd === 0 && v.stats.last_error === null, "logged with its model, costing the wallet nothing", v.decisions[0]);
   check(v.brain.label === "Haiku 5.5 on your Anthropic key", "the Autopilot screen can name the model");
+}
+
+// ─── 0.9.7: Active pace decides every rethink and tightens idle strategies ─────
+{
+  check(JSON.stringify(tightened("dip", { amount_usd: 25, drop_pct: 5, profit_pct: 8 })) === JSON.stringify({ amount_usd: 25, drop_pct: 3, profit_pct: 6.4 }) && tightened("dip", { drop_pct: 1.5, profit_pct: 1.5 }) === null, "an idle dip buyer waits for a smaller drop and takes a smaller profit, never under 1.5%");
+  const g = tightened("grid", { amount_usd: 20, range_pct: 8, levels: 16 })!;
+  check(g.range_pct === 5.63 && (2 * Number(g.range_pct)) / 15 >= 0.75 && tightened("grid", { range_pct: 5.63, levels: 16 })!.range_pct === 5.63, "an idle grid narrows but keeps its levels at least 0.75% apart (above the 0.5% round-trip fee)", g);
+  let n = 0;
+  const W = world({ decision: () => (n++ === 0 ? { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 20, drop_pct: 5, profit_pct: 8 }, reason: "Flat market.", sources: ["ETH +0.1%"] }] } : { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "keep", reason: "Quiet.", sources: [] }] }) });
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], pace: "active", rethink_minutes: 15 });
+  await new Promise((r) => setTimeout(r, 30));
+  const since = W.bot.view().strategies[0]!.stage_since;
+  W.setSignals(() => ({ id: "same", at: "x", changes: { moved: false } }));
+  const c0 = W.calls.length;
+  W.advance(15 * 60_000); await W.bot.tick();
+  check(W.calls.length === c0 + 1, "Active decides at every rethink, even when nothing moved", W.calls.length - c0);
+  W.advance(24 * 3_600_000); await W.bot.tick();
+  const v = W.bot.view(), st = v.strategies[0]!, rd = v.decisions.find((d: any) => d.by === "rule");
+  check(st.params.drop_pct === 3 && st.params.profit_pct === 6.4 && st.stage === "paper" && st.stage_since === since, "a day with no trade: tightened by a plain rule, still on paper, its paper clock kept", st);
+  check(!!rd && /No trade in 24 hours/.test(rd.assessment) && /dip 5% → 3%/.test(rd.assessment), "the decision list says what was tightened and why", rd?.assessment);
+  W.advance(60 * 60_000); await W.bot.tick();
+  check(W.bot.view().strategies[0]!.params.drop_pct === 3, "at most once a day");
+  const s2 = world();
+  await s2.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
+  await new Promise((r) => setTimeout(r, 30));
+  s2.setSignals(() => ({ id: "same", at: "x", changes: { moved: false } }));
+  const k0 = s2.calls.length; s2.advance(31 * 60_000); await s2.bot.tick();
+  check(s2.calls.length === k0, "Steady still waits for the market to move");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
