@@ -87,7 +87,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const tape = new PriceTape(w.dir);
   // 0.9.0: the Autopilot's paper strategies run on a second, paper autopilot; the live one leaves them alone.
   let superbot: SuperBot | null = null;
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().handedOff(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
     // 0.9.1: alerts reach Telegram when it's linked (the screen shows them on the rule card and as a toast).
     onEvent: (e) => { if (e.type !== "alert") return; const t = loadTelegram(w.dir); if (t) void notify(t, `TOLLkit alert: ${e.detail}`).catch(() => {}); } }) : null;
   autopilot?.start();
@@ -103,6 +103,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   };
   // "Keep running when closed": hand the switched-on rules to Tollkit's server and bring back what it traded.
   const alwaysSync = async () => {
+    // 0.9.7: a trade the device is placing right now finishes (and is recorded) before the server gets the rule's state.
+    await autopilot?.idle();
     if (w.always().anyOn()) try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
     if (w.alwaysSol().anyOn()) try { await w.alwaysSol().sync(); } catch (e) { w.alwaysSol().noteError((e as Error).message); }
   };
@@ -476,6 +478,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           if (b.on === true && !cfg?.enabled) return send(res, 400, { error: cfg ? cfg.reason ?? "Not available yet." : "Can't reach Tollkit's server right now." });
           w.always().set(String(b.id ?? ""), b.on === true, b.budget_usd === undefined ? undefined : Number(b.budget_usd));
           await alwaysSync();
+          // 0.9.7: refused by the server: switch it back off, so the device keeps running it (as on Solana).
+          const ev = w.always().view(), erule = b.id ? w.rules().get(String(b.id)) : undefined, eprob = erule ? ev.problems[erule.id] : undefined;
+          if (b.on === true && erule && eprob && !ev.running.includes(erule.id)) { w.always().set(erule.id, false); return send(res, 400, { error: eprob }); }
           return send(res, 200, { always: w.always().view() });
         } catch (e) { return send(res, 400, { error: (e as Error).message }); }
       }

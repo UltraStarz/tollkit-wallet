@@ -198,7 +198,7 @@ async function main(argv: string[]) {
       const paper = args.includes("--paper");
       const w = await open();
       const feed = new PriceFeed(); feed.start();
-      const ap = new Autopilot(w.rules(), w.executor(paper ? "paper" : "live"), feed, { dir: w.dir, skip: paper ? undefined : (id) => w.always().serverRuns(id), onEvent: (e) => out(`${new Date().toISOString()} ${e.type.toUpperCase()} ${describeRule(e.rule)}: ${e.detail}`) });
+      const ap = new Autopilot(w.rules(), w.executor(paper ? "paper" : "live"), feed, { dir: w.dir, skip: paper ? undefined : (id) => w.always().serverRuns(id) || w.always().handedOff(id), onEvent: (e) => out(`${new Date().toISOString()} ${e.type.toUpperCase()} ${describeRule(e.rule)}: ${e.detail}`) });
       ap.start();
       out(`Autopilot running${paper ? " in PAPER mode (pretend money)" : ""}. ${w.rules().list().filter((r) => r.status === "active").length} active rule(s). Ctrl-C to stop.`);
       await new Promise<void>((r) => process.once("SIGINT", () => { ap.stop(); feed.stop(); r(); }));

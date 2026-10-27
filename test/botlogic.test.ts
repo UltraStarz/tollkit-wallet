@@ -171,5 +171,24 @@ const solOf = (req: SwapRequest) => Number(req.sell_amount) / 1e9;
   check(rb.m.state.swaps.length > 0 && rb.m.state.swaps.every((x: any) => !x.bot), "a rebalancer's trades pay the usual fee", rb.m.state.swaps);
 }
 
+// 0.9.7: handing a bot to Run 24/7 while the app is placing its first part (seen live 2026-10-27: the server, given
+// the state from before that sale, sold the same part again). The handoff waits for the trade, then the app stops.
+{
+  const dir = tmp(), m = market(), s = new RuleStore(dir), handed = new Set<string>();
+  const slow = m.exec.swap; m.exec.swap = async (req) => { await new Promise((res) => setTimeout(res, 150)); return slow(req); };
+  let clock = Date.now();
+  const ap = new Autopilot(s, m.exec, m.prices, { dir, now: () => clock, skip: (id) => handed.has(id) });
+  const r = await s.add({ chain: "solana", token: "SOL", kind: "twap", side: "sell", sell_percent: 20, pieces: 2, hours: 1 } as any, "owner", false);
+  const inFlight = ap.tick();            // the first part is being sold...
+  await new Promise((res) => setTimeout(res, 20));
+  handed.add(r.id);                      // ...when the owner switches on Run 24/7
+  await ap.idle();                       // the handoff waits for it
+  const st = s.get(r.id)!.state.bot;
+  check(m.state.swaps.length === 1 && st?.pieces === 1 && !!st?.sell_total, "the state handed to the server already has the part the app just sold", st);
+  await inFlight;
+  clock += 31 * 60_000; await ap.tick();
+  check(m.state.swaps.length === 1, "once it's switched on, the app doesn't trade it again (the server does)", m.state.swaps.length);
+}
+
 console.log(`\nbotlogic: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

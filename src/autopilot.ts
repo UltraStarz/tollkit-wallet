@@ -110,9 +110,19 @@ export class Autopilot {
     return undefined;
   }
 
+  /** 0.9.7: resolves once the check in progress (and any trade it's placing) has finished. */
+  private current: Promise<void> | null = null;
+  async idle(): Promise<void> { await this.current?.catch(() => {}); }
+
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const p = this.tickOnce();
+    this.current = p;
+    try { await p; } finally { if (this.current === p) this.current = null; }
+  }
+
+  private async tickOnce(): Promise<void> {
     try {
       if (!this.takeLease()) return;
       this.lastTick = new Date(this.now()).toISOString();

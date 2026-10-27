@@ -120,6 +120,11 @@ export class AlwaysOn {
   isOn(id: string) { return !!this.load().rules[id]; }
   /** The server confirmed it runs this rule (and hasn't confirmed it stopped): the device leaves it alone. */
   serverRuns(id: string) { return (this.load().running ?? []).includes(id); }
+  /**
+   * 0.9.7: switched on for 24/7 and not refused: the server is taking it over, so the device stops trading it now,
+   * not only once the server confirms (otherwise both could trade the same step while it's handed over).
+   */
+  handedOff(id: string) { const l = this.load(); return !!l.rules[id] && !(l.problems ?? {})[id]; }
   anyOn() { const l = this.load(); return Object.keys(l.rules).length > 0 || (l.running ?? []).length > 0; }
   noteError(m: string) { this.update((l) => { l.last_error = m.slice(0, 300); }); }
 

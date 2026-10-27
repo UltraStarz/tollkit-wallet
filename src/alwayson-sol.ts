@@ -140,6 +140,8 @@ export class SolAlwaysOn {
   }
   isOn(id: string) { return !!this.load().rules[id]; }
   serverRuns(id: string) { return (this.load().running ?? []).includes(id); }
+  /** 0.9.7: switched on for 24/7 and not refused: the device stops trading it now (see src/alwayson.ts). */
+  handedOff(id: string) { const l = this.load(); return !!l.rules[id] && !(l.problems ?? {})[id]; }
   anyOn() { const l = this.load(); return Object.keys(l.rules).length > 0 || (l.running ?? []).length > 0 || !!(l.held && (l.held.usdc_allowed !== "0" || l.held.wsol_balance !== "0")); }
   noteError(m: string) { this.update((l) => { l.last_error = m.slice(0, 300); }); }
 
