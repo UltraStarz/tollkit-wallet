@@ -21,6 +21,7 @@ const tryErr = async (f: () => Promise<unknown>) => { try { await f(); return ""
   check(ruleProblem({ kind: "stop_loss", chain: "base", token: "ETH", sell_percent: 100 }) !== null, "a stop without a price is refused");
   check(ruleProblem({ kind: "dca", chain: "base", token: "USDC", amount_usd: 5, every: "day" }) !== null, "stablecoin as the asset is refused");
   check(describeRule({ kind: "dca", chain: "solana", token: "SOL", amount_usd: 25, every: "week", weekday: 1 }) === "Buy $25 of SOL every Monday on Solana", "plain description", describeRule({ kind: "dca", chain: "solana", token: "SOL", amount_usd: 25, every: "week", weekday: 1 }));
+  check(describeRule({ kind: "take_profit", chain: "solana", token: "SOL", trigger_price: 100.11, sell_from: "abcd" } as any) === "Take profit: sell the SOL it bought when it reaches $100.11 on Solana", "a sell that follows a buy says it sells what that buy got, not \"? SOL\"");
   const mon = nextRun({ every: "week", weekday: 1 }, new Date("2026-10-13T12:00:00Z")); // a Tuesday
   check(mon.toISOString() === "2026-10-19T14:00:00.000Z", "weekly DCA lands on the next Monday", mon.toISOString());
   const s = new RuleStore(tmp());

@@ -136,7 +136,8 @@ export interface Rule extends RuleInput {
 export function describeRule(r: RuleInput): string {
   const t = r.token.length > 12 ? `${r.token.slice(0, 6)}…${r.token.slice(-4)}` : r.token.toUpperCase();
   const $ = (n?: number) => (n === undefined ? "?" : `$${n.toLocaleString("en-US", { maximumFractionDigits: n < 1 ? 6 : 2 })}`);
-  const sell = r.sell_percent !== undefined ? (r.sell_percent >= 100 ? `all ${t}` : `${r.sell_percent}% of ${t}`) : `${r.sell_amount ?? "?"} ${t}`;
+  // 0.9.7: a sell that follows a buy (sell_from) and names no amount sells what that buy got: say so, not "? SOL".
+  const sell = r.sell_percent !== undefined ? (r.sell_percent >= 100 ? `all ${t}` : `${r.sell_percent}% of ${t}`) : r.sell_amount !== undefined ? `${r.sell_amount} ${t}` : r.sell_from ? `the ${t} it bought` : `? ${t}`;
   const on = ` on ${r.chain[0]!.toUpperCase()}${r.chain.slice(1)}`;
   switch (r.kind) {
     case "limit_buy": return `Buy ${$(r.amount_usd)} of ${t} when it's at or below ${$(r.trigger_price)}${on}`;
