@@ -74,7 +74,7 @@ export interface SuperbotSettings {
   /** 0.9.1: the most of the wallet's daily trading limit Autopilot's live trades may use (%); the rest stays for your own rules. */
   daily_share_pct: number;
   /** 0.9.6: "active" asks the strategist for more, smaller trades (still on paper first, inside every limit). */
-  pace: "steady" | "active";
+  pace: "steady" | "active" | "max";
 }
 export const DEFAULT_SETTINGS: SuperbotSettings = {
   chains: ["base", "solana"], tokens: [{ chain: "base", token: "ETH" }, { chain: "solana", token: "SOL" }],
@@ -145,7 +145,7 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   if (b.rethink_minutes !== undefined) { const m = Number(b.rethink_minutes); if (!(SUPERBOT.rethink as readonly number[]).includes(m)) throw new Error("Rethink every 15, 30 or 60 minutes."); s.rethink_minutes = m as 15 | 30 | 60; }
   if (b.max_strategies !== undefined) s.max_strategies = num(b.max_strategies, 4, 1, 10);
   if (b.always_on !== undefined) s.always_on = !!b.always_on;
-  if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active") throw new Error("Pace is steady or active."); s.pace = b.pace; }
+  if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max") throw new Error("Pace is steady, active or max."); s.pace = b.pace; }
   if (s.per_trade_usd > s.budget_usd) throw new Error("The per-trade cap can't be more than the budget.");
   if (s.tokens.some((t) => !s.chains.includes(t.chain))) throw new Error("Every token's network must be turned on.");
   return s;
@@ -317,7 +317,7 @@ export class SuperBot {
       const moved = !!snap.changes?.moved && snap.id !== after.stats.last_snapshot;
       const stale = !after.stats.last_step || t - Date.parse(after.stats.last_step) >= SUPERBOT.forceStepMinutes * 60_000;
       // 0.9.7: Active pace tightens idle strategies, and decides at every rethink, not only when the market moved.
-      const active = (after.settings.pace ?? "steady") === "active";
+      const active = (after.settings.pace ?? "steady") !== "steady"; // "active" or "max"
       if (active) await this.tightenIdle(this.w.rules().list());
       if (force || moved || stale || active) await this.step(snap);
     } catch (e) {
@@ -410,7 +410,7 @@ export class SuperBot {
       if (!next) continue;
       const params = this.clampParams(s, st.template, next);
       if (params.note) continue;
-      const why = `No trade in ${SUPERBOT.idleHours} hours on Active pace: tightened ${describeChange(st.params, params.params)} and re-centred on today's price.`;
+      const why = `No trade in ${SUPERBOT.idleHours} hours on ${s.settings.pace === "max" ? "Max" : "Active"} pace: tightened ${describeChange(st.params, params.params)} and re-centred on today's price.`;
       const res = await this.restage(st, st.stage === "live" ? "live" : "paper", why, all, params.params, true);
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
@@ -522,7 +522,7 @@ export class SuperBot {
     let user = strategistUser(snap, context);
     if (JSON.stringify(context).length > SUPERBOT.maxContextChars) { context.recent_decisions = []; context.retired_recently = []; user = strategistUser(snap, context); }
     let got: { input: unknown; model: string }, decision: ReturnType<typeof checkDecision>;
-    try { got = await this.d.decide!.run(SUPERBOT_SYSTEM, user, DECIDE_TOOL); decision = checkDecision(got.input); }
+    try { got = await this.d.decide!.run(SUPERBOT_SYSTEM, user, DECIDE_TOOL); decision = checkDecision(got.input, this.load().settings.pace === "max" ? 2 : 1); }
     catch (e) { return void await fail((e as Error).message); }
     await this.update((x) => { x.stats.steps++; x.stats.last_step = nowIso(this.now()); x.stats.last_snapshot = snap.id; x.stats.last_error = null; });
     const applied: AppliedAction[] = [];

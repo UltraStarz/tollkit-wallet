@@ -19,7 +19,7 @@ check(/network must be turned on/.test(err(() => parseSettings({ chains: ["base"
 check(parseSettings({ budget_usd: 5, per_trade_usd: 5 }).budget_usd === 10 && parseSettings({ daily_loss_pct: 99 }).daily_loss_pct === 50, "numbers are clamped");
 // 0.9.6: pace
 check(s0.pace === "steady" && parseSettings({ pace: "active" }).pace === "active", "pace is steady by default, active when chosen");
-check(/steady or active/.test(err(() => parseSettings({ pace: "turbo" }))), "only steady or active");
+check(/steady, active or max/.test(err(() => parseSettings({ pace: "turbo" }))) && parseSettings({ pace: "max" }).pace === "max", "only steady, active or max");
 { const { SUPERBOT_SYSTEM } = await import("../src/strategist.js");
   check(/limits\.pace/.test(SUPERBOT_SYSTEM) && /0\.25% on each buy and sell placed by grid/.test(SUPERBOT_SYSTEM), "the strategist is told what active pace means and the fees it must clear"); }
 { const { TEMPLATES } = await import("../src/bots.js");
@@ -304,6 +304,10 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   const k0 = s2.calls.length; s2.advance(31 * 60_000); await s2.bot.tick();
   check(s2.calls.length === k0, "Steady still waits for the market to move");
 }
+
+{ const { checkDecision } = await import("../src/strategist.js");
+  const two = { assessment: "Flat.", market_view: "neutral", confidence: 0.5, actions: [1, 2].map((i) => ({ type: "propose", template: "grid", chain: "base", token: "ETH", params: { range_pct: 3 + i }, reason: "Flat market.", sources: ["ETH +0.1%"] })) };
+  check(checkDecision(two).actions.length === 1 && checkDecision(two, 2).actions.length === 2, "Max pace may start two new strategies in one decision; the others one"); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

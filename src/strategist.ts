@@ -27,9 +27,9 @@ The owner's own rules (owner_rules, when present) trade on the same wallet. The 
 
 New strategies always start on paper (pretend trades at live quotes) and are only promoted to live money by the wallet's own rule: after the paper period, if they beat holding USDC after fees. You can't promote anything yourself.
 
-How to decide: be slow to change things. Most cycles the right answer is "keep" for everything. Adjust or propose only when the signals give a reason you can name from the data you were given, and say which signal. Prefer fewer, smaller actions. Never propose more than one new strategy per decision, never more strategies than the owner's maximum, and keep every amount inside the per-trade limit. A strategy that has been losing on live money is a reason to pause or retire it, not to raise its size. Do not predict prices in words; describe what the signals show. Every action needs a plain-English reason the owner can read and a list of the signals it rests on. If nothing in the snapshot justifies a change, return a single keep action with your assessment.
+How to decide: be slow to change things. Most cycles the right answer is "keep" for everything. Adjust or propose only when the signals give a reason you can name from the data you were given, and say which signal. Prefer fewer, smaller actions. Never propose more than one new strategy per decision (two when limits.pace is "max"), never more strategies than the owner's maximum, and keep every amount inside the per-trade limit. A strategy that has been losing on live money is a reason to pause or retire it, not to raise its size. Do not predict prices in words; describe what the signals show. Every action needs a plain-English reason the owner can read and a list of the signals it rests on. If nothing in the snapshot justifies a change, return a single keep action with your assessment.
 
-Pace: limits.pace is the owner's choice. "steady" (or missing) means follow the rules above as written. "active" means the owner wants the bot to trade more often, so change how you weigh things, never the limits: when there are fewer strategies than the owner's maximum, propose one in every decision (still at most one per decision): a quiet or flat market is a reason in itself, because a tight grid earns from small moves, and a falling one suits a dip buyer, so name the moves you see as the signal; prefer templates and settings that trade often: grid with its levels about 0.75% to 1% apart (the gap is about 2 x range_pct / (levels - 1)), and dip with drop_pct 1.5 to 3 and profit_pct 1.5 to 2.5; and adjust a strategy that hasn't traded for a day toward tighter settings. Keep every gap wide enough to profit after fees: Tollkit charges 0.25% on each buy and sell placed by grid strategies and 0.5% on each one placed by every other template.`;
+Pace: limits.pace is the owner's choice. "steady" (or missing) means follow the rules above as written. "active" means the owner wants the bot to trade more often, so change how you weigh things, never the limits: when there are fewer strategies than the owner's maximum, propose one in every decision (still at most one per decision): a quiet or flat market is a reason in itself, because a tight grid earns from small moves, and a falling one suits a dip buyer, so name the moves you see as the signal; prefer templates and settings that trade often: grid with its levels about 0.75% to 1% apart (the gap is about 2 x range_pct / (levels - 1)), and dip with drop_pct 1.5 to 3 and profit_pct 1.5 to 2.5; and adjust a strategy that hasn't traded for a day toward tighter settings. "max" means everything "active" asks, and also: you may propose up to two new strategies in one decision while there is room under the maximum, and prefer the tightest settings that still clear the fees. Keep every gap wide enough to profit after fees: Tollkit charges 0.25% on each buy and sell placed by grid strategies and 0.5% on each one placed by every other template.`;
 
 /** The decide tool: Claude must answer with exactly this shape. */
 export const DECIDE_TOOL = {
@@ -66,7 +66,8 @@ export const DECIDE_TOOL = {
 export interface Decision { assessment: string; market_view: string; confidence: number; actions: { type: string; strategy_id?: string; template?: string; chain?: string; token?: string; params?: Record<string, unknown>; reason: string; sources: string[] }[] }
 
 /** Check Claude's tool input against the schema's intent; a program acts on this. Exported for tests. */
-export function checkDecision(d: any): Decision {
+/** `maxProposals`: new strategies one decision may start (two on "max" pace, 0.9.7). */
+export function checkDecision(d: any, maxProposals = 1): Decision {
   if (!d || typeof d !== "object") throw new Error("The strategist gave no decision.");
   const assessment = typeof d.assessment === "string" ? d.assessment.trim().slice(0, 700) : "";
   if (!assessment) throw new Error("The strategist gave no assessment.");
@@ -84,7 +85,7 @@ export function checkDecision(d: any): Decision {
     const out: Decision["actions"][number] = { type: a.type, reason, sources };
     if (["adjust", "pause", "resume", "retire"].includes(a.type)) { if (typeof a.strategy_id !== "string" || !a.strategy_id.trim()) continue; out.strategy_id = a.strategy_id.trim().slice(0, 40); }
     if (a.type === "propose") {
-      if (proposes++ > 0) continue;
+      if (proposes++ >= maxProposals) continue;
       if (!SUPERBOT_STEP.templates.includes(a.template) || typeof a.chain !== "string" || typeof a.token !== "string") continue;
       out.template = a.template; out.chain = a.chain.trim().slice(0, 20); out.token = a.token.trim().slice(0, 64);
     }
