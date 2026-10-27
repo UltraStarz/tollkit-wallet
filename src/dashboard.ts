@@ -87,11 +87,13 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const tape = new PriceTape(w.dir);
   // 0.9.0: the Autopilot's paper strategies run on a second, paper autopilot; the live one leaves them alone.
   let superbot: SuperBot | null = null;
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().handedOff(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
+  // 0.9.7: Sync my devices (src/devsync.ts). Another device runs the bots: this one shows them but doesn't trade.
+  const devs = w.sync(), runsHere = () => devs.runsHere();
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => !runsHere() || w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().handedOff(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
     // 0.9.1: alerts reach Telegram when it's linked (the screen shows them on the rule card and as a toast).
     onEvent: (e) => { if (e.type !== "alert") return; const t = loadTelegram(w.dir); if (t) void notify(t, `TOLLkit alert: ${e.detail}`).catch(() => {}); } }) : null;
   autopilot?.start();
-  const paperPilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("paper"), prices, { dir: w.dir, skip: (id) => !superbot?.isPaperRule(id), noLease: true, onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
+  const paperPilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("paper"), prices, { dir: w.dir, skip: (id) => !runsHere() || !superbot?.isPaperRule(id), noLease: true, onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
   paperPilot?.start();
   // The Bots screen: each bot's summary plus its next move and latest trades (0.8.5).
   const botsView = () => {
@@ -105,6 +107,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const alwaysSync = async () => {
     // 0.9.7: a trade the device is placing right now finishes (and is recorded) before the server gets the rule's state.
     await autopilot?.idle();
+    if (!runsHere()) return; // 0.9.7: the device that runs the bots keeps Run 24/7 in step
     if (w.always().anyOn()) try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
     if (w.alwaysSol().anyOn()) try { await w.alwaysSol().sync(); } catch (e) { w.alwaysSol().noteError((e as Error).message); }
   };
@@ -119,7 +122,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   if (alwaysTimer) setTimeout(() => { void Promise.all([w.always().config(), w.alwaysSol().config()]).then(() => alwaysSync()).catch(() => {}); }, 3_000);
   // The Autopilot tab's AI chat and scheduled check-ins (runs while the dashboard is open).
   const ai = o.ai === false ? null : o.ai ?? new AiAssistant(w, { dir: w.dir });
-  const aiTimer = ai ? setInterval(() => void ai.tick().catch(() => {}), 60_000) : null;
+  const aiTimer = ai ? setInterval(() => { if (runsHere()) void ai.tick().catch(() => {}); }, 60_000) : null;
   // Bots: Tollkit's public board (other people's shared results), refreshed hourly; this wallet's own share, daily if on.
   const proxy = (w as any).o?.proxy ?? DEFAULT_PROXY, wf: typeof fetch = (w as any).f ?? fetch;
   let board: unknown = null;
@@ -154,9 +157,20 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     knownToken,
     onRulesChanged: () => { void autopilot?.tick(); void paperPilot?.tick(); void alwaysSync(); },
     notify: tg ? (t) => notify(tg, t) : undefined,
+    active: runsHere,
     ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });
   if (o.watch !== false) superbot.start();
+  // 0.9.7: sync each minute while it's on, and soon after anything changes here. Files that arrive from another
+  // device take effect at once (the bots re-read their rules on the next tick).
+  devs.onChanged = () => { void autopilot?.tick(); void paperPilot?.tick(); };
+  let syncSoon: ReturnType<typeof setTimeout> | null = null;
+  const syncNow = () => { if (devs.view().on) void devs.sync().catch(() => {}); };
+  const nudgeSync = () => { if (syncSoon) clearTimeout(syncSoon); syncSoon = setTimeout(syncNow, 5_000); (syncSoon as any).unref?.(); };
+  const syncTimer = o.watch === false ? null : setInterval(syncNow, 60_000);
+  if (syncTimer) setTimeout(syncNow, 4_000);
+  const prevHook = w.hooks.rulesChanged;
+  w.hooks.rulesChanged = () => { prevHook?.(); nudgeSync(); };
   const token = randomBytes(24).toString("hex");
   const host = o.host ?? "127.0.0.1";
   let port = o.port ?? 7420;
@@ -248,7 +262,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           prices: prices ? prices.snapshot() : null,
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
           ideas: w.ideas().list().slice(-60),
-          always: w.always().view(), always_sol: w.alwaysSol().view(),
+          always: w.always().view(), always_sol: w.alwaysSol().view(), devices: devs.view(),
           bots: botsView(), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
@@ -453,6 +467,17 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         try { return send(res, 200, { ok: true, ...(await w.unwrapSol()) }); }
         catch (e) { return send(res, 400, { error: (e as Error).message.slice(0, 300) }); }
       }
+      // 0.9.7: Sync my devices: on, off, run the bots here, sync now.
+      if (p === "/api/sync") {
+        try {
+          const a = String(b.action ?? "");
+          if (a === "on") return send(res, 200, { devices: await devs.turnOn() });
+          if (a === "off") return send(res, 200, { devices: devs.turnOff() });
+          if (a === "run_here") { const v = await devs.runHere(); void autopilot?.tick(); void alwaysSync(); return send(res, 200, { devices: v }); }
+          if (a === "now") { await devs.sync(); return send(res, 200, { devices: devs.view() }); }
+          return send(res, 400, { error: "Unknown action." });
+        } catch (e) { return send(res, 400, { error: (e as Error).message.slice(0, 300), devices: devs.view() }); }
+      }
       if (p === "/api/always") {
         try {
           if (b.action === "off") {
@@ -645,7 +670,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
     url, port,
-    close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); paperPilot?.stop(); superbot?.stop(); tape.flush(); server.close(() => r()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (syncTimer) clearInterval(syncTimer); if (syncSoon) clearTimeout(syncSoon); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); paperPilot?.stop(); superbot?.stop(); tape.flush(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }
 

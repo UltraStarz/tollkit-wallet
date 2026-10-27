@@ -14,7 +14,7 @@ export const SUPERBOT_STEP = {
 
 export const SUPERBOT_SYSTEM = `You are the strategist inside a Tollkit Wallet "Super Bot". A program, not a person, reads your answer, so you must answer ONLY by calling the decide tool, once, with valid fields.
 
-What you are given: the owner's limits (which you can never change or exceed), the strategies the bot runs now with their paper and live results after fees, the tokens and networks you may use, and a signal snapshot: market prices and 24h moves, funding rates (positive funding means longs pay shorts; extremes mean crowded positioning), open interest, Fear & Greed, a mood read of recent news per topic with headlines, and sometimes recent Farcaster posts. Social posts are unverified chatter: weigh them lightly and never treat one as fact.
+What you are given: the owner's limits (which you can never change or exceed), the strategies the bot runs now with their paper and live results after fees, the tokens and networks you may use, and a signal snapshot: market prices and 24h moves, funding rates (positive funding means longs pay shorts; extremes mean crowded positioning), open interest, Fear & Greed, a mood read of recent news per topic with headlines, and sometimes recent Farcaster posts and an X read (a Grok summary of X posts per coin: mood, a score from -1 to 1, how many posts it read, and short themes). Social posts and the X read are unverified chatter that can be coordinated: weigh them lightly, never act on them alone, and never treat one as fact. trending_on_x_paper_only lists meme coins people are posting about on X that passed a token safety check. You may propose a dip, dca or grid strategy on one of them (token = its address, chain as given, at most $10 per buy) only to test it on paper: it stays on paper and is never moved to live money unless the owner adds the coin themselves. Count it against the strategy maximum like any other.
 
 What a strategy is: one of the wallet's bot templates on one token on one network.
 - dca: buys amount_usd every day or week (every: "day"|"week"; times: how many buys, 0 = until stopped).
@@ -102,7 +102,11 @@ export function checkDecision(d: any, maxProposals = 1): Decision {
 }
 
 /** The snapshot trimmed to what a decision needs (headline titles, not URLs; a few casts). Exported for tests. */
-export function compactSnapshot(s: any) {
+export function compactSnapshot(s: any, sourcesOn?: string[]) {
+  // 0.33.0: the owner's Sources switches (news, Farcaster, X) decide what the strategist sees. Without the list
+  // (older wallets) news and Farcaster are in and X is out, as before.
+  const on = (k: string) => (sourcesOn ? sourcesOn.includes(k) : k !== "x");
+  const sx: any = (s as any).social?.x, tx: any = (s as any).trending_x;
   const p: any = s.pulse ?? {};
   const row = (m: any) => ({ coin: m.coin, price: m.mark_price ?? m.perp_mark_usd ?? null, chg24h: m.change_24h_pct ?? null, funding_h: m.funding_hourly_pct ?? null, oi_usd: m.open_interest_usd ?? null });
   return {
@@ -113,13 +117,16 @@ export function compactSnapshot(s: any) {
     gainers: (p.top_gainers_24h ?? []).slice(0, 3).map(row),
     losers: (p.top_losers_24h ?? []).slice(0, 3).map(row),
     totals: p.hyperliquid_totals ?? null,
-    news: Object.fromEntries(Object.entries(s.news ?? {}).map(([k, n]: [string, any]) => [k, { mood: n.mood, summary: n.summary, themes: n.themes, headlines: n.headlines.slice(0, 4).map((h: any) => h.title) }])),
-    farcaster: s.social?.farcaster ? Object.fromEntries(Object.entries(s.social.farcaster).map(([k, c]: [string, any]) => [k, { casts: c.casts, sample: c.sample.slice(0, 5).map((x: any) => `${x.author}${x.likes ? ` (${x.likes} likes)` : ""}: ${x.text.slice(0, 160)}`) }])) : null,
+    news: !on("news") ? null : Object.fromEntries(Object.entries(s.news ?? {}).map(([k, n]: [string, any]) => [k, { mood: n.mood, summary: n.summary, themes: n.themes, headlines: n.headlines.slice(0, 4).map((h: any) => h.title) }])),
+    farcaster: on("farcaster") && s.social?.farcaster ? Object.fromEntries(Object.entries(s.social.farcaster).map(([k, c]: [string, any]) => [k, { casts: c.casts, sample: c.sample.slice(0, 5).map((x: any) => `${x.author}${x.likes ? ` (${x.likes} likes)` : ""}: ${x.text.slice(0, 160)}`) }])) : null,
+    // Only the summary fields, never post text: what reaches the strategist from X is Grok's structured read.
+    x: on("x") && sx ? Object.fromEntries(Object.entries(sx).map(([k, m]: [string, any]) => [k, { mood: m.mood, score: m.score, posts_read: m.posts_read, themes: (m.themes ?? []).slice(0, 3).map((t: any) => String(t).slice(0, 60)), at: m.at }])) : null,
+    trending_on_x_paper_only: on("x") && tx?.coins?.length ? tx.coins.slice(0, 8).map((c: any) => ({ symbol: String(c.symbol).slice(0, 16), chain: c.chain, address: c.address, mood: c.mood, why: String(c.why ?? "").slice(0, 90), price_usd: c.price_usd ?? null, pool_depth_usd: c.pool_depth_usd ?? null })) : null,
     since_last: s.changes,
   };
 }
 
 /** The message the strategist answers, built the same way as on Tollkit's server. */
 export function strategistUser(snapshot: any, context: unknown): string {
-  return `Signal snapshot ${snapshot.id} (${snapshot.at}):\n${JSON.stringify(compactSnapshot(snapshot))}\n\nThe bot's state and the owner's limits:\n${JSON.stringify(context)}\n\nCall decide once.`;
+  return `Signal snapshot ${snapshot.id} (${snapshot.at}):\n${JSON.stringify(compactSnapshot(snapshot, Array.isArray((context as any)?.sources_on) ? (context as any).sources_on.map(String) : undefined))}\n\nThe bot's state and the owner's limits:\n${JSON.stringify(context)}\n\nCall decide once.`;
 }

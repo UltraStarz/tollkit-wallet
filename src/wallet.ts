@@ -31,6 +31,7 @@ import { RuleStore } from "./rules.js";
 import { IdeaStore } from "./ideas.js";
 import { AlwaysOn } from "./alwayson.js";
 import { SolAlwaysOn } from "./alwayson-sol.js";
+import { DeviceSync } from "./devsync.js";
 import { PaperBook } from "./paper.js";
 import { liveBalance, type Executor } from "./autopilot.js";
 import { Staking, type StakingOptions } from "./stake.js";
@@ -65,6 +66,8 @@ export interface WalletOptions {
   approve?: ((text: string) => Promise<Decision>) | null;
   /** Override for tests: Tollkit's separately-sent Solana fee (recipient, SOL price, balance and sender). */
   solFee?: { recipient?: string; solUsd?: number; balance?: () => Promise<bigint>; send?: (lamports: bigint, to: string) => Promise<string> };
+  /** 0.9.7: what this device is called in Sync my devices ("iPhone", "Chrome", "Mac"). */
+  deviceName?: string;
 }
 
 export interface SwapResult {
@@ -496,6 +499,12 @@ export class TollkitWallet {
     });
   }
   private ao?: AlwaysOn;
+
+  /** 0.9.7: Sync my devices: the same bots and history on every device with this wallet (src/devsync.ts). */
+  sync(): DeviceSync {
+    return this.ds ??= new DeviceSync({ dir: this.o.dir, address: this.addresses.evm, key: () => this.keys.evm as any, proxy: this.o.proxy ?? DEFAULT_PROXY, fetch: this.f, deviceName: this.o.deviceName ?? "Computer" });
+  }
+  private ds?: DeviceSync;
 
   /** 0.9.2: the same on Solana, under a token allowance this wallet signs (src/alwayson-sol.ts). */
   alwaysSol(): SolAlwaysOn {

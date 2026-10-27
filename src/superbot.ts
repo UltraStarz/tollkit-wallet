@@ -87,6 +87,9 @@ export interface Strategy {
   id: string; name: string; template: string; chain: Chain; token: string; params: Record<string, unknown>;
   stage: Stage; bot: string | null; created_at: string; stage_since: string;
   history: { ts: string; note: string }[];
+  /** 0.33.0: a meme coin from "Trending on X": tested on paper only; it never moves to live money unless the owner
+   * adds the coin on Home. */
+  paper_only?: boolean; symbol?: string;
   /** Results of the stage before this one, kept when a strategy moves between paper and live. */
   past?: { stage: Stage; result_pct: number | null; trades: number }[];
   /** 0.9.7: when Active pace last tightened it for sitting idle. */
@@ -110,6 +113,8 @@ export interface SuperBotDeps {
   /** True for tokens the owner's wallet already knows (core tokens, or added on Home after the scam check). */
   knownToken: (chain: Chain, token: string) => Promise<boolean>;
   onRulesChanged?: () => void;
+  /** 0.9.7: false while another device runs the bots (Sync my devices): no cycles here. */
+  active?: () => boolean;
   notify?: (text: string) => Promise<void>;
   /**
    * 0.9.5, the phone app: decide with the owner's own AI key instead of paying Tollkit's server per decision.
@@ -230,7 +235,8 @@ export class SuperBot {
       totals: { live: live.length, paper: strategies.filter((x) => x.stage === "paper").length, retired: strategies.filter((x) => x.stage === "retired").length,
         live_result_usd: r2(live.reduce((a, x) => a + (x.result_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
       next_cycle: s.enabled && s.stats.last_cycle ? nowIso(Date.parse(s.stats.last_cycle) + s.settings.rethink_minutes * 60_000) : null,
-      x_note: "X (Twitter) needs a paid key and isn't available yet.",
+      // 0.33.0: X through Grok, from Tollkit's shared snapshot: the mood per coin and the trending memes (paper only).
+      x: this.xView(),
       ...(this.d.decide ? { brain: { own: true, label: this.d.decide.label() } } : {}),
     };
   }
@@ -284,7 +290,7 @@ export class SuperBot {
   /** Once a minute: run a cycle when one is due. */
   async tick() {
     const s = this.load();
-    if (!s.enabled) return;
+    if (!s.enabled || this.d.active?.() === false) return;
     const due = !s.stats.last_cycle || this.now() - Date.parse(s.stats.last_cycle) >= s.settings.rethink_minutes * 60_000 - 5_000;
     if (due) await this.cycle();
   }
@@ -327,7 +333,7 @@ export class SuperBot {
 
   private async snapshot(): Promise<any | null> {
     const f = this.d.fetch ?? fetch;
-    try { const r = await f(`${this.d.proxy}${SUPERBOT.signalsPath}`, { signal: AbortSignal.timeout(15_000) }); if (!r.ok) return null; return await r.json(); } catch { return null; }
+    try { const r = await f(`${this.d.proxy}${SUPERBOT.signalsPath}`, { signal: AbortSignal.timeout(15_000) }); if (!r.ok) return null; const j = await r.json(); this.lastSnap = j; return j; } catch { return null; }
   }
 
   /** Daily and weekly loss stops, measured on live strategies' result against marks set at the start of each day and week. */
@@ -363,6 +369,15 @@ export class SuperBot {
       if (st.stage === "paper") {
         const periodOver = days >= s.settings.paper_days || trades >= s.settings.paper_trades;
         if (!periodOver) continue;
+        // 0.33.0: a trending meme the owner hasn't added stays on paper; after twice the paper period it's retired.
+        if (st.paper_only && !(await this.d.knownToken(st.chain, st.token).catch(() => false))) {
+          if (days >= 2 * s.settings.paper_days) {
+            const why = `Paper test of ${st.symbol ? `$${st.symbol}` : "this meme"} from Trending on X finished (${pct === null ? "no trades" : `${pct}%`}). It stays off live money unless you add the coin on Home; retired.`;
+            await this.retire(st, why, all);
+            await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: ["paper only (Trending on X)"], applied: true, outcome: "retired" }]);
+          }
+          continue;
+        }
         if (pct !== null && pct > 0) {
           const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC; moved to live money.`;
           const ok = await this.restage(st, "live", why, all);
@@ -491,7 +506,12 @@ export class SuperBot {
     };
   }
 
+  /** 0.33.0: the snapshot the current decision was made on (its "Trending on X" list is what a meme proposal must match). */
+  private lastSnap: any = null;
+  /** What the Autopilot screen shows from X: the mood per coin and the trending memes, from the latest snapshot. */
+  xView() { const sn = this.lastSnap; return sn ? { at: sn.at ?? null, moods: sn.social?.x ?? null, trending: sn.trending_x?.coins ?? [] } : null; }
   private async step(snap: any) {
+    this.lastSnap = snap ?? this.lastSnap;
     const s = this.load(), all = this.w.rules().list();
     const prices: Record<string, number | null> = {};
     for (const x of s.settings.tokens) prices[`${x.chain}:${x.token}`] = (await this.d.price(x.chain, x.token).catch(() => undefined)) ?? null;
@@ -562,19 +582,31 @@ export class SuperBot {
         if (running.length >= s.settings.max_strategies) return { applied: false, outcome: `already at the ${s.settings.max_strategies}-strategy maximum` };
         const chain = String(a.chain ?? "") as Chain;
         if (!s.settings.chains.includes(chain)) return { applied: false, outcome: `${a.chain} is not an allowed network` };
-        const tok = s.settings.tokens.find((x) => x.chain === chain && x.token.toLowerCase() === String(a.token ?? "").toLowerCase());
+        let tok: { chain: Chain; token: string } | undefined = s.settings.tokens.find((x) => x.chain === chain && x.token.toLowerCase() === String(a.token ?? "").toLowerCase());
+        // 0.33.0: a meme coin from "Trending on X" (only with the X source on): paper only, small, and only these templates.
+        let meme: any = null;
+        if (!tok && s.settings.sources.x) {
+          meme = (this.lastSnap?.trending_x?.coins ?? []).find((c: any) => c?.safe !== false && c?.chain === chain && String(c?.address ?? "").toLowerCase() === String(a.token ?? "").toLowerCase()) ?? null;
+          if (meme && !["dip", "dca", "grid"].includes(a.template)) return { applied: false, outcome: "a trending meme can only be tested with dip, dca or grid" };
+          if (meme) tok = { chain, token: meme.address };
+        }
         if (!tok) return { applied: false, outcome: `${a.token} is not on the allowed list for ${chainName(chain)}` };
         if (a.template === "alert" || a.template === "twap" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
         if (running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
+        if (meme && typeof params.params.amount_usd === "number") params.params.amount_usd = Math.min(10, params.params.amount_usd as number);
         const price = await this.d.price(chain, tok.token).catch(() => undefined);
         let built;
         try { built = buildBot(a.template, tok.token, chain, params.params, price); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
         const id = randomUUID().slice(0, 8), t = nowIso(this.now());
         const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: String(a.reason).slice(0, 200), paper: true })), "agent", true, "superbot");
         await this.update((x) => {
-          x.strategies.push({ id, name: built.name, template: a.template, chain, token: tok.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t, history: [{ ts: t, note: `Proposed by the AI: ${a.reason}` }] });
+          // The bot's name ends with the coin (a long address is shortened): show the meme's $SYMBOL there instead.
+          const sym = `$${String(meme?.symbol ?? "").slice(0, 16)}`;
+          const name = !meme ? built.name : built.name.includes(tok!.token) ? built.name.split(tok!.token).join(sym) : built.name.replace(/ · [^·]*$/, ` · ${sym}`);
+          x.strategies.push({ id, name, template: a.template, chain, token: tok!.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t,
+            history: [{ ts: t, note: meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }], ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}) });
           x.paper_rules.push(...made.map((r) => r.id));
         });
         return { applied: true, outcome: `started on paper (${made.length} rule${made.length === 1 ? "" : "s"})` };

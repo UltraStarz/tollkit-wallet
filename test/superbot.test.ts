@@ -309,5 +309,32 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   const two = { assessment: "Flat.", market_view: "neutral", confidence: 0.5, actions: [1, 2].map((i) => ({ type: "propose", template: "grid", chain: "base", token: "ETH", params: { range_pct: 3 + i }, reason: "Flat market.", sources: ["ETH +0.1%"] })) };
   check(checkDecision(two).actions.length === 1 && checkDecision(two, 2).actions.length === 2, "Max pace may start two new strategies in one decision; the others one"); }
 
+// ─── 0.33.0: Trending on X: paper only, small, only with the X source on ─────
+{
+  const MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+  const meme = (o: any = {}) => ({ type: "propose", template: "dca", chain: "solana", token: MINT, params: { amount_usd: 50, every: "day", times: 3 }, reason: "Trending on X.", sources: ["trending on X"], ...o });
+  const snap = (id: string) => ({ id, at: "2026-10-20T08:00:00Z", changes: { moved: true, notes: [] }, social: { x: { sol: { mood: "bullish", score: 0.4, posts_read: 30, themes: ["etf"], posts: [], at: "t" } } },
+    trending_x: { at: "t", coins: [{ symbol: "BONK", chain: "solana", address: MINT, mood: "bullish", why: "w", safe: true }, { symbol: "RUG", chain: "solana", address: "So1aNaRuG1111111111111111111111111111111111", mood: "bullish", why: "w", safe: false }] } });
+  let n = 0;
+  const W = world({ signals: () => snap(`s${n}`), decision: () => (n++ === 0 ? { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [meme()] } : { assessment: "b", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }) });
+  await W.bot.enable({ chains: ["base", "solana"], tokens: [{ chain: "solana", token: "SOL" }] });
+  await new Promise((r) => setTimeout(r, 30));
+  check(W.bot.view().strategies.length === 0 && /not on the allowed list/.test(W.bot.view().decisions[0].actions[0].outcome), "X source off: a trending meme is refused like any unlisted coin");
+
+  let k = 0;
+  const X = world({ signals: () => snap(`x${k}`), decision: () => (k++ === 0 ? { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [meme(), meme({ template: "smart_dca" }), meme({ token: "So1aNaRuG1111111111111111111111111111111111", template: "dip" })] } : { assessment: "b", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }) });
+  await X.bot.enable({ chains: ["base", "solana"], tokens: [{ chain: "solana", token: "SOL" }], sources: { news: true, x: true } });
+  await new Promise((r) => setTimeout(r, 30));
+  const v = X.bot.view(), st = v.strategies[0] as any, acts = v.decisions[0].actions;
+  check(v.strategies.length === 1 && st.paper_only === true && st.stage === "paper" && st.symbol === "BONK" && /\$BONK/.test(st.name), "X source on: a safe trending meme starts on paper, marked paper only, named $BONK", st);
+  check(st.params.amount_usd === 10, "and small: $10 at most per buy", st.params);
+  check(acts[1].applied === false && /dip, dca or grid/.test(acts[1].outcome) && acts[2].applied === false, "only dip, dca or grid; a coin that failed the token check is refused", acts);
+  check(v.x?.trending?.length === 2 && v.x?.moods?.sol?.mood === "bullish", "the Autopilot screen gets the X moods and trending list", v.x);
+  X.advance(15 * 86_400_000);
+  await X.bot.cycle(true);
+  const after = X.bot.view().strategies[0] as any;
+  check(after.stage === "retired" && /stays off live money unless you add the coin on Home/.test(after.history.at(-1).note), "after twice the paper period it's retired, never moved to live money", after.history.at(-1));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
