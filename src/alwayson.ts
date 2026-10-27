@@ -12,7 +12,10 @@
  * its floor (15% under the stop). Floors are the worst price the owner accepts, not the price the rule waits for.
  *
  * Supported now: the EVM networks the server lists (Base first), ETH against USDC, for recurring buys, limit buys,
- * take-profits, limit sells and stop-losses. Other rules keep running on the device while the app is open.
+ * take-profits, limit sells and stop-losses, and (0.9.7, when the server lists them) the bots of src/botlogic.ts.
+ * A bot's trades vary in size, so its slips are pieces: its own fixed amounts (a grid level, a Smart DCA step) plus
+ * doubling sizes from $1 up; the server sends the pieces that make up a trade in one transaction. Other rules keep
+ * running on the device while the app is open.
  */
 import { nothingToSell, sellableFor } from "./ownership.js";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -25,6 +28,7 @@ import { KNOWN } from "./tokens.js";
 import { walletHome } from "./paths.js";
 import { ALLOWANCE_HOLDER, C, DF, EXEC_SELECTOR, NONCE_ABI, bumpNonceCalldata, pinExec, signDelegation, slipJson, type Caveat } from "./delegation.js";
 import type { Rule, RuleStore } from "./rules.js";
+import { botBuys, botSells, gridLevels, isBotKind, largestBuy } from "./botlogic.js";
 
 /** How far ahead permissions are signed; the app re-signs when it's opened. */
 export const AHEAD_DAYS = 7;
@@ -36,8 +40,12 @@ export const FLOOR = { dcaBand: 0.12, limit: 0.03, takeProfit: 0.03, stopLoss: 0
 const RESERVE: Partial<Record<EvmChain, bigint>> = { base: 50_000_000_000_000n, ethereum: 2_000_000_000_000_000n, arbitrum: 100_000_000_000_000n };
 const DAY = 86_400;
 const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss"];
+/** Uses a bot's piece may have in its week: its own amounts, and the doubling sizes. */
+const BOT_USES = { exact: 100, ladder: 40 } as const;
+/** A grid's floors come from its own range (3% past it); other bots' from today's price (12% band, as DCA). */
+const GRID_EDGE = 0.03;
 
-export interface AlwaysConfig { enabled: boolean; chains: EvmChain[]; delegate: string | null; reason?: string }
+export interface AlwaysConfig { enabled: boolean; chains: EvmChain[]; delegate: string | null; reason?: string; kinds?: string[] }
 interface Signed { at: number; until: number; price: number; key: string; sell?: string; failed?: boolean }
 interface Local {
   rules: Record<string, true>; budget_usd: number; dirty?: boolean;
@@ -59,12 +67,16 @@ export interface AlwaysOpts {
 }
 
 export interface ServerFill { id?: string; rule_id: string; ts: string; ok: boolean; tx?: string; usd?: number; units?: number; side: "buy" | "sell"; reason?: string }
-interface ServerState { fills: ServerFill[]; rules: Record<string, { runs: number; next_run?: string; done?: boolean }> }
+interface ServerState { fills: ServerFill[]; rules: Record<string, { runs: number; next_run?: string; done?: boolean; bot?: any }> }
 
 /** Which rules the server can run, and why not otherwise (shown on the rule card). */
-export function serverRunnable(r: Rule, chains: EvmChain[]): string | null {
+export function serverRunnable(r: Rule, chains: EvmChain[], kinds?: string[]): string | null {
   if (!isEvmChain(r.chain) || !chains.includes(r.chain)) return `Runs on ${chainName(r.chain)} only while the app is open.`;
   if (r.token.toUpperCase() !== "ETH") return "Only ETH rules can run while the app is closed for now.";
+  if (isBotKind(r.kind)) {
+    if (!(kinds ?? []).includes(r.kind)) return `Tollkit's server doesn't run this bot 24/7 on ${chainName(r.chain)} yet; it runs while the app is open.`;
+    return r.kind === "twap" && r.side === "sell" ? null : r.amount_usd ? null : "Needs a dollar amount.";
+  }
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
   if (r.after || r.sell_from) return "Rules that wait for another rule run only while the app is open.";
   if (["limit_buy", "dca"].includes(r.kind) && !r.amount_usd) return "Needs a dollar amount.";
@@ -194,12 +206,22 @@ export class AlwaysOn {
     catch (e) { this.update((l) => { l.last_error = (e as Error).message.slice(0, 300); }); return { fills: [], running: l0.running ?? [], problems: l0.problems ?? {} }; }
     const fresh = this.update((l) => { const seen = new Set(l.seen_fills ?? []); const n = state.fills.filter((f) => f.id && !seen.has(f.id)); l.seen_fills = [...seen, ...n.map((f) => f.id!)].slice(-1000); return n; });
     if (fresh.length) await applyFills(store, fresh);
+    // 0.9.7: a bot the server ran carries its own state (what it holds, its next step); the newer copy wins.
+    const sb = Object.entries(state.rules ?? {}).filter(([, v]) => v && v.bot && typeof v.bot === "object");
+    if (sb.length) await store.mutate((rs) => {
+      for (const [id, v] of sb) {
+        const r = rs.find((x) => x.id === id);
+        if (!r || !isBotKind(r.kind) || (v.bot.v ?? 0) < (r.state.bot?.v ?? 0)) continue;
+        const { grid, ...rest } = v.bot; r.state.bot = rest; if (r.kind === "grid" && grid) r.state.grid = grid;
+        if (v.done && (r.status === "active" || r.status === "paused")) r.status = "done";
+      }
+    });
     // 2. Each network: set up once, re-sign when needed, send the rules.
     const l = this.load();
     const want = store.list().filter((r) => l.rules[r.id] && (r.status === "active" || r.status === "paused"));
     const byChain = new Map<EvmChain, Rule[]>();
     for (const r of want) {
-      const why = serverRunnable(r, cfg.chains);
+      const why = serverRunnable(r, cfg.chains, cfg.kinds);
       if (why) { problems[r.id] = why; continue; }
       if (r.status !== "active" || state.rules[r.id]?.done) continue;
       byChain.set(r.chain as EvmChain, [...(byChain.get(r.chain as EvmChain) ?? []), r]);
@@ -245,14 +267,23 @@ export class AlwaysOn {
     const eth = await this.o.price("ETH");
     if (!eth) throw new Error("No ETH price right now; trying again shortly.");
     const ethBal = await this.o.balance(chain, NATIVE_EVM);
-    const sigKey = (r: Rule) => JSON.stringify([r.kind, r.amount_usd, r.sell_amount, r.sell_percent, r.trigger_price, r.every, r.weekday, r.times, r.max_price, r.group, r.expires_at, r.state.runs]);
+    const sigKey = (r: Rule) => isBotKind(r.kind)
+      ? JSON.stringify([r.kind, r.amount_usd, r.lower_price, r.upper_price, r.levels, r.step_pct, r.safety, r.scale, r.profit_pct, r.target_pct, r.band_pct, r.side, r.sell_percent, r.pieces, r.hours, r.expires_at, r.state.bot?.sell_total])
+      : JSON.stringify([r.kind, r.amount_usd, r.sell_amount, r.sell_percent, r.trigger_price, r.every, r.weekday, r.times, r.max_price, r.group, r.expires_at, r.state.runs]);
     const signed = Object.fromEntries(Object.entries(l.signed ?? {}).filter(([k]) => k.startsWith(chain + ":")));
     const stale = rules.filter((r) => {
       const s = signed[`${chain}:${r.id}`];
-      return !s || s.key !== sigKey(r) || (!s.failed && s.until - now < REFRESH_DAYS * DAY) || (s.failed && s.until < now) || (r.kind === "dca" && Math.abs(eth - s.price) / s.price > 0.05) || (s.sell !== undefined && BigInt(s.sell) > ethBal);
+      return !s || s.key !== sigKey(r) || (!s.failed && s.until - now < REFRESH_DAYS * DAY) || (s.failed && s.until < now) || ((r.kind === "dca" || (isBotKind(r.kind) && r.kind !== "grid")) && Math.abs(eth - s.price) / s.price > 0.05) || (s.sell !== undefined && BigInt(s.sell) > ethBal);
     });
     const gone = Object.keys(signed).filter((k) => !rules.some((r) => `${chain}:${r.id}` === k));
     const problems: Record<string, string> = {};
+    // A split sell fixes its total here, once, from the ETH this wallet may sell (the server then sells exactly that).
+    const splitTotal: Record<string, string> = {};
+    for (const r of rules) if (r.kind === "twap" && r.side === "sell" && !r.state.bot?.sell_total) {
+      const free = ethBal > (RESERVE[chain] ?? 0n) ? ethBal - (RESERVE[chain] ?? 0n) : 0n;
+      const a = (sellableFor(r, free, this.o.rules().list(), { symbol: "ETH", address: NATIVE_EVM, decimals: 18 }) * BigInt(Math.round((r.sell_percent ?? 100) * 100))) / 10_000n;
+      if (a > 0n) splitTotal[r.id] = a.toString(); else problems[r.id] = "No ETH to sell on this network.";
+    }
     const out: Record<string, Signed> = { ...signed };
     let next = nonce;
     if (l.dirty || stale.length || gone.length || !upgraded) {
@@ -262,7 +293,8 @@ export class AlwaysOn {
       for (const k of gone) delete out[k];
       for (const r of rules) {
         try {
-          const built = await this.slipsFor(chain, r, delegate, next, now, eth, ethBal);
+          if (problems[r.id]) continue;
+          const built = await this.slipsFor(chain, r, delegate, next, now, eth, ethBal, splitTotal[r.id] ?? r.state.bot?.sell_total);
           body.slips.push(...built.slips.map((s) => ({ ...s, delegation: slipJson(s.delegation) })));
           out[`${chain}:${r.id}`] = { at: now, until: now + AHEAD_DAYS * DAY, price: eth, key: sigKey(r), ...(built.sell !== undefined ? { sell: built.sell.toString() } : {}) };
         } catch (e) {
@@ -272,12 +304,12 @@ export class AlwaysOn {
       }
     }
     // The spending approval for 0x, checked every sync (swaps made on the device use the same allowance).
-    const buys = rules.filter((r) => (r.kind === "dca" || r.kind === "limit_buy") && !problems[r.id]);
+    const buys = rules.filter((r) => (r.kind === "dca" || r.kind === "limit_buy" || (isBotKind(r.kind) && botBuys(r as any))) && !problems[r.id]);
     if (buys.length) {
       const cap = parseUnits(String(l.budget_usd || 0), usdc.decimals);
       if (cap === 0n) for (const r of buys) problems[r.id] ??= "Set how much Autopilot can use first.";
       else {
-        const perTrade = buys.reduce((m, r) => { const a = parseUnits(r.amount_usd!.toFixed(usdc.decimals), usdc.decimals); return a > m ? a : m; }, 0n);
+        const perTrade = buys.reduce((m, r) => { const a = parseUnits((isBotKind(r.kind) ? largestBuy(r as any) : r.amount_usd!).toFixed(usdc.decimals), usdc.decimals); return a > m ? a : m; }, 0n);
         const allowance: bigint = await new Contract(usdc.address, ["function allowance(address,address) view returns (uint256)"], provider).allowance!(me, ALLOWANCE_HOLDER);
         if (allowance < perTrade || (body.replace && allowance < cap)) {
           const data = encodeFunctionData({ abi: [{ type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] }], functionName: "approve", args: [ALLOWANCE_HOLDER, cap] });
@@ -285,7 +317,11 @@ export class AlwaysOn {
         }
       }
     }
-    body.rules = rules.filter((r) => !problems[r.id]).map((r) => ({
+    body.rules = rules.filter((r) => !problems[r.id]).map((r) => isBotKind(r.kind) ? ({
+      id: r.id, kind: r.kind, token: "ETH", amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
+      profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs,
+      bot: { ...(r.state.bot ?? {}), ...(r.kind === "grid" ? { grid: r.state.grid } : {}), ...(splitTotal[r.id] ? { sell_total: splitTotal[r.id], v: (r.state.bot?.v ?? 0) + 1 } : {}) },
+    }) : ({
       id: r.id, kind: r.kind, amount_usd: r.amount_usd, trigger_price: r.trigger_price, every: r.every,
       times: r.times, max_price: r.max_price, group: r.group, expires_at: r.expires_at, runs: r.state.runs, next_run: r.state.next_run,
     }));
@@ -294,7 +330,7 @@ export class AlwaysOn {
   }
 
   /** The slips for one rule: what it may sell, at what floor, in which windows. */
-  private async slipsFor(chain: EvmChain, r: Rule, delegate: string, nonce: bigint, now: number, eth: number, ethBal: bigint) {
+  private async slipsFor(chain: EvmChain, r: Rule, delegate: string, nonce: bigint, now: number, eth: number, ethBal: bigint, splitTotal?: string) {
     const key = this.o.key(), me = getAddress(this.o.address), chainId = EVM_CHAIN_ID[chain];
     const usdc = KNOWN[chain].USDC!;
     const end = Math.min(now + AHEAD_DAYS * DAY, r.expires_at ? Math.floor(Date.parse(r.expires_at) / 1000) : Infinity);
@@ -308,6 +344,49 @@ export class AlwaysOn {
       out.push({ rule_id: r.id, side, not_before: from, not_after: to, limit, sell_atomic: sellAtomic.toString(), floor_atomic: floor.toString(), delegation: await signDelegation(key, chainId, delegate, caveats) });
     };
     const eth18 = (usd: number, price: number) => parseUnits((usd / price).toFixed(18), 18);
+    if (isBotKind(r.kind)) {
+      // 0.9.7: a bot's pieces. Buys: its own amounts, plus $1, $2, $4… up to its largest buy. Sells: its own amounts
+      // (a grid level's coins, a split sell's parts), plus doubling sizes of ETH from about $1 up to twice what it
+      // can ever hold at today's price. Floors: the worst price each piece accepts (not the price the bot waits for).
+      const p = r as any, grid = r.kind === "grid", L = grid ? gridLevels(p) : [];
+      const ceiling = grid ? r.upper_price! * (1 + GRID_EDGE) : eth * (1 + FLOOR.dcaBand);
+      const bottom = grid ? r.lower_price! * (1 - GRID_EDGE) : eth * (1 - FLOOR.dcaBand);
+      const usdc6 = (usd: number) => parseUnits(usd.toFixed(usdc.decimals), usdc.decimals);
+      const sellFloor = (wei: bigint) => parseUnits((Number(formatUnits(wei, 18)) * bottom).toFixed(usdc.decimals), usdc.decimals);
+      const seen = new Set<string>();
+      const piece = async (side: "buy" | "sell", size: bigint, uses: number) => {
+        const k = `${side}:${size}`;
+        if (size <= 0n || seen.has(k)) return;
+        seen.add(k);
+        await sign(side, now - 60, end, uses, size, side === "buy" ? (size * 10n ** 12n * 10n ** 6n) / usdc6(ceiling) : sellFloor(size));
+      };
+      if (botBuys(p)) {
+        const a = r.amount_usd ?? 0, own: number[] = [];
+        if (r.kind === "smart_dca") for (let n = 0; n <= (r.safety ?? 0); n++) own.push(+(a * Math.pow(r.scale ?? 1, n)).toFixed(2));
+        else if (r.kind === "twap") own.push(+(a / Math.max(1, r.pieces ?? 1)).toFixed(2));
+        else if (r.kind === "rebalance") own.push(+((a * (r.target_pct ?? 50)) / 100).toFixed(2));
+        else own.push(a);
+        for (const x of own) await piece("buy", usdc6(x), BOT_USES.exact);
+        for (let d = 1; d <= largestBuy(p); d *= 2) await piece("buy", usdc6(d), BOT_USES.ladder);
+      }
+      if (botSells(p)) {
+        let capUsd = r.amount_usd ?? 0;
+        if (grid) {
+          for (let i = 0; i < L.length - 1; i++) await piece("sell", parseUnits(((r.amount_usd! / L[i]!) * 0.99).toFixed(18), 18), BOT_USES.exact);
+          capUsd = r.amount_usd! * (L.length - 1);
+        } else if (r.kind === "smart_dca") { capUsd = 0; for (let n = 0; n <= (r.safety ?? 0); n++) capUsd += (r.amount_usd ?? 0) * Math.pow(r.scale ?? 1, n); }
+        else if (r.kind === "twap" && r.side === "sell") {
+          if (!splitTotal) throw new Error("No ETH to sell on this network.");
+          const total = BigInt(splitTotal), n = BigInt(Math.max(1, r.pieces ?? 1)), part = total / n;
+          await piece("sell", part, BOT_USES.exact); await piece("sell", total - part * (n - 1n), BOT_USES.exact);
+          capUsd = Number(formatUnits(total, 18)) * eth;
+        }
+        const unit = (10n ** 18n / BigInt(Math.max(1, Math.round(eth)))) / 10n ** 12n * 10n ** 12n; // about $1 of ETH
+        for (let size = unit; size > 0n && Number(formatUnits(size, 18)) * eth <= Math.max(2, capUsd * 2); size *= 2n) await piece("sell", size, BOT_USES.ladder);
+      }
+      if (!out.length) throw new Error("Nothing for this bot to sign.");
+      return { slips: out };
+    }
     if (r.kind === "dca" || r.kind === "limit_buy") {
       const amt = parseUnits(r.amount_usd!.toFixed(usdc.decimals), usdc.decimals);
       if (r.kind === "limit_buy") {

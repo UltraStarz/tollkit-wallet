@@ -37,6 +37,10 @@ check(serverRunnable(rule({ kind: "dca", amount_usd: 10, every: "day" }), ["base
 check(/Solana/.test(serverRunnable(rule({ kind: "dca", amount_usd: 10, every: "day", chain: "solana", token: "SOL" }), ["base"]) ?? ""), "Solana rules stay on the device");
 check(/ETH rules/.test(serverRunnable(rule({ kind: "dca", amount_usd: 10, every: "day", token: "WETH" }), ["base"]) ?? ""), "only ETH for now");
 check(/kind of rule/.test(serverRunnable(rule({ kind: "trailing_stop", trail_pct: 5, sell_percent: 50 }), ["base"]) ?? ""), "trailing stops stay on the device");
+const K = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss", "grid", "smart_dca", "rebalance", "infinity_grid", "twap"];
+check(serverRunnable(rule({ kind: "grid", amount_usd: 25, lower_price: 2000, upper_price: 2600, levels: 16 }), ["base"], K) === null, "a Base ETH grid can run while closed when the server runs bots");
+check(/doesn't run this bot/.test(serverRunnable(rule({ kind: "grid", amount_usd: 25, lower_price: 2000, upper_price: 2600, levels: 16 }), ["base"]) ?? ""), "an older server that doesn't list bots: the bot stays on the device");
+check(serverRunnable(rule({ kind: "twap", side: "sell", sell_percent: 50, pieces: 4, hours: 4 }), ["base"], K) === null && /dollar amount/.test(serverRunnable(rule({ kind: "smart_dca" }), ["base"], K) ?? ""), "a split sell needs no dollar amount; a buying bot does");
 check(/another rule/.test(serverRunnable(rule({ kind: "take_profit", trigger_price: 5000, sell_from: "x" }), ["base"]) ?? ""), "bot steps that wait for another rule stay on the device");
 
 // Recording the server's fills: once, with the schedule moved on and partners cancelled.

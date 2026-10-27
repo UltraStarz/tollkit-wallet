@@ -415,7 +415,7 @@ export class SuperBot {
     const evm = rules.filter((r) => r.chain !== "solana"), sol = rules.filter((r) => r.chain === "solana");
     if (evm.length) {
       let cfg; try { cfg = await this.w.always().config(); } catch { cfg = null; }
-      if (cfg?.enabled) for (const r of evm) if (!serverRunnable(r, cfg.chains as EvmChain[])) this.w.always().set(r.id, true, s.settings.budget_usd);
+      if (cfg?.enabled) for (const r of evm) if (!serverRunnable(r, cfg.chains as EvmChain[], cfg.kinds)) this.w.always().set(r.id, true, s.settings.budget_usd);
     }
     // Solana: buys under a USDC allowance of the Autopilot budget; sells set aside only SOL Autopilot's strategies bought.
     const so = (this.w as any).alwaysSol?.();
