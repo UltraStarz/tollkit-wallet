@@ -144,11 +144,19 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   W.advance(5 * 86_400_000);
   await W.bot.cycle(true);
   let v = W.bot.view();
-  check(v.strategies[0].stage === "live" && v.strategies[0].past?.[0]?.stage === "paper" && (v.strategies[0].past?.[0]?.result_pct ?? 0) > 0, "a winning paper strategy goes live after the period", v.strategies[0]);
+  // 0.9.8: passing never moves money on its own; it waits for the owner's Go live.
+  check(v.strategies[0].stage === "paper" && !!(v.strategies[0] as any).ready && W.notes.some((n) => /passed its paper trial/.test(n) && /Go live/.test(n)), "a winning paper strategy waits for Go live (and tells the owner)", v.strategies[0]);
+  await W.bot.cycle(true);
+  check(W.bot.view().strategies[0].stage === "paper" && W.notes.filter((n) => /passed its paper trial/.test(n)).length === 1, "it keeps waiting, and the owner is told once");
+  await W.bot.goLive(v.strategies[0].id);
+  v = W.bot.view();
+  check(v.strategies[0].stage === "live" && v.strategies[0].past?.[0]?.stage === "paper" && (v.strategies[0].past?.[0]?.result_pct ?? 0) > 0, "Go live moves it to real money", v.strategies[0]);
   const liveRule = W.store.list().find((r) => r.bot === v.strategies[0].bot && r.status === "active")!;
   check(!!liveRule && !W.bot.isPaperRule(liveRule.id), "its new rule is a live rule");
   check(W.always.on.size === 0, "Always On stays off unless the owner turned it on");
-  check(v.decisions.some((d) => d.by === "rule" && /beat holding USDC/.test(d.assessment)), "promotion is logged as the bot's own rule");
+  check(v.decisions.some((d) => d.by === "rule" && /You tapped Go live/.test(d.assessment)), "going live is logged with the owner's tap");
+  let gl = ""; try { await W.bot.goLive(v.strategies[0].id); } catch (e) { gl = (e as Error).message; }
+  check(/isn't on paper/.test(gl), "Go live twice does nothing", gl);
   // Losing on live money: back to paper after 3 trades.
   await W.store.mutate((rules) => { const r = rules.find((x) => x.id === liveRule.id)!; r.state.ok_count = 3; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = 2000; });
   W.advance(2 * 86_400_000);
@@ -168,8 +176,9 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   W2.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
   W2.advance(8 * 86_400_000);
   await W2.bot.cycle(true);
+  let e2 = ""; try { await W2.bot.goLive(W2.bot.view().strategies[0].id); } catch (e) { e2 = (e as Error).message; }
   const v2 = W2.bot.view();
-  check(v2.strategies[0].stage === "paper" && v2.decisions.some((d) => d.by === "rule" && /budget/.test(d.actions[0].outcome)), "$200 committed does not fit a $100 budget: stays on paper", v2.decisions.find((d) => d.by === "rule")?.actions[0]);
+  check(v2.strategies[0].stage === "paper" && /budget/.test(e2), "$200 committed does not fit a $100 budget: Go live is refused, it stays on paper", e2);
 }
 
 // ─── 0.9.2: a live Solana SOL strategy goes to Solana 24/7, under the Autopilot budget ───
@@ -183,6 +192,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   W.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
   W.advance(8 * 86_400_000);
   await W.bot.cycle(true);
+  await W.bot.goLive(st.id);
   const v = W.bot.view();
   check(v.strategies[0].stage === "live" && W.alwaysSol.on.size === 1 && [...W.alwaysSol.on.values()][0] === 100 && W.always.on.size === 0, "live: handed to Solana 24/7 (not Base), with the $100 Autopilot budget as its allowance", [v.strategies[0].stage, [...W.alwaysSol.on]]);
   await W.bot.setSettings({ always_on: false });
@@ -202,7 +212,8 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   await W.store.mutate((rules) => { const r = rules.find((x) => x.bot === st.bot)!; r.state.ok_count = 25; r.state.spent_usd = 20; r.state.bought_units = 0.01; r.state.last_price = 2500; });
   W.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
   W.advance(8 * 86_400_000);
-  await W.bot.cycle(true); // promoted, marks set
+  await W.bot.cycle(true); // passed, marks set
+  await W.bot.goLive(st.id);
   let v = W.bot.view();
   check(v.strategies[0].stage === "live" && W.always.on.size === 1, "live, and handed to Always On when the owner asked", [v.strategies[0].stage, [...W.always.on]]);
   const live = W.store.list().find((r) => r.bot === v.strategies[0].bot && r.status === "active")!;
@@ -330,10 +341,19 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   check(st.params.amount_usd === 10, "and small: $10 at most per buy", st.params);
   check(acts[1].applied === false && /dip, dca or grid/.test(acts[1].outcome) && acts[2].applied === false, "only dip, dca or grid; a coin that failed the token check is refused", acts);
   check(v.x?.trending?.length === 2 && v.x?.moods?.sol?.mood === "bullish", "the Autopilot screen gets the X moods and trending list", v.x);
-  X.advance(15 * 86_400_000);
+  // A meme that wins on paper: Go live waits until the coin is added on Home.
+  const memeSt = X.bot.view().strategies[0] as any;
+  await X.store.mutate((rules) => { const r = rules.find((x) => x.bot === memeSt.bot)!; r.state.ok_count = 25; r.state.spent_usd = 10; r.state.bought_units = 70; r.state.last_price = 0.2; });
+  X.advance(8 * 86_400_000);
+  await X.bot.cycle(true);
+  const rdy = X.bot.view().strategies[0] as any;
+  let me = ""; try { await X.bot.goLive(rdy.id); } catch (e) { me = (e as Error).message; }
+  check(rdy.stage === "paper" && !!rdy.ready && /Add \$BONK on Home first/.test(me), "a winning meme is ready, but Go live needs the coin added on Home first", me);
+  await X.store.mutate((rules) => { const r = rules.find((x) => x.bot === X.bot.view().strategies[0].bot)!; r.state.last_price = 0.1; });
+  X.advance(7 * 86_400_000);
   await X.bot.cycle(true);
   const after = X.bot.view().strategies[0] as any;
-  check(after.stage === "retired" && /stays off live money unless you add the coin on Home/.test(after.history.at(-1).note), "after twice the paper period it's retired, never moved to live money", after.history.at(-1));
+  check(after.stage === "retired" && /Trending on X finished/.test(after.history.at(-1).note), "with no winning trades, after twice the paper period it's retired, never moved to live money", after.history.at(-1));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

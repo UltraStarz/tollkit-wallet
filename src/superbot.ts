@@ -94,6 +94,9 @@ export interface Strategy {
   past?: { stage: Stage; result_pct: number | null; trades: number }[];
   /** 0.9.7: when Active pace last tightened it for sitting idle. */
   tightened_at?: string;
+  /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
+   * money on its own. */
+  ready?: { at: string; result_pct: number; trades: number } | null;
 }
 export interface AppliedAction { type: string; strategy_id?: string; template?: string; chain?: string; token?: string; params?: Record<string, unknown>; reason: string; sources: string[]; applied: boolean; outcome: string }
 export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" }
@@ -369,21 +372,23 @@ export class SuperBot {
       if (st.stage === "paper") {
         const periodOver = days >= s.settings.paper_days || trades >= s.settings.paper_trades;
         if (!periodOver) continue;
-        // 0.33.0: a trending meme the owner hasn't added stays on paper; after twice the paper period it's retired.
-        if (st.paper_only && !(await this.d.knownToken(st.chain, st.token).catch(() => false))) {
-          if (days >= 2 * s.settings.paper_days) {
-            const why = `Paper test of ${st.symbol ? `$${st.symbol}` : "this meme"} from Trending on X finished (${pct === null ? "no trades" : `${pct}%`}). It stays off live money unless you add the coin on Home; retired.`;
-            await this.retire(st, why, all);
-            await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: ["paper only (Trending on X)"], applied: true, outcome: "retired" }]);
+        // 0.9.8: a strategy that beat holding USDC waits for the owner's Go live; it keeps practising on paper meanwhile.
+        // A trending meme also needs the coin added on Home before it can go live (checked again on Go live).
+        if (pct !== null && pct > 0) {
+          if (!st.ready) {
+            const sym = st.symbol ? `$${st.symbol}` : st.token.length > 12 ? `${st.token.slice(0, 4)}…` : st.token;
+            const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC. Ready to go live with real money when you tap Go live.`;
+            await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = { at: nowIso(t), result_pct: pct, trades }; y.history.push({ ts: nowIso(t), note: why }); } });
+            await this.log("rule", why, [{ type: "keep", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`], applied: true, outcome: "ready to go live" }]);
+            await this.d.notify?.(`Autopilot: ${st.paper_only ? st.name.replace(/ · [^·]*$/, ` · ${sym}`) : st.name} passed its paper trial (+${pct}%). Open Autopilot and tap Go live to use real money.`).catch(() => {});
           }
           continue;
         }
-        if (pct !== null && pct > 0) {
-          const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC; moved to live money.`;
-          const ok = await this.restage(st, "live", why, all);
-          await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`], applied: ok.applied, outcome: ok.outcome }]);
-        } else if (days >= 2 * s.settings.paper_days || (trades >= s.settings.paper_trades && pct !== null && pct <= 0)) {
-          const why = `Paper result ${pct === null ? "no trades" : `${pct}%`} after ${r2(days)} days did not beat holding USDC; retired.`;
+        if (st.ready) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
+        if (days >= 2 * s.settings.paper_days || (trades >= s.settings.paper_trades && pct !== null && pct <= 0)) {
+          const why = st.paper_only
+            ? `Paper test of ${st.symbol ? `$${st.symbol}` : "this meme"} from Trending on X finished (${pct === null ? "no trades" : `${pct}%`}) without beating holding USDC; retired.`
+            : `Paper result ${pct === null ? "no trades" : `${pct}%`} after ${r2(days)} days did not beat holding USDC; retired.`;
           await this.retire(st, why, all);
           await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: [`paper ${pct ?? "none"}%`], applied: true, outcome: "retired" }]);
         }
@@ -430,6 +435,21 @@ export class SuperBot {
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
     }
+  }
+
+  /** 0.9.8: the owner's Go live on a strategy that passed its paper trial. Only the owner reaches this (dashboard). */
+  async goLive(id: unknown) {
+    const s = this.load(), st = s.strategies.find((x) => x.id === id);
+    if (!st || st.stage !== "paper") throw new Error("That strategy isn't on paper any more.");
+    if (!st.ready) throw new Error("It hasn't passed its paper trial yet.");
+    if (!(await this.d.knownToken(st.chain, st.token).catch(() => false))) throw new Error(`Add ${st.symbol ? `$${st.symbol}` : st.token} on Home first. Add runs TOLLkit's token check, then tap Go live again.`);
+    const all = this.w.rules().list();
+    const why = `You tapped Go live after a paper result of +${st.ready.result_pct}% over ${st.ready.trades} trades; now trading with real money.`;
+    const ok = await this.restage(st, "live", why, all);
+    if (!ok.applied) throw new Error(`It stayed on paper: ${ok.outcome.replace(/^stayed on paper: /, "")}.`);
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
+    await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`paper ${st.ready.result_pct}%`, "owner tapped Go live"], applied: true, outcome: ok.outcome }]);
+    return this.view();
   }
 
   private async restage(st: Strategy, stage: "paper" | "live", why: string, all: Rule[], params = st.params, keepClock = false): Promise<{ applied: boolean; outcome: string }> {
