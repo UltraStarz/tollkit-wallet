@@ -21,7 +21,7 @@ import { sendAndConfirm } from "./solconfirm.js";
 import { applyFills, type ServerFill } from "./alwayson.js";
 import { autopilotUnits, isAutopilotRule } from "./ownership.js";
 import type { Rule, RuleStore } from "./rules.js";
-import { botBuys, isBotKind } from "./botlogic.js";
+import { botBuys, botNewer, isBotKind } from "./botlogic.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -214,7 +214,8 @@ export class SolAlwaysOn {
     if (sb.length) await store.mutate((rs) => {
       for (const [id, v] of sb as [string, any][]) {
         const r = rs.find((x) => x.id === id);
-        if (!r || !isBot(r) || (v.bot.v ?? 0) < (r.state.bot?.v ?? 0)) continue;
+        // 0.9.8: a split order's parts done never go backwards (see botNewer); on a tie the server's copy wins.
+        if (!r || !isBot(r) || !botNewer(r.kind, r.state.bot, v.bot, true)) continue;
         const { grid, ...rest } = v.bot; r.state.bot = rest; if (r.kind === "grid" && grid) r.state.grid = grid;
         if (v.done && (r.status === "active" || r.status === "paused")) r.status = "done";
       }
@@ -294,6 +295,9 @@ export class SolAlwaysOn {
       const p = r.state.last_price ?? 0;
       if (botBuys(r as any) && p > 0 && (!px || p < px)) px = p;
     }
+    // 0.9.8: the total is written into the rule now, once, so the device and the server split the same amount.
+    const fixT = Object.entries(splitTotal);
+    if (fixT.length) await this.o.rules().mutate((rs) => { for (const [id, t] of fixT) { const x = rs.find((y) => y.id === id); if (x && !x.state.bot?.sell_total) x.state.bot = { ...(x.state.bot ?? {}), sell_total: t }; } });
     if (px > 0) botRoom = BigInt(Math.ceil((Number(usdcAllowed) / 1e6 / (px * 0.5)) * 1e9));
     const target = wrapTarget(sells.filter((r) => !problems[r.id]), amounts) + botWrap, allow = target + botRoom;
     if (target > 0n || botRoom > 0n) {

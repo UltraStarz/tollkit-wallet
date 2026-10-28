@@ -193,6 +193,23 @@ export function applyFill(p: BotParams, s0: BotState, a: Exclude<BotAction, null
   return { state: s, done: !!s.done, profit };
 }
 
+/**
+ * 0.9.8: when the device and Tollkit's server each hold a copy of a bot's state, should `other` replace `mine`?
+ * A split order compares parts done first, so a part one side already sold is never forgotten (on 2026-10-27 a
+ * tie in `v` let the server keep its own copy and sell 3 parts of a 2-part split). Otherwise the higher `v` wins;
+ * `onTie` says what a tie does (the device takes the server's copy, the server keeps its own).
+ */
+export function botNewer(kind: string, mine: BotState | undefined, other: BotState | undefined, onTie: boolean): boolean {
+  if (!other) return false;
+  if (!mine) return true;
+  if (kind === "twap") {
+    const a = mine.pieces ?? 0, b = other.pieces ?? 0;
+    if (a !== b) return b > a;
+  }
+  const va = mine.v ?? 0, vb = other.v ?? 0;
+  return vb === va ? onTie : vb > va;
+}
+
 /** Checks the fields a bot kind needs. Returns a reason, or null. */
 export function botProblem(p: BotParams): string | null {
   const a = p.amount_usd;

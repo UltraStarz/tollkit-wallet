@@ -190,5 +190,24 @@ const solOf = (req: SwapRequest) => Number(req.sell_amount) / 1e9;
   check(m.state.swaps.length === 1, "once it's switched on, the app doesn't trade it again (the server does)", m.state.swaps.length);
 }
 
+// ─── 0.9.8: the 2026-10-27 split order: 2 parts planned, 3 sold ─────────────────────────────────────────────
+{
+  const { botNewer, decide: dec, applyFill: fill } = await import("../src/botlogic.js");
+  const P: any = { kind: "twap", side: "sell", sell_percent: 20, pieces: 2, hours: 1 };
+  const E = (x: number) => BigInt(Math.round(x * 1e18));
+  // The app sold part 1 of 20% of 0.008252 ETH.
+  const a1 = dec(P, {}, 2300, 0, { decimals: 18, avail: E(0.008252) }) as any;
+  const app = fill(P, {}, a1, { usd: 1.89, got: BigInt(a1.atomic!) }, 2300, 0, 18).state;
+  // The server's copy, built from the balance after that sale with nothing done (what happened that night).
+  const srv: any = { sell_total: (E(0.007432) * 2000n / 10000n).toString(), v: 1 };
+  check(app.v === 1 && app.pieces === 1, "the app's copy: version 1, one part done", app);
+  check(botNewer("twap", srv, app, false), "the server takes the app's copy: one part done beats none, even on a version tie");
+  check(!botNewer("twap", app, srv, true), "and the device never goes back to a copy with fewer parts done");
+  let s: any = app, sold = BigInt(a1.atomic!), n = 1;
+  for (let t = 31 * 60_000; t < 5 * 3600_000; t += 5 * 60_000) { const a = dec(P, s, 2300, t, { decimals: 18 }) as any; if (!a) continue; s = fill(P, s, a, { usd: 1.9, got: BigInt(a.atomic!) }, 2300, t, 18).state; sold += BigInt(a.atomic!); n++; }
+  check(n === 2 && sold === BigInt(app.sell_total!), "from the merged copy, exactly 2 parts and 20% are sold in all", { n, sold: sold.toString(), total: app.sell_total });
+  check(botNewer("grid", { v: 3 } as any, { v: 4 } as any, false) && !botNewer("grid", { v: 4 } as any, { v: 4 } as any, false) && botNewer("grid", { v: 4 } as any, { v: 4 } as any, true), "other bots: the higher version wins; a tie follows onTie");
+}
+
 console.log(`\nbotlogic: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

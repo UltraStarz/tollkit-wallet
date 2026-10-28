@@ -28,7 +28,7 @@ import { KNOWN } from "./tokens.js";
 import { walletHome } from "./paths.js";
 import { ALLOWANCE_HOLDER, C, DF, EXEC_SELECTOR, NONCE_ABI, bumpNonceCalldata, pinExec, signDelegation, slipJson, type Caveat } from "./delegation.js";
 import type { Rule, RuleStore } from "./rules.js";
-import { botBuys, botSells, gridLevels, isBotKind, largestBuy } from "./botlogic.js";
+import { botBuys, botNewer, botSells, gridLevels, isBotKind, largestBuy } from "./botlogic.js";
 
 /** How far ahead permissions are signed; the app re-signs when it's opened. */
 export const AHEAD_DAYS = 7;
@@ -216,7 +216,8 @@ export class AlwaysOn {
     if (sb.length) await store.mutate((rs) => {
       for (const [id, v] of sb) {
         const r = rs.find((x) => x.id === id);
-        if (!r || !isBotKind(r.kind) || (v.bot.v ?? 0) < (r.state.bot?.v ?? 0)) continue;
+        // 0.9.8: a split order's parts done never go backwards (see botNewer); on a tie the server's copy wins.
+        if (!r || !isBotKind(r.kind) || !botNewer(r.kind, r.state.bot, v.bot, true)) continue;
         const { grid, ...rest } = v.bot; r.state.bot = rest; if (r.kind === "grid" && grid) r.state.grid = grid;
         if (v.done && (r.status === "active" || r.status === "paused")) r.status = "done";
       }
@@ -289,6 +290,9 @@ export class AlwaysOn {
       const a = (sellableFor(r, free, this.o.rules().list(), { symbol: "ETH", address: NATIVE_EVM, decimals: 18 }) * BigInt(Math.round((r.sell_percent ?? 100) * 100))) / 10_000n;
       if (a > 0n) splitTotal[r.id] = a.toString(); else problems[r.id] = "No ETH to sell on this network.";
     }
+    // 0.9.8: the total is written into the rule now, once, so the device and the server split the same amount.
+    const fixT = Object.entries(splitTotal);
+    if (fixT.length) await this.o.rules().mutate((rs) => { for (const [id, t] of fixT) { const x = rs.find((y) => y.id === id); if (x && !x.state.bot?.sell_total) x.state.bot = { ...(x.state.bot ?? {}), sell_total: t }; } });
     const out: Record<string, Signed> = { ...signed };
     let next = nonce;
     if (l.dirty || stale.length || gone.length || !upgraded) {
