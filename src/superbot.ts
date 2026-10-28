@@ -653,7 +653,7 @@ export class SuperBot {
         const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: String(a.reason).slice(0, 200), paper: true })), "agent", true, "superbot");
         await this.update((x) => {
           // The bot's name ends with the coin (a long address is shortened): show the meme's $SYMBOL there instead.
-          const sym = `$${String(meme?.symbol ?? "").slice(0, 16)}`;
+          const sym = String(meme?.symbol ?? "").slice(0, 16).toUpperCase();
           const name = !meme ? built.name : built.name.includes(tok!.token) ? built.name.split(tok!.token).join(sym) : built.name.replace(/ · [^·]*$/, ` · ${sym}`);
           x.strategies.push({ id, name, template: a.template, chain, token: tok!.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t,
             history: [{ ts: t, note: meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }], ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}) });

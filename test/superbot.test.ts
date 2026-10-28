@@ -359,7 +359,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   await X.bot.enable({ chains: ["base", "solana"], tokens: [{ chain: "solana", token: "SOL" }], sources: { news: true, x: true } });
   await new Promise((r) => setTimeout(r, 30));
   const v = X.bot.view(), st = v.strategies[0] as any, acts = v.decisions[0].actions;
-  check(v.strategies.length === 1 && st.paper_only === true && st.stage === "paper" && st.symbol === "BONK" && /\$BONK/.test(st.name), "X source on: a safe trending meme starts on paper, marked paper only, named $BONK", st);
+  check(v.strategies.length === 1 && st.paper_only === true && st.stage === "paper" && st.symbol === "BONK" && / · BONK$/.test(st.name), "X source on: a safe trending meme starts on paper, marked paper only, named by its ticker (BONK)", st);
   check(st.params.amount_usd === 10, "and small: $10 at most per buy", st.params);
   check(acts[1].applied === false && /dip, dca or grid/.test(acts[1].outcome) && acts[2].applied === false, "only dip, dca or grid; a coin that failed the token check is refused", acts);
   check(v.x?.trending?.length === 2 && v.x?.moods?.sol?.mood === "bullish", "the Autopilot screen gets the X moods and trending list", v.x);
