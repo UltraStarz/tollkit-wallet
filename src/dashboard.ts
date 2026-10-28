@@ -460,6 +460,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           if (action === "resume") return send(res, 200, { superbot: await superbot.resume() });
           // 0.9.8: the owner's Go live on a strategy that passed its paper trial.
           if (action === "go_live") return send(res, 200, { superbot: await superbot.goLive(b.id) });
+          if (action === "dismiss") return send(res, 200, { superbot: await superbot.dismiss(b.id) });
+          if (action === "x_hide") return send(res, 200, { superbot: await superbot.xHide(b.address, true) });
+          if (action === "x_unhide") return send(res, 200, { superbot: await superbot.xHide(null, false) });
           if (action === "cycle") { await superbot.cycle(true); return send(res, 200, { superbot: superbot.view() }); }
           return send(res, 400, { error: "Unknown action." });
         } catch (e) { return send(res, 400, { error: (e as Error).message }); }

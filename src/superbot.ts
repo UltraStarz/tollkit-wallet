@@ -40,6 +40,8 @@ import { SUPERBOT_SYSTEM, DECIDE_TOOL, checkDecision, strategistUser } from "./s
 
 export const SUPERBOT = {
   file: "superbot.json",
+  /** 0.9.8: a strategy that passed waits this many days for Go live, then it's dismissed. */
+  readyDays: 3,
   stepPath: "/superbot/step",
   signalsPath: "/signals",
   snapRetryMs: 2 * 60_000,
@@ -106,6 +108,8 @@ interface State {
   paper_rules: string[];
   halted: { reason: string; at: string; until: string | null } | null;
   marks: { day: string; day_start: number; week: string; week_start: number } | null;
+  /** 0.9.8: Trending on X coins the owner hid (lowercased addresses): not shown, never paper-tested. */
+  x_hidden?: string[];
   stats: { cycles: number; steps: number; step_usd: number; last_cycle: string | null; last_step: string | null; last_snapshot: string | null; last_error: string | null; last_report: string | null; snap_fails?: number };
 }
 
@@ -381,6 +385,11 @@ export class SuperBot {
             await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = { at: nowIso(t), result_pct: pct, trades }; y.history.push({ ts: nowIso(t), note: why }); } });
             await this.log("rule", why, [{ type: "keep", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`], applied: true, outcome: "ready to go live" }]);
             await this.d.notify?.(`Autopilot: ${st.paper_only ? st.name.replace(/ · [^·]*$/, ` · ${sym}`) : st.name} passed its paper trial (+${pct}%). Open Autopilot and tap Go live to use real money.`).catch(() => {});
+          } else if (t - Date.parse(st.ready.at) >= SUPERBOT.readyDays * 86_400_000) {
+            // 0.9.8: nobody tapped Go live in time: it's retired so it stops holding a strategy slot.
+            const why = `Passed its paper trial (+${st.ready.result_pct}%) but Go live wasn't tapped within ${SUPERBOT.readyDays} days; dismissed. It never used real money.`;
+            await this.retire(st, why, all);
+            await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: [`waited ${SUPERBOT.readyDays} days`], applied: true, outcome: "dismissed" }]);
           }
           continue;
         }
@@ -435,6 +444,25 @@ export class SuperBot {
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
     }
+  }
+
+  /** 0.9.8: the owner's Dismiss on a strategy waiting for Go live: retired, never on real money, slot freed. */
+  async dismiss(id: unknown) {
+    const s = this.load(), st = s.strategies.find((x) => x.id === id);
+    if (!st || st.stage !== "paper") throw new Error("That strategy isn't waiting any more.");
+    const why = `You dismissed it${st.ready ? ` after it passed its paper trial (+${st.ready.result_pct}%)` : ""}. It never used real money.`;
+    await this.retire(st, why, this.w.rules().list());
+    await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: ["owner tapped Dismiss"], applied: true, outcome: "dismissed" }]);
+    return this.view();
+  }
+  /** 0.9.8: hide a Trending on X coin (or show them all again). Hidden coins are never paper-tested. */
+  async xHide(address: unknown, hide = true) {
+    await this.update((x) => {
+      const cur = new Set((x.x_hidden ?? []).map((a) => a.toLowerCase()));
+      if (!hide) cur.clear(); else if (typeof address === "string" && /^[\w]{20,64}$/.test(address)) cur.add(address.toLowerCase());
+      x.x_hidden = [...cur].slice(-200);
+    });
+    return this.view();
   }
 
   /** 0.9.8: the owner's Go live on a strategy that passed its paper trial. Only the owner reaches this (dashboard). */
@@ -529,7 +557,8 @@ export class SuperBot {
   /** 0.33.0: the snapshot the current decision was made on (its "Trending on X" list is what a meme proposal must match). */
   private lastSnap: any = null;
   /** What the Autopilot screen shows from X: the mood per coin and the trending memes, from the latest snapshot. */
-  xView() { const sn = this.lastSnap; return sn ? { at: sn.at ?? null, moods: sn.social?.x ?? null, trending: sn.trending_x?.coins ?? [] } : null; }
+  xView() { const sn = this.lastSnap; if (!sn) return null; const hid = new Set((this.load().x_hidden ?? []).map((a) => a.toLowerCase()));
+    return { at: sn.at ?? null, moods: sn.social?.x ?? null, trending: (sn.trending_x?.coins ?? []).filter((c: any) => !hid.has(String(c?.address ?? "").toLowerCase())), hidden: hid.size }; }
   private async step(snap: any) {
     this.lastSnap = snap ?? this.lastSnap;
     const s = this.load(), all = this.w.rules().list();
@@ -607,6 +636,7 @@ export class SuperBot {
         let meme: any = null;
         if (!tok && s.settings.sources.x) {
           meme = (this.lastSnap?.trending_x?.coins ?? []).find((c: any) => c?.safe !== false && c?.chain === chain && String(c?.address ?? "").toLowerCase() === String(a.token ?? "").toLowerCase()) ?? null;
+          if (meme && (s.x_hidden ?? []).includes(String(meme.address).toLowerCase())) return { applied: false, outcome: "the owner hid this coin" };
           if (meme && !["dip", "dca", "grid"].includes(a.template)) return { applied: false, outcome: "a trending meme can only be tested with dip, dca or grid" };
           if (meme) tok = { chain, token: meme.address };
         }

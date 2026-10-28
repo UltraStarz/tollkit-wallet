@@ -148,6 +148,28 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   check(v.strategies[0].stage === "paper" && !!(v.strategies[0] as any).ready && W.notes.some((n) => /passed its paper trial/.test(n) && /Go live/.test(n)), "a winning paper strategy waits for Go live (and tells the owner)", v.strategies[0]);
   await W.bot.cycle(true);
   check(W.bot.view().strategies[0].stage === "paper" && W.notes.filter((n) => /passed its paper trial/.test(n)).length === 1, "it keeps waiting, and the owner is told once");
+  // Dismiss and auto-dismiss (on a twin world, so this one can still go live).
+  {
+    const D = world({ decision: () => ({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dca", chain: "base", token: "ETH", params: { amount_usd: 10, every: "day", times: 3 }, reason: "Steady.", sources: ["s"] }] }) });
+    await D.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 7, paper_trades: 20, max_token_pct: 50 });
+    await new Promise((r) => setTimeout(r, 30));
+    const ds = D.bot.view().strategies[0];
+    await D.store.mutate((rules) => { const r = rules.find((x) => x.bot === ds.bot)!; r.state.ok_count = 5; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = 2700; });
+    D.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
+    D.advance(8 * 86_400_000); await D.bot.cycle(true);
+    check(!!(D.bot.view().strategies[0] as any).ready, "twin: passed and waiting");
+    D.advance(2 * 86_400_000); await D.bot.cycle(true);
+    check(D.bot.view().strategies[0].stage === "paper", "2 days later it still waits");
+    D.advance(1.1 * 86_400_000); await D.bot.cycle(true);
+    const dv = D.bot.view();
+    check(dv.strategies[0].stage === "retired" && /wasn't tapped within 3 days/.test(dv.strategies[0].history.at(-1)!.note) && D.store.list().every((r) => r.status !== "active"), "after 3 days without Go live it's dismissed, its rules stopped", dv.strategies[0].history.at(-1));
+    // A second one, dismissed by hand.
+    D.setDecision(() => ({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 10, drop_pct: 4, profit_pct: 4 }, reason: "Dip.", sources: ["s"] }] }));
+    await D.bot.cycle(true);
+    const d2 = D.bot.view().strategies.find((x) => x.stage === "paper")!;
+    await D.bot.dismiss(d2.id);
+    check(D.bot.view().strategies.find((x) => x.id === d2.id)!.stage === "retired" && D.bot.view().decisions.some((d) => /You dismissed it/.test(d.assessment)), "Dismiss retires it and logs the owner's tap");
+  }
   await W.bot.goLive(v.strategies[0].id);
   v = W.bot.view();
   check(v.strategies[0].stage === "live" && v.strategies[0].past?.[0]?.stage === "paper" && (v.strategies[0].past?.[0]?.result_pct ?? 0) > 0, "Go live moves it to real money", v.strategies[0]);
@@ -341,6 +363,13 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   check(st.params.amount_usd === 10, "and small: $10 at most per buy", st.params);
   check(acts[1].applied === false && /dip, dca or grid/.test(acts[1].outcome) && acts[2].applied === false, "only dip, dca or grid; a coin that failed the token check is refused", acts);
   check(v.x?.trending?.length === 2 && v.x?.moods?.sol?.mood === "bullish", "the Autopilot screen gets the X moods and trending list", v.x);
+  await X.bot.xHide("So1aNaRuG1111111111111111111111111111111111");
+  check(X.bot.view().x?.trending?.length === 1 && X.bot.view().x?.hidden === 1, "a hidden coin leaves the list", X.bot.view().x);
+  await X.bot.xHide(MINT);
+  const hv = await (async () => { k = 0; X.setDecision(() => ({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [meme({ template: "dip", params: { amount_usd: 5, drop_pct: 4, profit_pct: 4 } })] })); await X.bot.cycle(true); return X.bot.view().decisions[0].actions[0]; })();
+  check(hv.applied === false && /hid this coin/.test(hv.outcome), "Autopilot won't test a coin the owner hid", hv);
+  await X.bot.xHide(null, false);
+  check(X.bot.view().x?.trending?.length === 2 && X.bot.view().x?.hidden === 0, "Show them again brings them back");
   // A meme that wins on paper: Go live waits until the coin is added on Home.
   const memeSt = X.bot.view().strategies[0] as any;
   await X.store.mutate((rules) => { const r = rules.find((x) => x.bot === memeSt.bot)!; r.state.ok_count = 25; r.state.spent_usd = 10; r.state.bought_units = 70; r.state.last_price = 0.2; });
