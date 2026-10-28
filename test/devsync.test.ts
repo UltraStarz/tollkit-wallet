@@ -114,5 +114,30 @@ const C = dev("Other", other);
 await C.s.turnOn();
 check(get(C.dir, "rules.json") === null && C.s.runsHere(), "another wallet never sees this wallet's copy");
 
+// 11. 0.9.8 Remove: the phone takes the old Mac off the list; the Mac stops at its next check-in, keeps its files,
+//     and can join again as a new device. The bots move to the phone if the Mac ran them.
+{
+  const k3 = Wallet.createRandom();
+  const P = dev("Phone", k3), M = dev("Mac", k3), Cr = dev("Chrome", k3);
+  put(M.dir, "rules.json", [{ id: "r1", kind: "dca" }]);
+  await M.s.turnOn(); await P.s.turnOn(); await Cr.s.turnOn(); await M.s.sync(); await P.s.sync();
+  const macId = M.s.view().here.id;
+  check(P.s.view().devices.length === 3 && !P.s.runsHere() && M.s.runsHere(), "three devices, the Mac runs the bots", P.s.view().devices.map((d) => d.name));
+  let eSelf = ""; try { await P.s.remove(P.s.view().here.id); } catch (e) { eSelf = String((e as Error).message); }
+  check(/turn Sync my devices off/.test(eSelf), "a device can't remove itself (it turns sync off instead)", eSelf);
+  await P.s.remove(macId);
+  check(!P.s.view().devices.some((d) => d.id === macId) && P.s.runsHere(), "the phone drops the Mac and takes over the bots");
+  await M.s.sync();
+  const mv = M.s.view();
+  check(!mv.on && !!mv.removed_at && M.s.runsHere() && get(M.dir, "rules.json") !== null, "the Mac stops syncing at its next check-in, says it was removed, keeps its files", mv);
+  await Cr.s.sync();
+  check(!Cr.s.view().devices.some((d) => d.id === macId) && !Cr.s.runsHere(), "Chrome no longer lists the Mac, and leaves the bots to the phone");
+  await P.s.sync();
+  check(!P.s.view().devices.some((d) => d.id === macId), "the Mac doesn't come back into the list on its own");
+  await M.s.turnOn(); await P.s.sync();
+  const nv = M.s.view();
+  check(nv.on && !nv.removed_at && nv.here.id !== macId && P.s.view().devices.some((d) => d.id === nv.here.id) && !M.s.runsHere(), "turning sync on again joins as a new device, without the bots", nv);
+}
+
 console.log(`\ndevsync: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

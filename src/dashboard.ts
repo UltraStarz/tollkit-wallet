@@ -472,7 +472,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         try { return send(res, 200, { ok: true, ...(await w.unwrapSol()) }); }
         catch (e) { return send(res, 400, { error: (e as Error).message.slice(0, 300) }); }
       }
-      // 0.9.7: Sync my devices: on, off, run the bots here, sync now.
+      // 0.9.7: Sync my devices: on, off, run the bots here, sync now; 0.9.8: remove a device.
       if (p === "/api/sync") {
         try {
           const a = String(b.action ?? "");
@@ -480,6 +480,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           if (a === "off") return send(res, 200, { devices: devs.turnOff() });
           if (a === "run_here") { const v = await devs.runHere(); void autopilot?.tick(); void alwaysSync(); return send(res, 200, { devices: v }); }
           if (a === "now") { await devs.sync(); return send(res, 200, { devices: devs.view() }); }
+          // 0.9.8: take another device off the list.
+          if (a === "remove") { const v = await devs.remove(String(b.id ?? "")); void autopilot?.tick(); void alwaysSync(); return send(res, 200, { devices: v }); }
           return send(res, 400, { error: "Unknown action." });
         } catch (e) { return send(res, 400, { error: (e as Error).message.slice(0, 300), devices: devs.view() }); }
       }

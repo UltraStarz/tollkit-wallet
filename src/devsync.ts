@@ -14,6 +14,9 @@
  *   - One device runs the bots (the "runner"). The others show the same bots and history but don't trade, so
  *     nothing trades twice. "Run bots here" moves the job to this device.
  *
+ * 0.9.8: Remove takes another device off the list. It stops syncing at its next check-in and says so; it can turn sync
+ * on again (it holds the keys), and then it joins as a new device.
+ *
  * Never synced: the keys (keystore.json), the spending limits (policy.json, sealed with each device's own password),
  * the AI key, Telegram, connected apps and websites, chat history, caches.
  */
@@ -32,9 +35,10 @@ const LABEL = "Tollkit device sync v1";
 
 export interface Device { id: string; name: string; seen: string }
 /** The decrypted copy. */
-export interface Snapshot { v: 1; files: Record<string, { hash: string; at: string; data: string } | null>; ledger: string[]; runner: string | null; devices: Device[]; at: string }
-interface Local { on: boolean; device: { id: string; name: string }; rev: number; base: Record<string, string>; last_sync: string | null; last_error: string | null; runner: string | null; devices: Device[] }
-export interface SyncView { on: boolean; here: { id: string; name: string }; runner: string | null; runs_here: boolean; devices: (Device & { runs_bots: boolean; this_device: boolean })[]; last_sync: string | null; last_error: string | null }
+export interface Removed { id: string; name: string; at: string }
+export interface Snapshot { v: 1; files: Record<string, { hash: string; at: string; data: string } | null>; ledger: string[]; runner: string | null; devices: Device[]; at: string; removed?: Removed[] }
+interface Local { on: boolean; device: { id: string; name: string }; rev: number; base: Record<string, string>; last_sync: string | null; last_error: string | null; runner: string | null; devices: Device[]; removed: Removed[]; removed_at: string | null }
+export interface SyncView { on: boolean; here: { id: string; name: string }; runner: string | null; runs_here: boolean; devices: (Device & { runs_bots: boolean; this_device: boolean })[]; last_sync: string | null; last_error: string | null; removed_at: string | null }
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -88,7 +92,7 @@ export class DeviceSync {
     let l: Partial<Local> = {};
     try { if (existsSync(this.file)) l = JSON.parse(readFileSync(this.file, "utf8")); } catch { /* start over */ }
     return { on: !!l.on, device: l.device?.id ? l.device : { id: randomUUID().slice(0, 12), name: this.o.deviceName ?? "This device" }, rev: l.rev ?? 0, base: l.base ?? {},
-      last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, runner: l.runner ?? null, devices: l.devices ?? [] };
+      last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, runner: l.runner ?? null, devices: l.devices ?? [], removed: l.removed ?? [], removed_at: l.removed_at ?? null };
   }
   private save(l: Local) {
     mkdirSync(this.home, { recursive: true });
@@ -101,12 +105,32 @@ export class DeviceSync {
     const l = this.load();
     if (this.o.deviceName && l.device.name !== this.o.deviceName) { l.device.name = this.o.deviceName; this.save(l); }
     const devices = l.devices.some((d) => d.id === l.device.id) ? l.devices : [...l.devices, { id: l.device.id, name: l.device.name, seen: new Date(this.now()).toISOString() }];
-    return { on: l.on, here: l.device, runner: l.runner, runs_here: this.runsHere(), devices: devices.map((d) => ({ ...d, runs_bots: d.id === l.runner, this_device: d.id === l.device.id })), last_sync: l.last_sync, last_error: l.last_error };
+    return { on: l.on, here: l.device, runner: l.runner, runs_here: this.runsHere(), devices: devices.map((d) => ({ ...d, runs_bots: d.id === l.runner, this_device: d.id === l.device.id })), last_sync: l.last_sync, last_error: l.last_error, removed_at: l.removed_at };
   }
   /** Bots, Autopilot and Run 24/7 act here unless sync is on and another device runs them. */
   runsHere(): boolean { const l = this.load(); return !l.on || !l.runner || l.runner === l.device.id; }
 
-  async turnOn(): Promise<SyncView> { const l = this.load(); l.on = true; l.last_error = null; this.save(l); await this.sync(); return this.view(); }
+  async turnOn(): Promise<SyncView> {
+    const l = this.load();
+    // Removed earlier: come back as a new device, so the old removal doesn't stop it again.
+    if (l.removed_at) { l.device = { id: randomUUID().slice(0, 12), name: l.device.name }; l.removed_at = null; l.rev = 0; l.base = {}; l.runner = null; l.devices = []; }
+    l.on = true; l.last_error = null; this.save(l); await this.sync(); return this.view();
+  }
+  /** Take another device off the list. It stops syncing at its next check-in; the bots move here if it ran them. */
+  async remove(id: string): Promise<SyncView> {
+    const l = this.load();
+    if (!l.on) throw new Error("Turn on Sync my devices first.");
+    if (id === l.device.id) throw new Error("To stop syncing this device, turn Sync my devices off.");
+    const d = l.devices.find((x) => x.id === id);
+    if (!d) throw new Error("That device isn't in the list any more.");
+    l.devices = l.devices.filter((x) => x.id !== id);
+    l.removed = [...l.removed.filter((x) => x.id !== id), { id, name: d.name, at: new Date(this.now()).toISOString() }].slice(-20);
+    const tookBots = l.runner === id;
+    if (tookBots) l.runner = l.device.id;
+    this.save(l);
+    await this.sync(tookBots);
+    return this.view();
+  }
   turnOff(): SyncView { const l = this.load(); l.on = false; l.rev = 0; l.base = {}; this.save(l); return this.view(); }
   /** Move the bots to this device (the others stop trading at their next sync). */
   async runHere(): Promise<SyncView> { const l = this.load(); if (!l.on) throw new Error("Turn on Sync my devices first."); l.runner = l.device.id; this.save(l); await this.sync(true); return this.view(); }
@@ -132,7 +156,7 @@ export class DeviceSync {
     const files: Snapshot["files"] = {};
     for (const n of SYNC_FILES) { const d = this.read(n); files[n] = d === null ? null : { hash: sha(d), at, data: d }; }
     const devices = [...l.devices.filter((d) => d.id !== l.device.id), { id: l.device.id, name: l.device.name, seen: at }].slice(-12);
-    return { v: 1, files, ledger: this.ledgerLines(), runner: l.runner, devices, at };
+    return { v: 1, files, ledger: this.ledgerLines(), runner: l.runner, devices, at, removed: l.removed };
   }
 
   /**
@@ -156,6 +180,18 @@ export class DeviceSync {
         try { remote = JSON.parse(open(key, got.blob)) as Snapshot; }
         catch { throw new Error("The synced copy couldn't be opened with this wallet's key."); }
       }
+      // Removed from another device: stop here, keep this device's files, and say so.
+      if (remote?.removed?.some((x) => x.id === l.device.id)) {
+        const after = this.load();
+        Object.assign(after, { on: false, rev: 0, base: {}, runner: null, devices: [], removed_at: remote.removed.find((x) => x.id === l.device.id)!.at, last_error: null });
+        this.save(after);
+        return;
+      }
+      // Removals from either side, so a removed device never comes back into the list.
+      const removed = [...l.removed];
+      for (const x of remote?.removed ?? []) if (!removed.some((y) => y.id === x.id)) removed.push(x);
+      l.removed = removed.slice(-20);
+      const gone = new Set(l.removed.map((x) => x.id));
       const changed: string[] = [];
       if (remote && got.rev !== l.rev) {
         const firstJoin = l.rev === 0;
@@ -184,11 +220,13 @@ export class DeviceSync {
         if (!claimRunner) l.runner = remote.runner ?? l.runner;
         l.devices = remote.devices ?? l.devices;
       }
+      l.devices = l.devices.filter((d) => !gone.has(d.id));
+      if (l.runner && gone.has(l.runner)) l.runner = l.device.id;
       if (claimRunner || !l.runner) l.runner = l.device.id;
       // Now send this device's view back if the server's copy differs from it.
       const snap = this.snapshot(l, at);
       const same = remote && got.rev !== undefined && JSON.stringify(Object.fromEntries(SYNC_FILES.map((n) => [n, snap.files[n]?.hash ?? null]))) === JSON.stringify(Object.fromEntries(SYNC_FILES.map((n) => [n, remote!.files[n]?.hash ?? null])))
-        && snap.ledger.length === remote.ledger.length && snap.runner === remote.runner && remote.devices.some((d) => d.id === l.device.id && this.now() - Date.parse(d.seen) < 6 * 3600_000);
+        && snap.ledger.length === remote.ledger.length && snap.runner === remote.runner && (snap.removed?.length ?? 0) === (remote.removed?.length ?? 0) && snap.devices.length === remote.devices.length && remote.devices.some((d) => d.id === l.device.id && this.now() - Date.parse(d.seen) < 6 * 3600_000);
       let rev = got.rev ?? 0;
       if (!same) {
         // Keep each file's time from the copy when it didn't change here.
@@ -200,7 +238,7 @@ export class DeviceSync {
         rev = put.rev;
       }
       const after = this.load(); // the device may have been switched off meanwhile
-      Object.assign(after, { rev, runner: l.runner, devices: snap.devices, last_sync: at, last_error: null, base: Object.fromEntries(SYNC_FILES.map((n) => [n, snap.files[n]?.hash ?? null]).filter(([, h]) => h)) });
+      Object.assign(after, { rev, runner: l.runner, devices: snap.devices, removed: l.removed, last_sync: at, last_error: null, base: Object.fromEntries(SYNC_FILES.map((n) => [n, snap.files[n]?.hash ?? null]).filter(([, h]) => h)) });
       this.save(after);
       if (changed.length) this.onChanged?.(changed);
     } catch (e) {
