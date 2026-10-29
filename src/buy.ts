@@ -11,10 +11,12 @@ import type { RampAuth } from "./rampauth.js";
 /** Arbitrum and Polygon aren't offered yet: Coinbase's network names for them differ between its docs, so they wait for a live check. */
 export const BUY_ASSETS: Partial<Record<Chain, string[]>> = { base: ["USDC", "ETH"], ethereum: ["USDC", "ETH"], solana: ["USDC", "SOL"] };
 
-export async function buyLink(addresses: { evm: string; solana: string }, o: { chain: Chain; asset: string; amount_usd?: number; sandbox?: boolean }, opts: { proxy?: string; fetch?: typeof fetch; sign?: (network: Chain, address: string) => Promise<RampAuth> } = {}): Promise<{ url: string; sandbox: boolean }> {
+export async function buyLink(addresses: { evm: string; solana: string }, o: { chain: Chain; asset: string; amount_usd?: number; sandbox?: boolean }, opts: { proxy?: string; fetch?: typeof fetch; sign?: (network: Chain, address: string, what: { asset: string; amount: string }) => Promise<RampAuth> } = {}): Promise<{ url: string; sandbox: boolean }> {
   if (!BUY_ASSETS[o.chain]?.includes(o.asset)) throw new Error(BUY_ASSETS[o.chain] ? `On ${chainName(o.chain)} you can buy ${BUY_ASSETS[o.chain]!.join(" or ")}.` : `Buying with Coinbase isn't available on ${chainName(o.chain)} yet. Buy on Base, then move it.`);
   const address = o.chain === "solana" ? addresses.solana : addresses.evm;
-  const auth = opts.sign ? await opts.sign(o.chain, address) : {};
+  // 0.9.9: the signature covers the coin and the amount exactly as the server will read them (dollars to the cent).
+  const amt = o.amount_usd ? Number(o.amount_usd).toFixed(2) : "";
+  const auth = opts.sign ? await opts.sign(o.chain, address, { asset: o.asset, amount: amt }) : {};
   const r = await (opts.fetch ?? fetch)(`${opts.proxy ?? DEFAULT_PROXY}/onramp`, {
     method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(25_000),
     body: JSON.stringify({ address, network: o.chain, asset: o.asset, ...auth, ...(o.amount_usd ? { amount_usd: o.amount_usd } : {}), ...(o.sandbox ? { sandbox: true } : {}) }),

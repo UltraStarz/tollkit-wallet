@@ -24,7 +24,7 @@ type Fetch = typeof fetch;
 
 export class Sales {
   private file: string;
-  constructor(private o: { dir?: string; proxy?: string; fetch?: Fetch; sign?: (kind: "offramp", network: Chain, address: string) => Promise<{ ts: number; nonce: string; sig: string }> }) { this.file = path.join(walletHome(o.dir), "sales.json"); }
+  constructor(private o: { dir?: string; proxy?: string; fetch?: Fetch; sign?: (kind: "offramp", network: Chain, address: string, what: { asset: string; amount: string }) => Promise<{ ts: number; nonce: string; sig: string; v?: 2 }> }) { this.file = path.join(walletHome(o.dir), "sales.json"); }
   private get f(): Fetch { return this.o.fetch ?? ((i: any, n?: any) => fetch(i, n)); }
   private get proxy() { return this.o.proxy ?? DEFAULT_PROXY; }
 
@@ -38,7 +38,7 @@ export class Sales {
   async start(address: string, chain: Chain, asset: string, amount?: string): Promise<{ url: string; ref: string }> {
     if (!SELL_ASSETS[chain]?.includes(asset)) throw new Error(SELL_ASSETS[chain] ? `On ${chainName(chain)} you can cash out ${SELL_ASSETS[chain]!.join(" or ")}.` : `Cashing out with Coinbase isn't available on ${chainName(chain)} yet. Move it to Base first.`);
     if (amount === undefined || !(/^\d+(\.\d+)?$/.test(amount) && Number(amount) > 0)) throw new Error("Enter how much to cash out, like 25 or 0.05.");
-    const auth = this.o.sign ? await this.o.sign("offramp", chain, address) : {};
+    const auth = this.o.sign ? await this.o.sign("offramp", chain, address, { asset, amount: amount ?? "" }) : {};
     const r = await this.f(`${this.proxy}/offramp`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(25_000), body: JSON.stringify({ address, network: chain, asset, ...(amount ? { amount } : {}), ...auth }) });
     const j: any = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(r.status === 404 ? "Cashing out isn't available from Tollkit's server yet." : j?.message ?? `Tollkit's server answered HTTP ${r.status}.`);

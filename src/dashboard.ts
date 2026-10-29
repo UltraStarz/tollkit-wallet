@@ -107,7 +107,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const alwaysSync = async () => {
     // 0.9.7: a trade the device is placing right now finishes (and is recorded) before the server gets the rule's state.
     await autopilot?.idle();
-    if (!runsHere()) return; // 0.9.7: the device that runs the bots keeps Run 24/7 in step
+    // 0.9.9: other devices read what's set aside from the chain, so every device shows the same total.
+    if (!runsHere()) { if (w.alwaysSol().anyOn()) await w.alwaysSol().refreshHeld().catch(() => {}); return; }
     if (w.always().anyOn()) try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
     if (w.alwaysSol().anyOn()) try { await w.alwaysSol().sync(); } catch (e) { w.alwaysSol().noteError((e as Error).message); }
   };
@@ -161,6 +162,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });
   if (o.watch !== false) superbot.start();
+  // 0.9.9: Run 24/7 knows when Autopilot is watching here, and what the server paused while it wasn't.
+  w.alwaysSol().awayInfo = () => superbot?.awayInfo() ?? null;
+  w.alwaysSol().onAway = (e) => superbot?.logAway(e);
   // 0.9.7: sync each minute while it's on, and soon after anything changes here. Files that arrive from another
   // device take effect at once (the bots re-read their rules on the next tick).
   devs.onChanged = () => { void autopilot?.tick(); void paperPilot?.tick(); };
@@ -565,7 +569,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!w.policy.chains.includes(chain)) return send(res, 400, { error: `${chainName(chain)} is turned off in your limits.` });
         const amt = b.amount_usd === undefined || b.amount_usd === "" ? undefined : Number(b.amount_usd);
         if (amt !== undefined && !(amt >= 5 && amt <= 10_000)) return send(res, 400, { error: "Pick an amount from $5 to $10,000." });
-        return send(res, 200, await buyLink(w.addresses, { chain, asset: String(b.asset ?? "").toUpperCase(), amount_usd: amt, sandbox: b.sandbox === true }, { proxy: (w as any).o?.proxy, sign: (n, a) => w.rampAuth("onramp", n, a) }));
+        return send(res, 200, await buyLink(w.addresses, { chain, asset: String(b.asset ?? "").toUpperCase(), amount_usd: amt, sandbox: b.sandbox === true }, { proxy: (w as any).o?.proxy, sign: (n, a, what) => w.rampAuth("onramp", n, a, what) }));
       }
       // Browser extension: a one-time pairing code, disconnecting a site, unpairing every browser.
       if (p === "/api/extmgr/code") return send(res, 200, { code: w.dapps().newCode(port) });

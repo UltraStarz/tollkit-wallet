@@ -9,6 +9,12 @@
  *   - Tollkit can never move more than the allowance; the owner can cut it to zero at any time (Revoke);
  *   - SOL set aside for a sell is "wrapped" (a token account in this wallet). Turning it off unwraps it all.
  * Buys land as wrapped SOL too (that's how the swap pays out); turning it off unwraps that as well.
+ *
+ * 0.9.9: any Solana coin the wallet's token list (Jupiter) has verified, besides SOL. Buys spend the same USDC
+ * allowance and land in that coin's own account here; sells draw on a capped allowance on that account. Unverified or
+ * suspicious coins stay on the device. And "while you're away": each sync tells the server when Autopilot last checked
+ * the market here, and the price it saw for each of its rules; the server pauses (never trades) those rules if their coin
+ * falls far, or gives back half a rise, while no device is checking. Its notes come back into Autopilot's decisions.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -22,6 +28,7 @@ import { applyFills, type ServerFill } from "./alwayson.js";
 import { autopilotUnits, isAutopilotRule } from "./ownership.js";
 import type { Rule, RuleStore } from "./rules.js";
 import { botBuys, botNewer, isBotKind } from "./botlogic.js";
+import { solanaInfo } from "./tokenlist.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -29,8 +36,13 @@ const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss"];
 /** SOL kept unwrapped for network fees and account rent. */
 export const SOL_RESERVE = 20_000_000n; // 0.02 SOL
 
-export interface SolConfig { enabled: boolean; delegate: string | null; fee_bps?: number; reason?: string; kinds?: string[] }
-export interface TokenAcct { exists: boolean; amount: bigint; delegate: string | null; delegated: bigint }
+export interface SolConfig { enabled: boolean; delegate: string | null; fee_bps?: number; reason?: string; kinds?: string[]; coins?: boolean; max_coins?: number }
+export interface TokenAcct { exists: boolean; amount: bigint; delegate: string | null; delegated: bigint; decimals?: number }
+/** 0.9.9: what the token list says about a coin (src/tokenlist.ts solanaInfo). */
+export type CoinInfo = { symbol?: string; decimals?: number; trust?: string; jupiter?: { suspicious?: boolean } } | null;
+/** 0.9.9: Autopilot's last check-in here, and how far a coin may move while no device is checking. */
+export interface AwayInfo { last_decision: string; drop_pct: number; rise_pct: number }
+export interface AwayEntry { ts: string; rule_id: string; text: string }
 /** The chain, as this client needs it (tests stand in for it). */
 export interface SolChain { lamports(owner: string): Promise<bigint>; token(account: string): Promise<TokenAcct>; send(ixs: TransactionInstruction[]): Promise<string> }
 interface Local {
@@ -38,11 +50,15 @@ interface Local {
   /** Lamports set aside per sell rule, fixed when it was turned on (a share of the balance then), and what it was fixed for. */
   set_aside?: Record<string, { key: string; lamports: string }>;
   running?: string[]; problems?: Record<string, string>; last_sync?: string; last_error?: string | null; last_tx?: string;
-  seen_fills?: string[]; held?: { usdc_allowed: string; wsol_allowed: string; wsol_balance: string };
+  seen_fills?: string[]; held?: { usdc_allowed: string; wsol_allowed: string; wsol_balance: string; coins?: Record<string, { allowed: string; balance: string; decimals: number; symbol?: string }> };
+  /** 0.9.9: coins this wallet has allowed Tollkit to sell (so turning them off revokes them), and away notes already seen. */
+  coins_used?: string[]; seen_away?: string[];
 }
 export interface SolAlwaysOpts {
   key: () => Keypair; address: string; dir?: string; rpc: string; fetch?: typeof fetch; proxy: string;
   rules: () => RuleStore; chain?: SolChain; now?: () => number;
+  /** 0.9.9: the token list's view of coins (tests stand in for it). */
+  coinInfo?: (mints: string[]) => Promise<Map<string, CoinInfo>>;
 }
 
 const isBuy = (r: Pick<Rule, "kind">) => r.kind === "dca" || r.kind === "limit_buy";
@@ -56,11 +72,18 @@ export function botHeld(r: Rule): bigint {
   return BigInt(b.units ?? "0");
 }
 const usdcAtomic = (usd: number) => BigInt(Math.round(usd * 1e6));
+const B58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+/** 0.9.9: SOL, or another Solana coin by its mint (null: neither). */
+export const isSolRule = (r: Pick<Rule, "token">) => String(r.token).toUpperCase() === "SOL";
+export function coinMint(r: Pick<Rule, "token">): string | null {
+  const t = String(r.token);
+  return !isSolRule(r) && B58.test(t) && t !== USDC_MINT && t !== WSOL_MINT ? t : null;
+}
 
 /** Which Solana rules the server can run, and why not otherwise (shown on the rule card). */
 export function solRunnable(r: Rule): string | null {
   if (r.chain !== "solana") return "Not a Solana rule.";
-  if (String(r.token).toUpperCase() !== "SOL") return "Only SOL rules can run 24/7 on Solana for now.";
+  if (!isSolRule(r) && !coinMint(r)) return "Only SOL and Solana coins (by their address) can run 24/7.";
   if (isBot(r)) return r.kind === "twap" && r.side === "sell" ? null : r.amount_usd ? null : "Needs a dollar amount.";
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
   if (r.after || r.sell_from) return "Rules that wait for another rule run only while the app is open.";
@@ -105,7 +128,7 @@ export class SolAlwaysOn {
       token: async (a) => {
         const info = ((await conn.getParsedAccountInfo(new PublicKey(a), "confirmed")).value?.data as any)?.parsed?.info;
         if (!info) return { exists: false, amount: 0n, delegate: null, delegated: 0n };
-        return { exists: true, amount: BigInt(info.tokenAmount?.amount ?? "0"), delegate: info.delegate ?? null, delegated: BigInt(info.delegatedAmount?.amount ?? "0") };
+        return { exists: true, amount: BigInt(info.tokenAmount?.amount ?? "0"), delegate: info.delegate ?? null, delegated: BigInt(info.delegatedAmount?.amount ?? "0"), decimals: typeof info.tokenAmount?.decimals === "number" ? info.tokenAmount.decimals : undefined };
       },
       send: (ixs) => sendAndConfirm(conn, new Transaction().add(...ixs), [this.o.key()]),
     };
@@ -136,13 +159,33 @@ export class SolAlwaysOn {
     const l = this.load(), h = l.held;
     return { rules: Object.keys(l.rules), usd_cap: l.usd_cap, config: this.cfg, running: l.running ?? [], problems: l.problems ?? {}, last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, last_tx: l.last_tx ?? null,
       // What Tollkit may move right now, as the chain last reported it.
-      held: h ? { usdc_allowed: Number(h.usdc_allowed) / 1e6, wsol_allowed: Number(h.wsol_allowed) / 1e9, wsol_balance: Number(h.wsol_balance) / 1e9 } : null };
+      held: h ? { usdc_allowed: Number(h.usdc_allowed) / 1e6, wsol_allowed: Number(h.wsol_allowed) / 1e9, wsol_balance: Number(h.wsol_balance) / 1e9,
+        coins: Object.fromEntries(Object.entries(h.coins ?? {}).map(([m, c]) => [m, { allowed: Number(c.allowed) / 10 ** c.decimals, balance: Number(c.balance) / 10 ** c.decimals, symbol: c.symbol }])) } : null };
+  }
+  /**
+   * 0.9.9: what Tollkit may move, read from the chain without changing anything. The device that runs the bots learns
+   * it at each sync; the others call this, so their "SOL set aside" never shows an amount the server already traded.
+   */
+  async refreshHeld(): Promise<void> {
+    const l = this.load();
+    if (!l.held && !l.coins_used?.length) return;
+    const d = this.cfg?.delegate ?? (await this.config())?.delegate ?? null;
+    const [u, w] = await Promise.all([this.chain.token(this.ata(USDC_MINT).toBase58()), this.chain.token(this.ata(WSOL_MINT).toBase58())]);
+    const coins: NonNullable<NonNullable<Local["held"]>["coins"]> = {};
+    for (const m of l.coins_used ?? []) {
+      const a = await this.chain.token(this.ata(m).toBase58()), old = l.held?.coins?.[m];
+      coins[m] = { allowed: (d && a.delegate === d ? a.delegated : 0n).toString(), balance: a.amount.toString(), decimals: a.decimals ?? old?.decimals ?? 0, symbol: old?.symbol };
+    }
+    this.update((x) => { x.held = { usdc_allowed: (d && u.delegate === d ? u.delegated : 0n).toString(), wsol_allowed: (d && w.delegate === d ? w.delegated : 0n).toString(), wsol_balance: w.amount.toString(), coins }; });
   }
   isOn(id: string) { return !!this.load().rules[id]; }
   serverRuns(id: string) { return (this.load().running ?? []).includes(id); }
   /** 0.9.7: switched on for 24/7 and not refused: the device stops trading it now (see src/alwayson.ts). */
   handedOff(id: string) { const l = this.load(); return !!l.rules[id] && !(l.problems ?? {})[id]; }
-  anyOn() { const l = this.load(); return Object.keys(l.rules).length > 0 || (l.running ?? []).length > 0 || !!(l.held && (l.held.usdc_allowed !== "0" || l.held.wsol_balance !== "0")); }
+  anyOn() { const l = this.load(); return Object.keys(l.rules).length > 0 || (l.running ?? []).length > 0 || !!(l.held && (l.held.usdc_allowed !== "0" || l.held.wsol_balance !== "0" || Object.values(l.held.coins ?? {}).some((c) => c.allowed !== "0"))); }
+  /** 0.9.9: set by the dashboard: Autopilot's last check-in here (null: Autopilot is off), and where its away notes go. */
+  awayInfo?: () => AwayInfo | null;
+  onAway?: (entries: AwayEntry[]) => Promise<void> | void;
   noteError(m: string) { this.update((l) => { l.last_error = m.slice(0, 300); }); }
 
   /** The owner flips the switch on a Solana rule. `usd_cap`: the most USDC Tollkit may spend on buys (refilled when the app opens). */
@@ -179,9 +222,11 @@ export class SolAlwaysOn {
     const ixs: TransactionInstruction[] = [];
     if (u.exists && u.delegate) ixs.push(createRevokeInstruction(usdc, this.owner));
     if (w.exists) ixs.push(createCloseAccountInstruction(wsol, this.owner, this.owner));
+    // 0.9.9: each coin's allowance ends too; the coins themselves stay where they are.
+    for (const m of this.load().coins_used ?? []) { const a = this.ata(m), c = await this.chain.token(a.toBase58()); if (c.exists && c.delegate) ixs.push(createRevokeInstruction(a, this.owner)); }
     let tx: string | null = null;
     if (ixs.length) tx = await this.chain.send(ixs);
-    this.update((x) => { x.rules = {}; x.set_aside = {}; x.running = []; x.problems = {}; x.dirty = false; x.last_error = serverErr ? `Tollkit's server: ${serverErr}` : null; x.held = { usdc_allowed: "0", wsol_allowed: "0", wsol_balance: "0" }; if (tx) x.last_tx = tx; });
+    this.update((x) => { x.rules = {}; x.set_aside = {}; x.running = []; x.problems = {}; x.dirty = false; x.last_error = serverErr ? `Tollkit's server: ${serverErr}` : null; x.held = { usdc_allowed: "0", wsol_allowed: "0", wsol_balance: "0", coins: {} }; x.coins_used = []; if (tx) x.last_tx = tx; });
     return { tx };
   }
 
@@ -221,16 +266,35 @@ export class SolAlwaysOn {
       }
     });
     if (state.delegate !== cfg.delegate) throw new Error("Tollkit's server named a different key than before; not changing anything.");
+    // 0.9.9: what the server paused while no device was checking, once each, into Autopilot's decisions.
+    const awayNew: AwayEntry[] = this.update((x) => { const seen = new Set(x.seen_away ?? []), key = (e: AwayEntry) => `${e.ts}|${e.rule_id}`; const n = (state.away_log ?? []).filter((e: AwayEntry) => e && !seen.has(key(e))); x.seen_away = [...seen, ...n.map(key)].slice(-300); return n; });
+    if (awayNew.length && this.onAway) await Promise.resolve(this.onAway(awayNew)).catch(() => {});
 
     // 2. Which rules, and what each needs allowed.
     const l = this.load();
     const want = store.list().filter((r) => l.rules[r.id] && (r.status === "active" || r.status === "paused"));
     const active: Rule[] = [];
+    // 0.9.9: other coins only if the server takes them and the token list has verified them (not flagged as suspicious).
+    const mintsWanted = [...new Set(want.map(coinMint).filter((m): m is string => !!m))];
+    let info = new Map<string, CoinInfo>();
+    if (mintsWanted.length && cfg.coins) try { info = await (this.o.coinInfo ?? ((m) => solanaInfo(m, this.f) as Promise<Map<string, CoinInfo>>))(mintsWanted); } catch { /* treated as unknown below */ }
+    const coinWhy = (m: string): string | null => {
+      if (!cfg.coins) return "Tollkit's server runs only SOL 24/7 for now; this coin trades while the app is open.";
+      const c = info.get(m);
+      if (!c) return "Couldn't check this coin with the token list just now; it trades while the app is open and tries 24/7 again later.";
+      if (c.jupiter?.suspicious) return "The token list flags this coin as suspicious, so it trades only while the app is open.";
+      if (c.trust !== "listed" && c.trust !== "core") return "This coin isn't verified on the token list, so it trades only while the app is open.";
+      return null;
+    };
     for (const r of want) {
-      const why = solRunnable(r) ?? (isBot(r) && !(cfg.kinds ?? []).includes(r.kind) ? "Tollkit's server doesn't run this bot 24/7 yet; it runs while the app is open." : null);
+      const m = coinMint(r);
+      const why = solRunnable(r) ?? (isBot(r) && !(cfg.kinds ?? []).includes(r.kind) ? "Tollkit's server doesn't run this bot 24/7 yet; it runs while the app is open." : null) ?? (m ? coinWhy(m) : null);
       if (why) { problems[r.id] = why; continue; }
       if (r.status === "active" && !state.rules?.[r.id]?.done) active.push(r);
     }
+    const coinActive = active.filter((r) => !isSolRule(r));
+    active.splice(0, active.length, ...active.filter(isSolRule), ...coinActive); // SOL first; the SOL steps below see only SOL
+    const solActive = active.filter(isSolRule);
     const delegate = new PublicKey(cfg.delegate);
     const usdcA = this.ata(USDC_MINT), wsolA = this.ata(WSOL_MINT);
     const [usdc, wsol, lamports] = await Promise.all([this.chain.token(usdcA.toBase58()), this.chain.token(wsolA.toBase58()), this.chain.lamports(this.o.address)]);
@@ -239,9 +303,11 @@ export class SolAlwaysOn {
     let wsolAllowed = ours(wsol) ? wsol.delegated : 0n, wsolBal = wsol.amount, usdcAllowed = ours(usdc) ? usdc.delegated : 0n;
     let wsolMade = wsol.exists, usdcRefilled = false;
 
-    // Buys: USDC allowance up to the owner's cap, refilled once it can't cover the largest buy.
-    const bots = active.filter(isBot);
+    // Buys: USDC allowance up to the owner's cap, refilled once it can't cover the largest buy. 0.9.9: every coin's buys
+    // draw on the same USDC allowance.
+    const bots = solActive.filter(isBot);
     const buys = active.filter((r) => isBuy(r) || (isBot(r) && botBuys(r as any)));
+    const solBuys = buys.filter(isSolRule);
     // A bot's next buy: its first one (a rebalancer's set-up, a split buy's part). Later buys draw on the same cap.
     const oneBuy = (r: Rule) => usdcAtomic(!isBot(r) ? r.amount_usd! : r.kind === "rebalance" ? (r.amount_usd! * (r.target_pct ?? 50)) / 100 : r.kind === "twap" ? r.amount_usd! / (r.pieces ?? 1) : r.amount_usd!);
     if (buys.length) {
@@ -251,11 +317,11 @@ export class SolAlwaysOn {
       else if (!usdc.exists || usdc.amount < perTrade) for (const r of buys) { if (isBot(r) && botHeld(r) > 0n) continue; problems[r.id] = `Run 24/7 needs at least $${(Number(perTrade) / 1e6).toFixed(2)} of USDC on Solana for one buy. You have $${(Number(usdc.amount) / 1e6).toFixed(2)}.`; }
       else if (usdcAllowed < perTrade || (l.dirty && usdcAllowed !== cap)) { ixs.push(createApproveInstruction(usdcA, delegate, this.owner, cap)); usdcAllowed = cap; usdcRefilled = true; }
       // The bought SOL lands in the wrapped-SOL account: make it now, at the owner's cost, so the server never pays its rent.
-      if (!wsolMade && !buys.every((r) => problems[r.id])) { ixs.push(createAssociatedTokenAccountIdempotentInstruction(this.owner, wsolA, this.owner, new PublicKey(WSOL_MINT))); wsolMade = true; }
+      if (!wsolMade && solBuys.length && !solBuys.every((r) => problems[r.id])) { ixs.push(createAssociatedTokenAccountIdempotentInstruction(this.owner, wsolA, this.owner, new PublicKey(WSOL_MINT))); wsolMade = true; }
     } else if (usdcAllowed > 0n) { ixs.push(createRevokeInstruction(usdcA, this.owner)); usdcAllowed = 0n; }
 
     // Sells: wrap the SOL each one may sell (fixed when it's turned on), and allow exactly that much.
-    const sells = active.filter((r) => !isBuy(r) && !isBot(r));
+    const sells = solActive.filter((r) => !isBuy(r) && !isBot(r));
     const sigKey = (r: Rule) => JSON.stringify([r.kind, r.sell_amount, r.sell_percent, r.trigger_price, r.group, r.state.runs]);
     const free = lamports > SOL_RESERVE ? lamports - SOL_RESERVE : 0n;
     const set: Record<string, { key: string; lamports: string }> = {};
@@ -319,6 +385,62 @@ export class SolAlwaysOn {
       ixs.push(createCloseAccountInstruction(wsolA, this.owner, this.owner)); wsolAllowed = 0n; wsolBal = 0n;
     } else if (wsolAllowed > 0n) { ixs.push(createRevokeInstruction(wsolA, this.owner)); wsolAllowed = 0n; }
 
+    // 0.9.9: each coin. Nothing to wrap: sells draw on an allowance on the coin's own account, sized like SOL's (what the
+    // sells may sell, what the bots hold, and room for what the bots may buy); buys land in that account, made here.
+    const coinAmounts: Record<string, bigint> = {}, coinDec: Record<string, number> = {}, coinHeld: NonNullable<NonNullable<Local["held"]>["coins"]> = {};
+    const used = new Set(l.coins_used ?? []);
+    for (const m of [...new Set([...coinActive.map((r) => coinMint(r)!), ...used])]) {
+      const rs = coinActive.filter((r) => coinMint(r) === m && !problems[r.id]);
+      const accA = this.ata(m), acc = await this.chain.token(accA.toBase58());
+      const dec = acc.decimals ?? info.get(m)?.decimals;
+      if (dec === undefined) { for (const r of rs) problems[r.id] = "Couldn't read this coin's decimals; it trades while the app is open."; continue; }
+      coinDec[m] = dec;
+      let allowed = ours(acc) ? acc.delegated : 0n;
+      if (!rs.length) { // nothing on 24/7 for this coin any more: end its allowance
+        if (allowed > 0n) { ixs.push(createRevokeInstruction(accA, this.owner)); allowed = 0n; }
+        used.delete(m);
+        continue;
+      }
+      const cBuys = rs.filter((r) => isBuy(r) || (isBot(r) && botBuys(r as any)));
+      if (!acc.exists && cBuys.some((r) => !problems[r.id])) ixs.push(createAssociatedTokenAccountIdempotentInstruction(this.owner, accA, this.owner, new PublicKey(m)));
+      const cSells = rs.filter((r) => !isBuy(r) && !isBot(r)), cBots = rs.filter(isBot);
+      const cAp = BigInt(Math.floor(autopilotUnits(store.list(), "solana", m, m) * 10 ** dec));
+      const cPools = { ap: cAp < acc.amount ? cAp : acc.amount, own: 0n };
+      cPools.own = acc.amount - cPools.ap;
+      const counted2 = new Set<string>();
+      for (const r of cSells) {
+        const k = pool(r), g = k + shareKey(r), mate = cSells.find((x) => x.id !== r.id && pool(x) + shareKey(x) === g && coinAmounts[x.id] !== undefined);
+        const fr = cPools[k] > 0n ? cPools[k] : 0n;
+        let a = mate ? coinAmounts[mate.id]! : r.sell_percent !== undefined ? (fr * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : BigInt(Math.round(Number(r.sell_amount) * 10 ** dec));
+        if (a > fr && !mate) a = fr;
+        if (!mate && a > 0n && !counted2.has(g)) { counted2.add(g); cPools[k] -= a; }
+        if (a <= 0n) { problems[r.id] = isAutopilotRule(r) ? "Autopilot's strategies hold none of this coin to sell yet." : "None of this coin left to sell."; continue; }
+        coinAmounts[r.id] = a;
+      }
+      let cWrap = 0n, cPx = 0;
+      for (const r of cBots) {
+        if (problems[r.id]) continue;
+        let h = botHeld(r);
+        if (r.kind === "twap" && r.side === "sell" && !r.state.bot?.sell_total) {
+          const k = pool(r), a = (cPools[k] > 0n ? cPools[k] : 0n) * BigInt(Math.round((r.sell_percent ?? 100) * 100)) / 10_000n;
+          if (a <= 0n) { problems[r.id] = "None of this coin to sell."; continue; }
+          cPools[k] -= a; h = a; splitTotal[r.id] = a.toString();
+        }
+        cWrap += h;
+        const p = r.state.last_price ?? 0;
+        if (botBuys(r as any) && p > 0 && (!cPx || p < cPx)) cPx = p;
+      }
+      const cTarget = wrapTarget(cSells.filter((r) => !problems[r.id]), coinAmounts) + cWrap;
+      const cRoom = cPx > 0 ? BigInt(Math.ceil((Number(usdcAllowed) / 1e6 / (cPx * 0.5)) * 10 ** dec)) : 0n;
+      if (cTarget > acc.amount) for (const r of [...cSells, ...cBots]) problems[r.id] ??= `Not enough of this coin: these need ${(Number(cTarget) / 10 ** dec).toFixed(dec > 4 ? 4 : dec)} and you hold ${(Number(acc.amount) / 10 ** dec).toFixed(dec > 4 ? 4 : dec)}.`;
+      const cAllow = cTarget + cRoom;
+      const anySell = rs.some((r) => !problems[r.id] && (!isBuy(r)));
+      if (anySell && cAllow > 0n && (cBots.length ? allowed < cTarget || l.dirty || usdcRefilled : allowed !== cAllow) && !rs.some((r) => problems[r.id]?.startsWith("Not enough of this coin"))) { ixs.push(createApproveInstruction(accA, delegate, this.owner, cAllow)); allowed = cAllow; }
+      else if (!anySell && allowed > 0n) { ixs.push(createRevokeInstruction(accA, this.owner)); allowed = 0n; }
+      used.add(m);
+      coinHeld[m] = { allowed: allowed.toString(), balance: acc.amount.toString(), decimals: dec, symbol: info.get(m)?.symbol };
+    }
+
     // 3. One transaction from this wallet for every change, then the rules to the server.
     let tx: string | undefined;
     if (ixs.length) {
@@ -330,18 +452,27 @@ export class SolAlwaysOn {
         return { fills: fresh, running: l0.running ?? [], problems };
       }
     }
+    // 0.9.9: a coin's split-sell total, written once like SOL's above.
+    const fixC = Object.entries(splitTotal).filter(([id]) => coinActive.some((r) => r.id === id));
+    if (fixC.length) await this.o.rules().mutate((rs) => { for (const [id, t] of fixC) { const x = rs.find((y) => y.id === id); if (x && !x.state.bot?.sell_total) x.state.bot = { ...(x.state.bot ?? {}), sell_total: t }; } });
     const send = active.filter((r) => !problems[r.id]);
-    const body = { rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, token: "SOL", amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
+    // 0.9.9: what the server needs for "while you're away": Autopilot's rules and the price it last saw for each.
+    const away = this.awayInfo?.() ?? null;
+    const tok = (r: Rule) => (isSolRule(r) ? { token: "SOL" } : { token: coinMint(r)!, symbol: info.get(coinMint(r)!)?.symbol });
+    const apx = (r: Rule) => (isAutopilotRule(r) ? { ap: true, ref_price: r.state.last_price } : {});
+    const sellAmt = (r: Rule) => (isSolRule(r) ? Number(amounts[r.id] ?? 0n) / 1e9 : Number(coinAmounts[r.id] ?? 0n) / 10 ** (coinDec[coinMint(r)!] ?? 0));
+    const body = { ...(away ? { away } : {}), rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
         profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs,
         bot: { ...(r.state.bot ?? {}), ...(r.kind === "grid" ? { grid: r.state.grid } : {}), ...(splitTotal[r.id] ? { sell_total: splitTotal[r.id], v: (r.state.bot?.v ?? 0) + 1 } : {}) } })
-      : ({ id: r.id, kind: r.kind, token: "SOL", amount_usd: r.amount_usd, sell_amount: !isBuy(r) ? Number(amounts[r.id] ?? 0n) / 1e9 : undefined, trigger_price: r.trigger_price,
+      : ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, sell_amount: !isBuy(r) ? sellAmt(r) : undefined, trigger_price: r.trigger_price,
       every: r.every, times: r.times, max_price: r.max_price, group: r.group, expires_at: r.expires_at, runs: r.state.runs, next_run: r.state.next_run })) };
     let running: string[] = l0.running ?? [];
     try { const j = await this.call("sync", body); running = j.running ?? []; }
     catch (e) { for (const r of send) problems[r.id] = (e as Error).message.slice(0, 200); }
     this.update((x) => {
       x.running = running; x.problems = problems; x.set_aside = set; x.last_sync = new Date(this.now()).toISOString(); x.dirty = false; x.last_error = null;
-      x.held = { usdc_allowed: usdcAllowed.toString(), wsol_allowed: wsolAllowed.toString(), wsol_balance: wsolBal.toString() };
+      x.held = { usdc_allowed: usdcAllowed.toString(), wsol_allowed: wsolAllowed.toString(), wsol_balance: wsolBal.toString(), coins: coinHeld };
+      x.coins_used = [...used];
       if (tx) x.last_tx = tx;
     });
     return { fills: fresh, running, problems };

@@ -254,7 +254,7 @@ export const ACTIONS = [
     run: async (w, a) => {
       try {
         if (!w.policy.chains.includes(a.chain)) return { ok: false, refused: { code: "chain_off", reason: `${a.chain} is turned off in the owner's limits.` } };
-        return await buyLink(w.addresses, { chain: a.chain, asset: a.asset.toUpperCase(), amount_usd: a.amount_usd }, { proxy: (w as any).o?.proxy, fetch: (w as any).f, sign: (n, ad) => w.rampAuth("onramp", n, ad) });
+        return await buyLink(w.addresses, { chain: a.chain, asset: a.asset.toUpperCase(), amount_usd: a.amount_usd }, { proxy: (w as any).o?.proxy, fetch: (w as any).f, sign: (n, ad, what) => w.rampAuth("onramp", n, ad, what) });
       } catch (e) { return bad(e); }
     } }),
   // Tier 2: the app fills in the form, the owner applies it in the wallet (Approvals screen).

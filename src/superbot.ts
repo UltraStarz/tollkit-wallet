@@ -101,7 +101,7 @@ export interface Strategy {
   ready?: { at: string; result_pct: number; trades: number } | null;
 }
 export interface AppliedAction { type: string; strategy_id?: string; template?: string; chain?: string; token?: string; params?: Record<string, unknown>; reason: string; sources: string[]; applied: boolean; outcome: string }
-export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" }
+export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" | "away" }
 export interface Report { date: string; text: string; live_result_usd: number | null; trades: number; decisions: number }
 interface State {
   enabled: boolean; since: string | null; settings: SuperbotSettings; strategies: Strategy[]; decisions: Decision[]; reports: Report[];
@@ -685,6 +685,18 @@ export class SuperBot {
   }
 
   // ─── log and reports ─────────────────────────────────────────────────────
+  /** 0.9.9: for Run 24/7. While Autopilot is on and running here, the server only acts "while you're away". */
+  awayInfo(): { last_decision: string; drop_pct: number; rise_pct: number } | null {
+    const s = this.load();
+    if (!s.enabled || s.halted || !this.d.active?.()) return null;
+    return { last_decision: nowIso(this.now()), drop_pct: 8, rise_pct: 4 };
+  }
+
+  /** 0.9.9: what Tollkit's server paused while no device was open, into Autopilot's decisions. */
+  async logAway(entries: { ts: string; rule_id: string; text: string }[]) {
+    for (const e of entries) await this.log("away", `While you were away: ${e.text}`, [{ type: "pause", reason: e.text, sources: [], applied: true, outcome: `Rule ${e.rule_id} paused on Tollkit's server.` }], { ts: e.ts });
+  }
+
   private async log(by: Decision["by"], assessment: string, actions: AppliedAction[], extra: Partial<Decision> = {}) {
     const d: Decision = { ts: nowIso(this.now()), snapshot_id: null, market_view: "neutral", assessment: assessment.slice(0, 700), confidence: 1, model: null, cost_usd: 0, actions, by, ...extra };
     await this.update((s) => { s.decisions.push(d); if (s.decisions.length > SUPERBOT.keepDecisions) s.decisions.splice(0, s.decisions.length - SUPERBOT.keepDecisions); }).catch(() => {});
