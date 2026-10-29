@@ -599,6 +599,11 @@ button.b:hover,.aib:hover{background:var(--tkblue-hi)!important}
 .bsk{background:none;border:0;border-radius:0;padding:4px 2px}
 .btabs{background:none;border:0;border-radius:0;padding:0;gap:14px;border-bottom:1px solid var(--line)}.btab{flex:0 0 auto;border-radius:0;padding:8px 0;margin-bottom:-1px;border-bottom:2px solid transparent}.btab.on{background:none;box-shadow:none;color:var(--tx);border-bottom-color:var(--tkblue);font-weight:650}.btab .btn{background:none;padding:0 2px}
 .ap.botform{background:none;border:0;border-radius:0;padding:4px 2px;box-shadow:none;animation:botslide .42s var(--ease) both}
+/* 0.9.9: Home: the balance has the full width; Running now is a row of icons under Buy…Bridge, like those buttons */
+.balrow .balcol{width:100%}
+.rbx{display:flex;gap:4px;margin:16px 0 0;padding:0;width:100%;background:none;border:0}.rbx-h{display:none}
+.rbx-r{flex:1 1 0;min-width:0;flex-direction:column;gap:5px;text-align:center;padding:8px 2px;border-radius:12px}.rbx-c{display:none}
+.rbx-i{width:34px;height:34px;border-radius:11px}.rbx-i svg{width:18px;height:18px}.rbx-l{flex:none;font-size:11.5px}.rbx-v{font-size:11px;white-space:normal;overflow-wrap:anywhere}
 /* 0.9.9: room between buttons that sit side by side */
 .btns{display:flex;flex-wrap:wrap;gap:10px}.ap .btns{display:grid;gap:10px}.wact{gap:8px}.ap-acts{gap:10px}.tplbtns{gap:10px}
 </style></head><body>
@@ -1584,8 +1589,8 @@ if(!NETF||NETF==="solana")(S.pools||[]).forEach(function(q){var sp=priceOf("SOL"
 IT.push({v:pv,h:'<div class="row poolrow"'+(q.bot?' onclick="poolView(\''+esc(q.bot)+'\')" role="button" tabindex="0" style="cursor:pointer"':'')+' title="Your Range bot\u2019s money in Orca\u2019s SOL/USDC pool. It earns a share of the pool\u2019s trading fees while SOL is in range.">'+tokIcon("SOL","solana")+'<div style="min-width:0"><div class="tname">Orca SOL/USDC pool</div><div class="sm">'+(q.in_range===false?'<span class="warn">Out of range</span>':'<span class="ok">Earning fees</span>')+'<span class="mut"> · Range bot · Solana</span></div></div><div class="r"><div class="usdv">'+fmtUsd(pv)+'</div><div class="sm mut">'+esc(fmtAmt(q.sol))+' SOL + '+esc(fmtAmt(q.usdc))+' USDC</div></div></div>'})});
 // Biggest dollar value first; coins without a price go last. Ties keep their usual order.
 IT.sort(function(x,y){return (y.v===null?-1:y.v)-(x.v===null?-1:x.v)});rows+=IT.map(function(x){return x.h}).join("");chg+=HR.chg;var chgPct=tot-chg>0?chg/(tot-chg):0;
-return apStale()+'<div class="balrow"><div class="balcol"><div class="mut sm">'+(NETF?"Total on "+esc(CHAIN_NAMES[NETF]||NETF):"Total balance")+'</div><div class="big">'+(BL?'<span id="tot" data-v="'+tot+'">'+fmtUsd(shown===null?0:shown)+'</span>':'<span class="skel"></span>')+'</div><div class="sm daychg">'+(BL&&S.prices&&S.prices.at?'<span class="'+(chg>=0?"ok":"bad")+'">'+(Math.abs(chg)<0.01?(chg>=0?"+":"−")+"$0.00":(chg>=0?"+":"−")+fmtUsd(Math.abs(chg)))+' ('+(chg>=0?"+":"")+(chgPct*100).toFixed(2)+'%)</span><span class="mut"> '+esc(dayLabel())+'</span>':'<span class="mut">Prices loading…</span>')+'</div></div>'+runBox()+'</div>'+
-walletActions()+askBar()+bkBanner()+'<h3>Today</h3>'+lim("Trading",sp.trades_usd,p.daily_trades_usd)+lim("Paying for tools",sp.payments_usd,p.daily_payments_usd)+
+return apStale()+'<div class="balrow"><div class="balcol"><div class="mut sm">'+(NETF?"Total on "+esc(CHAIN_NAMES[NETF]||NETF):"Total balance")+'</div><div class="big">'+(BL?'<span id="tot" data-v="'+tot+'">'+fmtUsd(shown===null?0:shown)+'</span>':'<span class="skel"></span>')+'</div><div class="sm daychg">'+(BL&&S.prices&&S.prices.at?'<span class="'+(chg>=0?"ok":"bad")+'">'+(Math.abs(chg)<0.01?(chg>=0?"+":"−")+"$0.00":(chg>=0?"+":"−")+fmtUsd(Math.abs(chg)))+' ('+(chg>=0?"+":"")+(chgPct*100).toFixed(2)+'%)</span><span class="mut"> '+esc(dayLabel())+'</span>':'<span class="mut">Prices loading…</span>')+'</div></div></div>'+
+walletActions()+runBox()+bkBanner()+'<h3>Today</h3>'+lim("Trading",sp.trades_usd,p.daily_trades_usd)+lim("Paying for tools",sp.payments_usd,p.daily_payments_usd)+
 homeTabs()+(HT==="live"?liveSection():HT==="trades"?tradesTab():HT==="deposit"?depositTab():
 '<div class="balh">'+netPick()+'</div>'+(rows||(BL&&NETF?'<div class="mut sm">Nothing on '+esc(CHAIN_NAMES[NETF]||NETF)+' yet.</div>':'<div class="mut">Loading…</div>'))+holdFoot())}
 // Home's tabs, MetaMask-style. Remembered in this browser only.
@@ -1642,7 +1647,7 @@ function devRows(){var d=S.devices;if(!d)return "";
 // 0.9.8: a small Sync status in the top bar, only while Sync my devices is on. Tap: Settings, where the devices are listed.
 function syncHd(){var el=document.getElementById("synhd");if(!el)return;var d=S&&S.devices;
 // 0.9.9: always shown; ghosted when this device isn't synced (sync off, a sync problem, or no sync for 5 minutes).
-if(!d||!d.on){var off='<i aria-hidden="true"></i>Synced';if(el.innerHTML!==off)el.innerHTML=off;el.className="synchip ghost";el.title="Not synced. Sync my devices is off; turn it on in Settings.";el.setAttribute("aria-label","Not synced. Sync my devices is off.");el.hidden=false;return}
+if(!d||!d.on){var off='<i aria-hidden="true"></i>Not synced';if(el.innerHTML!==off)el.innerHTML=off;el.className="synchip ghost";el.title="Not synced. Sync my devices is off; turn it on in Settings.";el.setAttribute("aria-label","Not synced. Sync my devices is off.");el.hidden=false;return}
  var n=(d.devices||[]).length,stale=!DSB&&!d.last_error&&(!d.last_sync||Date.now()-Date.parse(d.last_sync)>5*60000),st=d.last_error?"bad ghost":DSB?"busy":stale?"ghost":"ok";
  var tx=st==="bad ghost"?"Not synced: sync problem":st==="busy"?"Syncing":st==="ghost"?"Not synced lately":"Synced";
  var tip=st==="bad ghost"?d.last_error:st==="ghost"?"No sync in the last 5 minutes"+(d.last_sync?" (last "+ago(d.last_sync)+")":"")+". It tries again every minute while the app is open.":"Bots, history and Autopilot match on "+n+" device"+(n===1?"":"s")+". "+(d.runs_here?"Your bots run on this device.":"Your bots run on "+devRunner(d)+".")+(d.last_sync?" Last synced "+ago(d.last_sync)+".":"");
