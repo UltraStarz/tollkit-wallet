@@ -611,6 +611,18 @@ button.b:hover,.aib:hover{background:var(--tkblue-hi)!important}
 /* compact: two columns of one-line rows (light, name, state); the heading says how much is on at a glance */
 .rbx{display:grid;grid-template-columns:1fr 1fr;column-gap:18px;row-gap:0;margin:16px 0 4px}.rbx-h{grid-column:1/-1;display:flex;justify-content:space-between;align-items:baseline;padding:0 2px 2px}.rbx-h span{text-transform:none;letter-spacing:0;font-weight:600;font-size:11.5px}.rbx-h .acc{color:var(--acc)}
 .rbx-r{flex-direction:row;justify-content:space-between;align-items:center;text-align:left;padding:6px 2px;border-radius:0;border:0}.rbx-v{text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+/* 0.9.9: Autopilot's intro and setup are flat too: no grey boxes or borders, hairlines between sections, choices
+   and source chips with their text centered; the picked one is blue */
+.ap-step{background:none;border:0;border-radius:0;padding:6px 0}
+.sbs{background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:14px 2px 10px;margin-top:6px}
+.sbn{background:none;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:6px 2px}.sbn:focus-within{border-bottom-color:var(--acc)}
+.sbn-st button{border:0;background:none;color:var(--mut);font-size:17px;width:26px;height:26px}.sbn-st button:hover{color:var(--acc)}
+.sbp button{align-items:center;text-align:center;background:none;border:0;border-radius:0;border-bottom:2px solid transparent;padding:8px 4px}.sbp button:hover{border-color:transparent}
+.sbp button.on{background:none;box-shadow:none;border-bottom-color:var(--tkblue)}.sbp button.on b{color:var(--tkblue)}
+.sbchip{justify-content:center;text-align:center;border:0;background:none;padding:6px 10px}.sbchip.on{background:none;color:var(--tkblue)}
+.sbseg{background:none;border:0}
+.sbtok input{background:none;border:0;border-bottom:1px solid var(--line);border-radius:0}
+.sbtc,.sbtc.on{background:none;border:0;justify-content:center}.sbtc.on{color:var(--tkblue)}.sbtc.add{color:var(--tkblue)}.ap-pill.off{background:none}
 /* 0.9.9: room between buttons that sit side by side */
 .btns{display:flex;flex-wrap:wrap;gap:10px}.ap .btns{display:grid;gap:10px}.wact{gap:8px}.ap-acts{gap:10px}.tplbtns{gap:10px}
 </style></head><body>
