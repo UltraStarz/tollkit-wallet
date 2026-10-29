@@ -610,7 +610,7 @@ button.b:hover,.aib:hover{background:var(--tkblue-hi)!important}
 .rbx-r{padding:6px 2px;gap:4px}
 /* compact: two columns of one-line rows (light, name, state); the heading says how much is on at a glance */
 .rbx{display:grid;grid-template-columns:1fr 1fr;column-gap:18px;row-gap:0;margin:16px 0 4px}.rbx-h{grid-column:1/-1;display:flex;justify-content:space-between;align-items:baseline;padding:0 2px 2px}.rbx-h span{text-transform:none;letter-spacing:0;font-weight:600;font-size:11.5px}.rbx-h .acc{color:var(--acc)}
-.rbx-r{flex-direction:row;justify-content:space-between;align-items:center;text-align:left;padding:7px 2px;border-radius:0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}.rbx-v{text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.rbx-r{flex-direction:row;justify-content:space-between;align-items:center;text-align:left;padding:6px 2px;border-radius:0;border:0}.rbx-v{text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 /* 0.9.9: room between buttons that sit side by side */
 .btns{display:flex;flex-wrap:wrap;gap:10px}.ap .btns{display:grid;gap:10px}.wact{gap:8px}.ap-acts{gap:10px}.tplbtns{gap:10px}
 </style></head><body>
