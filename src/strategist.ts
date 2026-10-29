@@ -7,7 +7,7 @@
 export const SUPERBOT_STEP = {
   maxInputChars: 24_000,
   maxActions: 3,
-  templates: ["dca", "dip", "protect", "trail", "ladder", "grid"],
+  templates: ["dca", "dip", "protect", "trail", "ladder", "grid", "signal"],
   views: ["risk_on", "risk_off", "neutral"],
   actions: ["keep", "adjust", "pause", "resume", "retire", "propose"],
 };
@@ -23,6 +23,7 @@ What a strategy is: one of the wallet's bot templates on one token on one networ
 - trail: trailing stop trail_pct below the high, selling sell_percent of the holding.
 - ladder: sells 25%, then 33%, then the rest at step1 < step2 < step3 percent gains.
 - grid: buys amount_usd at each of levels prices across range_pct around today's price and sells each a level higher. Best when prices move sideways.
+- signal: buys amount_usd (side: "buy") or sells sell_pct of the holding (side: "sell") when a momentum signal fires on the hourly or 4-hour chart (tf: "1h"|"4h"): signal "rsi_below"/"rsi_above" (level: the RSI level, 0 = 30/70), "macd_up"/"macd_down" (MACD crossing its signal line), "breakout_up"/"breakout_down" (level: candles back, 0 = 20); times: how often. Use it when a signal in the snapshot backs a timed entry or exit, not as a default.
 The owner's own rules (owner_rules, when present) trade on the same wallet. The wallet keeps the coins apart: your strategies only ever sell what they bought, and the owner's rules only sell the rest. Still, don't work against them: don't propose buying a token on a network where the owner has a stop or a sell target waiting, and don't propose protect or trail on a token the owner already protects. Pick another token, or keep, and if an owner rule is why you held back, say so in the reason.
 
 New strategies always start on paper (pretend trades at live quotes) and are only promoted to live money by the wallet's own rule: after the paper period, if they beat holding USDC after fees. You can't promote anything yourself.

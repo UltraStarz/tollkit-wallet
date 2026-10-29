@@ -110,6 +110,8 @@ export function botLevels(rs: Rule[]): Level[] {
       if (high) out.push({ price: high * (1 - r.trail_pct / 100), kind: "stop", label: `Trailing stop (−${r.trail_pct}% from the high)`, live });
     } else if (r.kind === "grid" && r.lower_price && r.upper_price && r.levels) {
       gridLevels(r).forEach((p, i) => out.push({ price: p, kind: "grid", label: i === 0 ? "Grid bottom" : i === r.levels! - 1 ? "Grid top" : `Grid level ${i + 1}`, live }));
+    } else if (r.kind === "range" && r.state.range?.lower && r.state.range?.upper && r.state.range.mint) {
+      out.push({ price: r.state.range.upper, kind: "grid", label: "Range top", live }, { price: r.state.range.lower, kind: "grid", label: "Range bottom", live });
     } else if (r.kind === "dca" && r.max_price) out.push({ price: r.max_price, kind: "cap", label: "Skips buys above", live });
     else for (const m of botMarks(r)) out.push({ ...m, live });
   }
@@ -158,6 +160,11 @@ export function botNext(rs: Rule[], price: number | null, now = Date.now()): Nex
       const buys = L.slice(0, -1).filter((p, i) => (g?.atomic?.[i] ?? null) === null && p <= price);
       if (sells.length) { const p = Math.min(...sells); moves.push({ text: `Sells a level at ${fmt(p)}`, price: p, dist_pct: dist(p) }); }
       if (buys.length) { const p = Math.max(...buys); moves.push({ text: `Buys a level at ${fmt(p)}`, price: p, dist_pct: dist(p) }); }
+    } else if (r.kind === "range") {
+      const g = r.state.range;
+      if (!g?.mint) moves.push({ text: `Puts ${fmt(r.amount_usd ?? 0)} into Orca's SOL/USDC pool`, at: new Date(now).toISOString() });
+      else if (g.out_since) moves.push({ text: "Moves to a new range around the price", at: new Date(Date.parse(g.out_since) + (r.recenter_min ?? 30) * 60_000).toISOString() });
+      else if (price && g.lower && g.upper) { const p = price - g.lower < g.upper - price ? g.lower : g.upper; moves.push({ text: `Earns fees until SOL leaves ${fmt(g.lower)}–${fmt(g.upper)}`, price: p, dist_pct: dist(p) }); }
     } else if (r.kind === "twap") {
       const b = r.state.bot ?? {}, n = r.pieces ?? 1, part = r.side === "sell" ? "Sells" : `Buys ${fmt((r.amount_usd ?? 0) / n)}`;
       moves.push({ text: `${part}: part ${(b.pieces ?? 0) + 1} of ${n}`, at: b.next_at ? new Date(b.next_at).toISOString() : new Date(now).toISOString() });
@@ -217,6 +224,7 @@ const FEE = 0.005;
  * hold (protect, trailing stop, ladder), the holding to start with.
  */
 export async function replay(o: { template: string; chain: Chain; token: string; params: Record<string, unknown>; days?: number; hold_usd?: number; fetch?: typeof fetch; now?: number }): Promise<ReplayResult> {
+  if (o.template === "range") throw new Error("Replays don't cover the Range bot yet: its result depends on the pool's fees, which this replay can't see.");
   const product = coinbaseProduct(o.token);
   if (!product) throw new Error("Replays use Coinbase's price history, which has ETH, SOL and POL. This token isn't on it.");
   const days = Math.min(30, Math.max(3, o.days ?? 30));

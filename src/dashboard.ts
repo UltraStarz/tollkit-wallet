@@ -89,7 +89,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   let superbot: SuperBot | null = null;
   // 0.9.7: Sync my devices (src/devsync.ts). Another device runs the bots: this one shows them but doesn't trade.
   const devs = w.sync(), runsHere = () => devs.runsHere();
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => !runsHere() || w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().handedOff(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => !devs.mayTrade() || w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().handedOff(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
     // 0.9.1: alerts reach Telegram when it's linked (the screen shows them on the rule card and as a toast).
     onEvent: (e) => { if (e.type !== "alert") return; const t = loadTelegram(w.dir); if (t) void notify(t, `TOLLkit alert: ${e.detail}`).catch(() => {}); } }) : null;
   autopilot?.start();
@@ -376,6 +376,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         const rs = w.rules().list().filter((r) => (r.bot ?? `rule-${r.id}`) === id && !["done", "cancelled", "expired"].includes(r.status));
         if (!rs.length) return send(res, 400, { error: "That bot has nothing left to change." });
         for (const r of rs) await w.rules().setStatus(r.id, st as "active" | "paused" | "cancelled");
+        // 0.9.9: on an Autopilot bot, the owner's Stop stops the strategy for good and Pause holds it (never rebuilt).
+        if (rs.some((r) => r.by === "superbot")) { if (st === "cancelled") await superbot?.ownerStoppedBot(id).catch(() => {}); else await superbot?.ownerHold(id, st === "paused").catch(() => {}); }
         void autopilot?.tick(); void alwaysSync();
         return send(res, 200, { ok: true });
       }
@@ -465,6 +467,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           // 0.9.8: the owner's Go live on a strategy that passed its paper trial.
           if (action === "go_live") return send(res, 200, { superbot: await superbot.goLive(b.id) });
           if (action === "dismiss") return send(res, 200, { superbot: await superbot.dismiss(b.id) });
+          // 0.9.9: Stop any strategy for good, or Remove it from the list.
+          if (action === "stop") return send(res, 200, { superbot: await superbot.stopStrategy(b.id) });
+          if (action === "remove") return send(res, 200, { superbot: await superbot.removeStrategy(b.id) });
           if (action === "x_hide") return send(res, 200, { superbot: await superbot.xHide(b.address, true) });
           if (action === "x_unhide") return send(res, 200, { superbot: await superbot.xHide(null, false) });
           if (action === "cycle") { await superbot.cycle(true); return send(res, 200, { superbot: superbot.view() }); }

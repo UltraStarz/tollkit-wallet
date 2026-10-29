@@ -18,12 +18,15 @@ import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
 import { botProblem, type BotState } from "./botlogic.js";
 
-export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid", "alert", "smart_dca", "rebalance", "infinity_grid", "twap"] as const;
+export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid", "alert", "smart_dca", "rebalance", "infinity_grid", "twap", "signal_buy", "signal_sell", "range"] as const;
+/** 0.9.9: momentum signals a signal_buy / signal_sell rule waits for (src/indicators.ts checkSignal). */
+export const SIGNALS = ["rsi_below", "rsi_above", "macd_up", "macd_down", "breakout_up", "breakout_down"] as const;
+export type Signal = (typeof SIGNALS)[number];
 /** 0.9.1: what an alert watches. Alerts only notify; they never trade. Indicators use hourly prices. */
 export const ALERT_TYPES = ["above", "below", "move", "rsi_high", "rsi_low", "ma_up", "ma_down"] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export type RuleKind = (typeof RULE_KINDS)[number];
-export const BUY_KINDS: RuleKind[] = ["limit_buy", "dca"];
+export const BUY_KINDS: RuleKind[] = ["limit_buy", "dca", "signal_buy"];
 
 /** Grid price levels, lowest first. */
 /** 0.9.6: 0.2% kept per round trip + 0.25% bot fee on the buy and on the sell. */
@@ -90,6 +93,13 @@ export const RuleInput = z.object({
   side: z.enum(["buy", "sell"]).optional(),
   pieces: z.number().int().min(2).max(100).optional(),
   hours: z.number().min(0.25).max(168).optional(),
+  /** 0.9.9, signal_buy / signal_sell: trade when a momentum signal fires on hourly or 4-hour closes. value: the RSI
+   *  level (default 30 / 70) or, for a breakout, how many candles back (default 20). times: how often (default 1). */
+  when: z.object({ signal: z.enum(SIGNALS), tf: z.enum(["1h", "4h"]).optional(), value: z.number().positive().max(200).optional() }).optional(),
+  /** 0.9.9, range (Orca SOL/USDC, src/orca.ts): put amount_usd into the pool between ±range_pct of today's price; after
+   *  recenter_min minutes out of range, take it out and open a new range around the price then. Runs on this device only. */
+  range_pct: z.number().min(1).max(50).optional(),
+  recenter_min: z.number().int().min(5).max(1440).optional(),
 });
 export type RuleInput = z.infer<typeof RuleInput>;
 
@@ -125,6 +135,10 @@ export interface Rule extends RuleInput {
     bought_atomic?: string;
     /** Grid: units bought at each level that are waiting to be sold one level up, and what they cost. */
     grid?: { units: (number | null)[]; cost: (number | null)[]; atomic: (string | null)[] };
+    /** 0.9.9, Range bot: the open Orca position (its token's mint), its range, and how it's doing. `liq` is the paper
+     *  position's liquidity (paper only). out_since: when the price left the range. */
+    range?: { mint?: string; lower_tick?: number; upper_tick?: number; lower?: number; upper?: number; opened_at?: string; out_since?: string;
+      in_range?: boolean; value_usd?: number; sol?: number; usdc?: number; fees_usd?: number; recenters?: number; liq?: string; deposited_usd?: number; phase?: "opening" | "closing"; staged?: boolean };
     /** Grid: completed buy-then-sell round trips and their profit. */
     round_trips?: number; grid_profit_usd?: number;
     /** 0.9.3: Smart DCA, rebalancer, infinity grid and split orders (src/botlogic.ts). */
@@ -155,6 +169,15 @@ export function describeRule(r: RuleInput): string {
     case "rebalance": return `Rebalance ${$(r.amount_usd)} to ${r.target_pct}% ${t} / ${100 - (r.target_pct ?? 0)}% USDC whenever it drifts ${r.band_pct} points${on}`;
     case "infinity_grid": return `Infinity grid: keep ${$(r.amount_usd)} of ${t}, selling the extra every ${r.step_pct}% up and buying back every ${r.step_pct}% down${r.lower_price ? ` (no buys under ${$(r.lower_price)})` : ""}${on}`;
     case "twap": return r.side === "sell" ? `Split sell: ${sell} in ${r.pieces} parts over ${r.hours} ${r.hours === 1 ? "hour" : "hours"}${on}` : `Split buy: ${$(r.amount_usd)} of ${t} in ${r.pieces} parts over ${r.hours} ${r.hours === 1 ? "hour" : "hours"}${on}`;
+    case "signal_buy": case "signal_sell": {
+      const w = r.when, tf = w?.tf === "4h" ? "4-hour" : "hourly", v = w?.value;
+      const sig = !w ? "?" : w.signal === "rsi_below" ? `${tf} RSI falls below ${v ?? 30}` : w.signal === "rsi_above" ? `${tf} RSI rises above ${v ?? 70}`
+        : w.signal === "macd_up" ? `${tf} MACD crosses above its signal line` : w.signal === "macd_down" ? `${tf} MACD crosses below its signal line`
+        : w.signal === "breakout_up" ? `the price breaks above its highest ${tf} close of the last ${v ?? 20}` : `the price breaks below its lowest ${tf} close of the last ${v ?? 20}`;
+      const n = r.times && r.times > 1 ? ` (up to ${r.times} times)` : "";
+      return r.kind === "signal_buy" ? `Buy ${$(r.amount_usd)} of ${t} when ${sig}${n}${on}` : `Sell ${sell} when ${sig}${n}${on}`;
+    }
+    case "range": return `Range bot: put ${$(r.amount_usd)} into Orca's SOL/USDC pool between ${r.range_pct ?? "?"}% below and above today's price, earning its trading fees; after ${r.recenter_min ?? 30} minutes outside the range, move it to a new range around the price`;
     case "grid": return `Grid: buy ${$(r.amount_usd)} of ${t} at each of ${r.levels ?? "?"} levels from ${$(r.lower_price)} to ${$(r.upper_price)}, and sell each one a level higher${on}`;
     case "dca": {
       const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -166,6 +189,13 @@ export function describeRule(r: RuleInput): string {
 
 /** Checks that the fields a kind needs are there. Returns a reason, or null. */
 export function ruleProblem(r: RuleInput): string | null {
+  if (r.kind === "range") {
+    if (r.chain !== "solana" || !/^(SOL|So11111111111111111111111111111111111111112)$/i.test(r.token)) return "The Range bot runs on Orca's SOL/USDC pool only: chain solana, token SOL.";
+    if (!r.amount_usd || r.amount_usd < 20) return "A Range bot needs amount_usd of at least $20.";
+    if (!r.range_pct) return "A Range bot needs range_pct: how far either side of today's price (1 to 50%).";
+    if (r.sell_percent || r.sell_amount || r.trigger_price || r.every) return "A Range bot takes amount_usd, range_pct and recenter_min only.";
+    return null;
+  }
   if (r.kind === "alert") {
     if (!r.alert) return "An alert needs what to watch (alert: above, below, move, rsi_high, rsi_low, ma_up or ma_down).";
     if ((r.alert === "above" || r.alert === "below") && !r.trigger_price) return "A price alert needs trigger_price.";
@@ -174,6 +204,19 @@ export function ruleProblem(r: RuleInput): string | null {
     if (r.alert === "rsi_low" && r.alert_value !== undefined && (r.alert_value < 5 || r.alert_value > 50)) return "An oversold RSI level is between 5 and 50 (usually 30).";
     if (r.amount_usd || r.sell_percent || r.sell_amount) return "Alerts never trade, so they take no amounts.";
     if (/^(USDC|USDT)$/i.test(r.token)) return "Pick a token that moves; stablecoins stay near $1.";
+    return null;
+  }
+  if (r.kind === "signal_buy" || r.kind === "signal_sell") {
+    if (!r.when) return "A signal rule needs when: the signal to wait for (rsi_below, rsi_above, macd_up, macd_down, breakout_up or breakout_down).";
+    const v = r.when.value, sg = r.when.signal;
+    if (sg === "rsi_below" && v !== undefined && (v < 5 || v > 50)) return "An oversold RSI level is between 5 and 50 (usually 30).";
+    if (sg === "rsi_above" && v !== undefined && (v < 50 || v > 95)) return "An overbought RSI level is between 50 and 95 (usually 70).";
+    if (sg.startsWith("breakout") && v !== undefined && (!Number.isInteger(v) || v < 5 || v > 100)) return "A breakout looks back 5 to 100 candles (usually 20).";
+    if (r.kind === "signal_buy" && !r.amount_usd) return "A signal buy needs amount_usd (dollars to spend).";
+    if (r.kind === "signal_sell" && r.sell_percent === undefined && r.sell_amount === undefined) return "A signal sell needs sell_percent or sell_amount.";
+    if (r.kind === "signal_sell" && r.sell_percent !== undefined && r.sell_amount !== undefined) return "Use sell_percent or sell_amount, not both.";
+    if (r.every) return "Signal rules don't take a schedule.";
+    if (/^(USDC|USDT)$/i.test(r.token)) return "Rules trade an asset against USDC; the token can't be a stablecoin.";
     return null;
   }
   if (["smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind)) {
@@ -199,7 +242,7 @@ export function ruleProblem(r: RuleInput): string | null {
   if (["limit_buy", "limit_sell", "stop_loss", "take_profit"].includes(r.kind) && !r.trigger_price) return `A ${r.kind.replace("_", " ")} needs trigger_price.`;
   if (r.kind === "trailing_stop" && !r.trail_pct) return "A trailing stop needs trail_pct.";
   if (r.kind === "dca" && !r.every) return "A recurring buy needs every (hour, day or week).";
-  if (r.kind !== "dca" && (r.every || r.times)) return "Only recurring buys (dca) take every/times.";
+  if (r.kind !== "dca" && (r.every || r.times)) return "Only recurring buys (dca) and signal rules take every/times.";
   if (/^(USDC|USDT)$/i.test(r.token)) return "Rules trade an asset against USDC; the token can't be a stablecoin.";
   if (r.expires_at && Date.parse(r.expires_at) <= Date.now()) return "expires_at is in the past.";
   return null;

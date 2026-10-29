@@ -385,5 +385,39 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   check(after.stage === "retired" && /Trending on X finished/.test(after.history.at(-1).note), "with no winning trades, after twice the paper period it's retired, never moved to live money", after.history.at(-1));
 }
 
+// ─── 0.9.9: the owner stops, pauses and removes strategies; Autopilot never brings them back ──────
+{
+  const prop = { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 20, drop_pct: 5, profit_pct: 8 }, reason: "Flat market.", sources: ["ETH +0.1%"] }] };
+  const keep = { assessment: "Quiet.", market_view: "neutral", confidence: 0.3, actions: [{ type: "keep", reason: "Quiet.", sources: [] }] };
+  const mk = async () => { let n = 0; const W = world({ decision: () => (n++ === 0 ? prop : keep) }); await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], pace: "active", rethink_minutes: 15 }); await new Promise((r) => setTimeout(r, 30)); W.setSignals(() => ({ id: "same", at: "x", changes: { moved: false } })); return W; };
+
+  // Stop from the Autopilot page.
+  const A = await mk(); const st = A.bot.view().strategies[0]!;
+  await A.bot.stopStrategy(st.id);
+  const a1 = A.bot.view().strategies[0]!;
+  check(a1.stage === "retired" && a1.stopped_by_owner === true && A.store.list().every((r) => r.status !== "active"), "Stop: retired, its rules cancelled, marked as stopped by you", a1);
+  check(A.bot.view().decisions.some((d: any) => /You stopped it/.test(d.assessment)), "and the decision list says so");
+  A.advance(48 * 3_600_000); await A.bot.tick();
+  check(A.store.list().every((r) => r.status !== "active") && A.bot.view().strategies[0]!.stage === "retired", "two idle days later Active pace doesn't rebuild it");
+  await A.bot.removeStrategy(st.id);
+  check(A.bot.view().strategies.length === 0 && A.store.list().filter((r: any) => !r.archived).length === 0, "Remove: off the list, its stopped rules tidied away");
+
+  // Stopped on the Bots screen (rules cancelled there, before 0.9.9 knew about it).
+  const B = await mk(); const sb = B.bot.view().strategies[0]!;
+  for (const r of B.store.list().filter((x) => x.bot === sb.bot)) await B.store.setStatus(r.id, "cancelled");
+  B.advance(48 * 3_600_000); await B.bot.tick();
+  const b1 = B.bot.view().strategies[0]!;
+  check(b1.stage === "retired" && b1.stopped_by_owner === true && B.store.list().every((r) => r.status !== "active"), "a bot stopped on the Bots screen is noticed and stays stopped (not rebuilt)", b1);
+
+  // Paused on the Bots screen: Autopilot leaves it alone until the owner resumes it.
+  const C = await mk(); const sc = C.bot.view().strategies[0]!;
+  for (const r of C.store.list().filter((x) => x.bot === sc.bot)) await C.store.setStatus(r.id, "paused");
+  await C.bot.ownerHold(sc.bot!, true);
+  C.advance(48 * 3_600_000); await C.bot.tick();
+  const c1 = C.bot.view().strategies[0]!;
+  check(c1.params.drop_pct === 5 && c1.bot === sc.bot && c1.stage === "paper" && C.store.list().filter((r) => r.bot === sc.bot).every((r) => r.status === "paused"), "an owner-paused bot isn't tightened or restarted", c1.params);
+  check(/owner paused it/.test(String((await (C.bot as any).apply({ type: "adjust", strategy_id: sc.id, params: { drop_pct: 2 }, reason: "x", sources: [] }))?.outcome)), "and the AI can't adjust it either");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

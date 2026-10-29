@@ -39,6 +39,19 @@ export const TEMPLATES: Template[] = [
   { id: "twap", name: "Split order", blurb: "Buys or sells a large amount in equal parts spread over time, so one big trade doesn't move the price against you.", risk: "The price can move while the parts are filling.",
     fields: [{ key: "side", label: "Buy or sell", kind: "choice", default: "buy", choices: [["buy", "Buy"], ["sell", "Sell"]] }, { key: "amount_usd", label: "Dollars to buy", kind: "usd", default: 100, min: 2 }, { key: "sell_percent", label: "Share of your holding to sell (%)", kind: "pct", default: 50, min: 1, max: 100 },
       { key: "pieces", label: "Parts", kind: "int", default: 10, min: 2, max: 100 }, { key: "hours", label: "Over how many hours", kind: "int", default: 5, min: 1, max: 168 }] },
+  { id: "signal", name: "Trade on a signal", blurb: "Buys or sells when a momentum signal fires: RSI oversold or overbought, a MACD cross, or a breakout above (or below) recent prices.", risk: "Signals are often wrong: an oversold coin can keep falling and a breakout can reverse. On Solana it can run 24/7 on TOLLkit's server; elsewhere it runs while the wallet app is open.",
+    fields: [{ key: "side", label: "Do this", kind: "choice", default: "buy", choices: [["buy", "Buy"], ["sell", "Sell"]] },
+      { key: "signal", label: "When", kind: "choice", default: "rsi_below", choices: [["rsi_below", "RSI falls below a level (oversold)"], ["rsi_above", "RSI rises above a level (overbought)"], ["macd_up", "MACD crosses up (momentum turning up)"], ["macd_down", "MACD crosses down (momentum turning down)"], ["breakout_up", "Price breaks above its recent high"], ["breakout_down", "Price breaks below its recent low"]] },
+      { key: "tf", label: "Chart", kind: "choice", default: "1h", choices: [["1h", "Hourly"], ["4h", "4-hour"]] },
+      { key: "level", label: "RSI level, or candles back for a breakout (0 = usual: 30, 70 or 20)", kind: "int", default: 0, min: 0, max: 100 },
+      { key: "amount_usd", label: "Buy: dollars each time", kind: "usd", default: 20, min: 1, max: 100000 },
+      { key: "sell_pct", label: "Sell: % of what you hold", kind: "pct", default: 50, min: 1, max: 100 },
+      { key: "times", label: "How many times", kind: "int", default: 1, min: 1, max: 50 }] },
+  { id: "range", name: "Range bot", blurb: "Puts your dollars into Orca's SOL/USDC pool, between a low and a high price around today's. While SOL trades inside that range, you earn a share of the pool's trading fees. If the price leaves the range for a while, it takes everything out and opens a new range around the new price. The swaps it makes pay the 0.25% TOLLkit bot fee.",
+    risk: "If SOL moves a lot, you can end up with less than if you had just held (impermanent loss), and each re-center locks that in and pays swap fees. Fees earned aren't guaranteed. Runs on this device only, while the wallet app is open.",
+    fields: [{ key: "amount_usd", label: "Dollars to put in (USDC)", kind: "usd", default: 100, min: 20, max: 100000 },
+      { key: "range_pct", label: "Range around today's price (± %)", kind: "pct", default: 5, min: 1, max: 50 },
+      { key: "recenter_min", label: "Re-center after this many minutes outside", kind: "int", default: 30, min: 5, max: 1440 }] },
   { id: "alert", name: "Alert", blurb: "Tells you when the price crosses a level, moves a lot in a day, or an indicator (RSI, 50-hour average) flips. Never trades.", risk: "Only a notification: nothing is bought or sold. Works while the wallet app is running.",
     fields: [{ key: "condition", label: "Tell me when", kind: "choice", default: "above", choices: [["above", "It goes above a price"], ["below", "It falls below a price"], ["move", "It moves a lot in a day"], ["rsi_high", "It looks overbought (RSI over 70)"], ["rsi_low", "It looks oversold (RSI under 30)"], ["ma_up", "It crosses above its 50-hour average"], ["ma_down", "It crosses below its 50-hour average"]] },
       { key: "pct", label: "How far (%): from today's price, or the day's move", kind: "pct", default: 5, min: 0.5, max: 50 }] },
@@ -58,7 +71,7 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
     if (!Number.isFinite(n) || (f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max) || (f.kind === "int" && !Number.isInteger(n))) throw new Error(`${f.label}: ${f.min !== undefined ? `from ${f.min}` : ""}${f.max !== undefined ? ` to ${f.max}` : ""}.`);
     v[f.key] = n;
   }
-  const needsPrice = !["dca", "smart_dca", "rebalance", "twap"].includes(templateId);
+  const needsPrice = !["dca", "smart_dca", "rebalance", "twap", "range"].includes(templateId);
   if (needsPrice && !(price && price > 0)) throw new Error("No price for this token right now, so the bot's levels can't be set. Try again in a minute.");
   const bot = randomUUID().slice(0, 8), T = token.length > 12 ? `${token.slice(0, 4)}…` : token.toUpperCase();
   const name = `${tpl.name} · ${T}`;
@@ -96,6 +109,14 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
     case "rebalance": rules = [{ ...base, kind: "rebalance", amount_usd: n("amount_usd"), target_pct: n("target_pct"), band_pct: n("band_pct") }]; break;
     case "infinity_grid": rules = [{ ...base, kind: "infinity_grid", amount_usd: n("amount_usd"), step_pct: n("step_pct"), lower_price: round(p * (1 - n("floor_pct") / 100)) }]; break;
     case "twap": rules = [v.side === "sell" ? { ...base, kind: "twap", side: "sell", sell_percent: n("sell_percent"), pieces: n("pieces"), hours: n("hours") } : { ...base, kind: "twap", side: "buy", amount_usd: n("amount_usd"), pieces: n("pieces"), hours: n("hours") }]; break;
+    case "signal": {
+      const lvl = n("level"), sg = v.signal as any, buy = v.side !== "sell";
+      const when = { signal: sg, tf: v.tf === "4h" ? "4h" as const : "1h" as const, ...(lvl > 0 ? { value: lvl } : {}) };
+      rules = [buy ? { ...base, kind: "signal_buy", amount_usd: n("amount_usd"), when, ...(n("times") > 1 ? { times: n("times") } : {}) }
+        : { ...base, kind: "signal_sell", sell_percent: n("sell_pct"), when, ...(n("times") > 1 ? { times: n("times") } : {}) }];
+      break;
+    }
+    case "range": rules = [{ ...base, kind: "range", amount_usd: n("amount_usd"), range_pct: n("range_pct"), recenter_min: n("recenter_min") }]; break;
     case "alert": {
       const c = v.condition as string, pct = n("pct");
       rules = [{ ...base, kind: "alert", alert: c as any, ...(c === "above" ? { trigger_price: round(p * (1 + pct / 100)) } : c === "below" ? { trigger_price: round(p * (1 - pct / 100)) } : c === "move" ? { alert_value: pct } : {}) }];
@@ -116,6 +137,8 @@ export interface BotSummary {
   /** received + value now − spent, when the bot bought something. */
   result_usd: number | null; result_pct: number | null;
   round_trips: number; last_trade: string | null; last_price: number | null; started: string;
+  /** 0.9.9: a Range bot's position. */
+  range?: { in_range: boolean | null; lower: number | null; upper: number | null; value_usd: number | null; fees_usd: number; recenters: number; out_since: string | null; open: boolean };
 }
 
 /** Status board: rules grouped into bots (a rule made by hand is a bot of one). */
@@ -131,15 +154,23 @@ export function summarize(rules: Rule[]): BotSummary[] {
     const price = rs.map((r) => r.state.last_price).find((x) => typeof x === "number") ?? null;
     const value = price !== null ? held * price : null;
     const st = rs.map((r) => r.status);
-    const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => ["grid", "dca", "smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind)) ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
+    const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => ["grid", "dca", "smart_dca", "rebalance", "infinity_grid", "twap", "range"].includes(r.kind)) ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
     const last = rs.flatMap((r) => r.state.fills.filter((x) => x.ok).map((x) => x.ts)).sort().at(-1) ?? null;
-    const result = spent > 0 && value !== null ? got + value - spent : spent > 0 && held === 0 ? got - spent : null;
+    let result = spent > 0 && value !== null ? got + value - spent : spent > 0 && held === 0 ? got - spent : null;
+    // 0.9.9: a Range bot: what its position (or the coins between ranges) is worth now, against what went in.
+    const rg = rs.find((r) => r.kind === "range")?.state.range;
+    let rangeValue: number | null = null;
+    if (rg?.deposited_usd) {
+      rangeValue = rg.mint ? rg.value_usd ?? null : rg.staged && price !== null ? (rg.sol ?? 0) * price + (rg.usdc ?? 0) : null;
+      result = rangeValue !== null ? rangeValue - rg.deposited_usd : null;
+    }
     out.push({
       id, name: rs[0]!.bot_name ?? describeRule(rs[0]!), template: rs[0]!.template ?? null, chain: rs[0]!.chain, token: rs[0]!.token, status,
       rules: rs.map((r) => ({ id: r.id, description: describeRule(r), status: r.status, ...(r.state.last_error ? { last_error: r.state.last_error } : {}) })),
       trades_ok: ok, trades_failed: bad, success_rate: ok + bad ? Math.round((ok / (ok + bad)) * 1000) / 10 : null,
       spent_usd: Math.round(spent * 100) / 100, received_usd: Math.round(got * 100) / 100, units_held: held, value_now_usd: value === null ? null : Math.round(value * 100) / 100,
-      result_usd: result === null ? null : Math.round(result * 100) / 100, result_pct: result === null ? null : Math.round((result / spent) * 1000) / 10,
+      result_usd: result === null ? null : Math.round(result * 100) / 100, result_pct: result === null ? null : Math.round((result / (rg?.deposited_usd || spent)) * 1000) / 10,
+      ...(rg ? { range: { in_range: rg.in_range ?? null, lower: rg.lower ?? null, upper: rg.upper ?? null, value_usd: rangeValue, fees_usd: rg.fees_usd ?? 0, recenters: rg.recenters ?? 0, out_since: rg.out_since ?? null, open: !!rg.mint } } : {}),
       round_trips: s((r) => r.state.round_trips), last_trade: last, last_price: price, started: rs.map((r) => r.created_at).sort()[0]!,
     });
   }

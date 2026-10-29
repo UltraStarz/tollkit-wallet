@@ -44,6 +44,19 @@ export function sellableFor(r: Rule, bal: bigint, rules: Rule[], tok: { symbol: 
   return bal > ap ? bal - ap : 0n;
 }
 
+/**
+ * 0.9.9: units the owner's own bots (grid, Smart DCA, ...) hold right now: their pools. The owner's plain sells
+ * leave these alone, except stops, which may sell them (protection wins; src/pools.ts).
+ */
+export function ownerBotUnits(rules: Rule[], chain: string, symbol: string, address: string, paper = false): number {
+  const LIVE = ["active", "paused", "proposed", "error"];
+  const BOTS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"];
+  let n = 0;
+  for (const r of rules) if (!isAutopilotRule(r) && BOTS.includes(r.kind) && LIVE.includes(r.status) && isPaperRule(r) === paper && sameToken(r, chain, symbol, address)) n += (r.state.bought_units ?? 0) - (r.state.sold_units ?? 0);
+  return Math.max(0, n);
+}
+export const unitsToAtomic = toAtomic;
+
 /** Plain reason when a sell finds nothing it may sell. */
 export function nothingToSell(r: Rule, symbol: string, bal: bigint): string {
   if (isAutopilotRule(r)) return `Autopilot has no ${symbol} of its own to sell. It only sells what its strategies bought.`;

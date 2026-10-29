@@ -24,6 +24,7 @@
  * when it opens. The strategist's decision is advice to a program: nothing it says is applied without
  * passing the same checks the owner's own forms pass.
  */
+import { clashWithOwner } from "./conflict.js";
 import { isAutopilotRule } from "./ownership.js";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -96,6 +97,8 @@ export interface Strategy {
   past?: { stage: Stage; result_pct: number | null; trades: number }[];
   /** 0.9.7: when Active pace last tightened it for sitting idle. */
   tightened_at?: string;
+  /** 0.9.9: the owner stopped it (never rebuilt), paused its bot (Autopilot leaves it alone), or removed it from the list. */
+  stopped_by_owner?: boolean; owner_paused?: boolean; removed?: boolean;
   /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
    * money on its own. */
   ready?: { at: string; result_pct: number; trades: number } | null;
@@ -195,6 +198,8 @@ export function committedUsd(template: string, params: Record<string, unknown>):
     case "smart_dca": { const k = Number(params.scale) || 1, n = Math.max(0, Number(params.safety) || 0); let t = 0; for (let i = 0; i <= n; i++) t += a * k ** i; return t; }
     case "rebalance": return a;
     case "infinity_grid": return a * 1.5;
+    // 0.9.9: a signal buy commits its amount each time it may fire; a signal sell spends nothing.
+    case "signal": return params.side === "sell" ? 0 : a * Math.max(1, Number(params.times) || 1);
     default: return 0;
   }
 }
@@ -234,7 +239,7 @@ export class SuperBot {
   /** What the dashboard shows. */
   view() {
     const s = this.load(), all = this.w.rules().list();
-    const strategies = s.strategies.map((st) => { const sum = this.summaryOf(st, all); return { ...st, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, trades: sum?.trades_ok ?? 0, failed: sum?.trades_failed ?? 0, status: sum?.status ?? (st.stage === "retired" ? "stopped" : "waiting"), last_trade: sum?.last_trade ?? null, days_in_stage: r2((this.now() - Date.parse(st.stage_since)) / 86_400_000) }; });
+    const strategies = s.strategies.filter((st) => !st.removed).map((st) => { const sum = this.summaryOf(st, all); return { ...st, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, trades: sum?.trades_ok ?? 0, failed: sum?.trades_failed ?? 0, status: sum?.status ?? (st.stage === "retired" ? "stopped" : "waiting"), last_trade: sum?.last_trade ?? null, days_in_stage: r2((this.now() - Date.parse(st.stage_since)) / 86_400_000) }; });
     const live = strategies.filter((x) => x.stage === "live");
     return {
       enabled: s.enabled, since: s.since, settings: s.settings, halted: s.halted, stats: s.stats,
@@ -331,6 +336,7 @@ export class SuperBot {
       const stale = !after.stats.last_step || t - Date.parse(after.stats.last_step) >= SUPERBOT.forceStepMinutes * 60_000;
       // 0.9.7: Active pace tightens idle strategies, and decides at every rethink, not only when the market moved.
       const active = (after.settings.pace ?? "steady") !== "steady"; // "active" or "max"
+      await this.noticeOwnerStops(this.w.rules().list());
       if (active) await this.tightenIdle(this.w.rules().list());
       if (force || moved || stale || active) await this.step(snap);
     } catch (e) {
@@ -370,7 +376,7 @@ export class SuperBot {
   private async promoteDemote(all: Rule[]) {
     const s = this.load(), t = this.now();
     for (const st of s.strategies) {
-      if (st.stage === "retired") continue;
+      if (st.stage === "retired" || st.owner_paused) continue;
       const sum = this.summaryOf(st, all);
       const days = (t - Date.parse(st.stage_since)) / 86_400_000, trades = sum?.trades_ok ?? 0, pct = sum?.result_pct ?? null;
       if (st.stage === "paper") {
@@ -431,7 +437,7 @@ export class SuperBot {
    */
   private async tightenIdle(all: Rule[]) {
     const s = this.load(), t = this.now();
-    for (const st of s.strategies.filter((x) => x.stage !== "retired")) {
+    for (const st of s.strategies.filter((x) => x.stage !== "retired" && !x.owner_paused)) {
       const sum = this.summaryOf(st, all);
       const since = Math.max(Date.parse(st.stage_since), sum?.last_trade ? Date.parse(sum.last_trade) : 0, st.tightened_at ? Date.parse(st.tightened_at) : 0);
       if (t - since < SUPERBOT.idleHours * 3_600_000) continue;
@@ -443,6 +449,57 @@ export class SuperBot {
       const res = await this.restage(st, st.stage === "live" ? "live" : "paper", why, all, params.params, true);
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
+    }
+  }
+
+  /**
+   * 0.9.9: the owner's Stop on any strategy (paper or live): its rules are cancelled, its slot is freed, and Autopilot
+   * never rebuilds, adjusts or restarts it. Coins it bought stay in the wallet and count as the owner's again.
+   */
+  async stopStrategy(id: unknown) {
+    const s = this.load(), st = s.strategies.find((x) => x.id === id && !x.removed);
+    if (!st) throw new Error("That strategy isn't there any more.");
+    if (st.stage === "retired") return this.view();
+    const why = `You stopped it${st.stage === "live" ? " (it was trading real money)" : ""}. Autopilot won't restart or change it; any coins it bought stay in your wallet.`;
+    await this.retire(st, why, this.w.rules().list());
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.stopped_by_owner = true; y.owner_paused = false; } });
+    await this.log("rule", why, [{ type: "retire", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, reason: why, sources: ["owner tapped Stop"], applied: true, outcome: "stopped by you" }]);
+    return this.view();
+  }
+
+  /** 0.9.9: the owner's Remove: stops it if it's still running, then takes it off the list. Its trades stay in Activity. */
+  async removeStrategy(id: unknown) {
+    const s = this.load(), st = s.strategies.find((x) => x.id === id && !x.removed);
+    if (!st) throw new Error("That strategy isn't there any more.");
+    if (st.stage !== "retired") await this.stopStrategy(id);
+    const ids = this.w.rules().list().filter((r) => r.by === "superbot" && st.bot && r.bot === st.bot && ["done", "cancelled", "expired"].includes(r.status)).map((r) => r.id);
+    if (ids.length) await this.w.rules().archive(ids).catch(() => 0);
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.removed = true; y.history.push({ ts: nowIso(this.now()), note: "You removed it from the list." }); } });
+    this.d.onRulesChanged?.();
+    return this.view();
+  }
+
+  /** 0.9.9: the owner paused or resumed an Autopilot bot on the Bots screen. While paused, Autopilot leaves it alone. */
+  async ownerHold(bot: string, paused: boolean) {
+    const st = this.load().strategies.find((x) => x.bot === bot && x.stage !== "retired");
+    if (st) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.owner_paused = paused; y.history.push({ ts: nowIso(this.now()), note: paused ? "You paused its bot; Autopilot leaves it alone." : "You resumed its bot." }); } });
+  }
+
+  /** 0.9.9: an Autopilot bot the owner stopped on the Bots screen (every rule cancelled there) is a stopped strategy. */
+  async ownerStoppedBot(bot: string) {
+    const st = this.load().strategies.find((x) => x.bot === bot && x.stage !== "retired");
+    if (st) await this.stopStrategy(st.id);
+  }
+
+  /**
+   * 0.9.9: catches stops made before this version, or by another device: a strategy whose bot has no active or paused
+   * rule left and at least one the owner cancelled (Autopilot's own cancels carry a note) is treated as stopped.
+   */
+  private async noticeOwnerStops(all: Rule[]) {
+    for (const st of this.load().strategies.filter((x) => x.stage !== "retired" && x.bot)) {
+      const rs = all.filter((r) => r.by === "superbot" && r.bot === st.bot);
+      if (!rs.length || rs.some((r) => r.status === "active" || r.status === "paused" || r.status === "proposed")) continue;
+      if (rs.some((r) => r.status === "cancelled" && !r.state.note)) await this.stopStrategy(st.id);
     }
   }
 
@@ -543,7 +600,7 @@ export class SuperBot {
     return {
       limits: { budget_usd: s.settings.budget_usd, per_trade_usd: s.settings.per_trade_usd, max_token_pct: s.settings.max_token_pct, max_strategies: s.settings.max_strategies, slippage_bps: s.settings.slippage_bps, paper_period: `${s.settings.paper_days} days or ${s.settings.paper_trades} trades`, pace: s.settings.pace ?? "steady" },
       allowed: { chains: s.settings.chains, tokens: s.settings.tokens.map((x) => ({ ...x, price_usd: prices[`${x.chain}:${x.token}`] ?? null })) },
-      templates: TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap").map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
+      templates: TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap" && x.id !== "range").map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
       strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
@@ -609,6 +666,7 @@ export class SuperBot {
       case "keep": return { applied: true, outcome: "kept" };
       case "pause": case "resume": {
         if (!st || st.stage === "retired") return { applied: false, outcome: "no such running strategy" };
+        if (st.owner_paused) return { applied: false, outcome: "the owner paused it; Autopilot leaves it alone" };
         const want = a.type === "pause" ? "paused" : "active", from = a.type === "pause" ? "active" : "paused";
         let n = 0;
         for (const r of this.rulesOf(s, st, all)) if (r.status === from) { await this.w.rules().setStatus(r.id, want); n++; if (a.type === "pause" && this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false); }
@@ -622,8 +680,11 @@ export class SuperBot {
       }
       case "adjust": {
         if (!st || st.stage === "retired") return { applied: false, outcome: "no such running strategy" };
+        if (st.owner_paused) return { applied: false, outcome: "the owner paused it; Autopilot leaves it alone" };
         const params = this.clampParams(s, st.template, { ...st.params, ...(a.params ?? {}) });
         if (params.note) return { applied: false, outcome: params.note };
+        const clash = clashWithOwner(st.template, params.params, all, st.chain, st.token, await this.d.price(st.chain, st.token).catch(() => undefined));
+        if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         return this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params);
       }
       case "propose": {
@@ -647,6 +708,9 @@ export class SuperBot {
         if (params.note) return { applied: false, outcome: params.note };
         if (meme && typeof params.params.amount_usd === "number") params.params.amount_usd = Math.min(10, params.params.amount_usd as number);
         const price = await this.d.price(chain, tok.token).catch(() => undefined);
+        // 0.9.9: never against the owner's own rules on this coin (src/conflict.ts).
+        const clash = clashWithOwner(a.template, params.params, all, chain, tok.token, price);
+        if (clash) return { applied: false, outcome: `not started: ${clash}` };
         let built;
         try { built = buildBot(a.template, tok.token, chain, params.params, price); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
         const id = randomUUID().slice(0, 8), t = nowIso(this.now());

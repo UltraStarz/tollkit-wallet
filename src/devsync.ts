@@ -37,9 +37,13 @@ export interface Device { id: string; name: string; seen: string }
 /** The decrypted copy. */
 export interface Removed { id: string; name: string; at: string }
 export interface Snapshot { v: 1; files: Record<string, { hash: string; at: string; data: string } | null>; ledger: string[]; runner: string | null; devices: Device[]; at: string; removed?: Removed[] }
-interface Local { on: boolean; device: { id: string; name: string }; rev: number; base: Record<string, string>; last_sync: string | null; last_error: string | null; runner: string | null; devices: Device[]; removed: Removed[]; removed_at: string | null }
+interface Local { on: boolean; device: { id: string; name: string }; rev: number; base: Record<string, string>; last_sync: string | null; last_error: string | null; runner: string | null; devices: Device[]; removed: Removed[]; removed_at: string | null;
+  /** 0.9.9: the runner lease (see mayTrade): when the server last confirmed this device runs the bots, and when it took them over. */
+  runner_ok_at?: string | null; claimed_at?: string | null }
 export interface SyncView { on: boolean; here: { id: string; name: string }; runner: string | null; runs_here: boolean; devices: (Device & { runs_bots: boolean; this_device: boolean })[]; last_sync: string | null; last_error: string | null; removed_at: string | null }
 
+/** 0.9.9: how long a runner confirmation lasts, and how long a device that takes the bots over waits (mayTrade). */
+export const RUNNER_LEASE_MS = 180_000;
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
 /** The key that locks the copy: only someone holding this wallet's private key can make it. */
@@ -92,7 +96,7 @@ export class DeviceSync {
     let l: Partial<Local> = {};
     try { if (existsSync(this.file)) l = JSON.parse(readFileSync(this.file, "utf8")); } catch { /* start over */ }
     return { on: !!l.on, device: l.device?.id ? l.device : { id: randomUUID().slice(0, 12), name: this.o.deviceName ?? "This device" }, rev: l.rev ?? 0, base: l.base ?? {},
-      last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, runner: l.runner ?? null, devices: l.devices ?? [], removed: l.removed ?? [], removed_at: l.removed_at ?? null };
+      last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, runner: l.runner ?? null, devices: l.devices ?? [], removed: l.removed ?? [], removed_at: l.removed_at ?? null, runner_ok_at: l.runner_ok_at ?? null, claimed_at: l.claimed_at ?? null };
   }
   private save(l: Local) {
     mkdirSync(this.home, { recursive: true });
@@ -106,6 +110,21 @@ export class DeviceSync {
     if (this.o.deviceName && l.device.name !== this.o.deviceName) { l.device.name = this.o.deviceName; this.save(l); }
     const devices = l.devices.some((d) => d.id === l.device.id) ? l.devices : [...l.devices, { id: l.device.id, name: l.device.name, seen: new Date(this.now()).toISOString() }];
     return { on: l.on, here: l.device, runner: l.runner, runs_here: this.runsHere(), devices: devices.map((d) => ({ ...d, runs_bots: d.id === l.runner, this_device: d.id === l.device.id })), last_sync: l.last_sync, last_error: l.last_error, removed_at: l.removed_at };
+  }
+  /**
+   * 0.9.9: may this device place trades right now? A lease, so two devices never trade at once while the bots move.
+   * With L = 3 minutes and a sync every minute: the runner trades only while the server confirmed it as the runner
+   * within L (a sync is stamped with the time it was sent), and a device that takes the bots over waits L first.
+   * The old runner's last confirmation was sent before the takeover, so it stops by takeover + L, which is when
+   * the new one starts. A device alone on the list trades as before.
+   */
+  mayTrade(): boolean {
+    const l = this.load(), me = l.device.id, now = this.now();
+    if (!l.on) return true;
+    if (l.runner && l.runner !== me) return false;
+    if (!l.devices.some((d) => d.id !== me && now - Date.parse(d.seen) < 6 * 3600_000)) return true;
+    if (l.claimed_at && now - Date.parse(l.claimed_at) < RUNNER_LEASE_MS) return false;
+    return !!l.runner_ok_at && now - Date.parse(l.runner_ok_at) <= RUNNER_LEASE_MS;
   }
   /** Bots, Autopilot and Run 24/7 act here unless sync is on and another device runs them. */
   runsHere(): boolean { const l = this.load(); return !l.on || !l.runner || l.runner === l.device.id; }
@@ -126,14 +145,14 @@ export class DeviceSync {
     l.devices = l.devices.filter((x) => x.id !== id);
     l.removed = [...l.removed.filter((x) => x.id !== id), { id, name: d.name, at: new Date(this.now()).toISOString() }].slice(-20);
     const tookBots = l.runner === id;
-    if (tookBots) l.runner = l.device.id;
+    if (tookBots) { l.runner = l.device.id; l.claimed_at = new Date(this.now()).toISOString(); }
     this.save(l);
     await this.sync(tookBots);
     return this.view();
   }
   turnOff(): SyncView { const l = this.load(); l.on = false; l.rev = 0; l.base = {}; this.save(l); return this.view(); }
   /** Move the bots to this device (the others stop trading at their next sync). */
-  async runHere(): Promise<SyncView> { const l = this.load(); if (!l.on) throw new Error("Turn on Sync my devices first."); l.runner = l.device.id; this.save(l); await this.sync(true); return this.view(); }
+  async runHere(): Promise<SyncView> { const l = this.load(); if (!l.on) throw new Error("Turn on Sync my devices first."); if (l.runner && l.runner !== l.device.id) l.claimed_at = new Date(this.now()).toISOString(); l.runner = l.device.id; this.save(l); await this.sync(true); return this.view(); }
 
   // ─── the server ───────────────────────────────────────────────────────────
   private async call(route: "get" | "put", body: object): Promise<any> {
@@ -172,7 +191,7 @@ export class DeviceSync {
   private async doSync(claimRunner: boolean, attempt = 0): Promise<void> {
     const l = this.load();
     if (!l.on) return;
-    const at = new Date(this.now()).toISOString(), key = syncKey(this.o.key().privateKey);
+    const at = new Date(this.now()).toISOString(), key = syncKey(this.o.key().privateKey), before = l.runner;
     try {
       const got = await this.call("get", {});
       let remote: Snapshot | null = null;
@@ -238,6 +257,10 @@ export class DeviceSync {
         rev = put.rev;
       }
       const after = this.load(); // the device may have been switched off meanwhile
+      // 0.9.9: the runner lease. Confirmed as the runner by this sync (stamped when it was sent), or not any more.
+      const mine = l.runner === l.device.id;
+      after.runner_ok_at = mine ? at : null;
+      if (!mine) after.claimed_at = null; else if (before && before !== l.device.id && !after.claimed_at) after.claimed_at = at;
       Object.assign(after, { rev, runner: l.runner, devices: snap.devices, removed: l.removed, last_sync: at, last_error: null, base: Object.fromEntries(SYNC_FILES.map((n) => [n, snap.files[n]?.hash ?? null]).filter(([, h]) => h)) });
       this.save(after);
       if (changed.length) this.onChanged?.(changed);

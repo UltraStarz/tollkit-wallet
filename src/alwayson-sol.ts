@@ -32,7 +32,7 @@ import { solanaInfo } from "./tokenlist.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
-const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss"];
+const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss", "signal_buy", "signal_sell"];
 /** SOL kept unwrapped for network fees and account rent. */
 export const SOL_RESERVE = 20_000_000n; // 0.02 SOL
 
@@ -61,7 +61,7 @@ export interface SolAlwaysOpts {
   coinInfo?: (mints: string[]) => Promise<Map<string, CoinInfo>>;
 }
 
-const isBuy = (r: Pick<Rule, "kind">) => r.kind === "dca" || r.kind === "limit_buy";
+const isBuy = (r: Pick<Rule, "kind">) => r.kind === "dca" || r.kind === "limit_buy" || r.kind === "signal_buy";
 /** 0.9.3: grids, Smart DCA, rebalancers, infinity grids and split orders (src/botlogic.ts) run 24/7 too. */
 const isBot = (r: Pick<Rule, "kind">) => isBotKind(r.kind);
 /** The SOL a bot holds now (smallest units), which it may sell: its own coins, or what's left of a split sell. */
@@ -88,7 +88,7 @@ export function solRunnable(r: Rule): string | null {
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
   if (r.after || r.sell_from) return "Rules that wait for another rule run only while the app is open.";
   if (isBuy(r) && !r.amount_usd) return "Needs a dollar amount.";
-  if (r.kind !== "dca" && !r.trigger_price) return "Needs a trigger price.";
+  if (r.kind !== "dca" && !r.kind.startsWith("signal_") && !r.trigger_price) return "Needs a trigger price.";
   if (!isBuy(r) && r.sell_amount === undefined && r.sell_percent === undefined) return "Needs an amount to sell.";
   return null;
 }
@@ -273,6 +273,10 @@ export class SolAlwaysOn {
     // 2. Which rules, and what each needs allowed.
     const l = this.load();
     const want = store.list().filter((r) => l.rules[r.id] && (r.status === "active" || r.status === "paused"));
+    // 0.9.9: switches left on for rules that were cancelled, finished or deleted are dropped, so "nothing left" below
+    // really means nothing: the SOL is unwrapped and every allowance ends without a trip to Settings.
+    const gone = Object.keys(l.rules).filter((id) => !want.some((r) => r.id === id));
+    if (gone.length) { this.update((x) => { for (const id of gone) { delete x.rules[id]; if (x.set_aside) delete x.set_aside[id]; } }); for (const id of gone) delete l.rules[id]; }
     const active: Rule[] = [];
     // 0.9.9: other coins only if the server takes them and the token list has verified them (not flagged as suspicious).
     const mintsWanted = [...new Set(want.map(coinMint).filter((m): m is string => !!m))];
@@ -380,7 +384,7 @@ export class SolAlwaysOn {
       const short = [...sells, ...bots].some((r) => problems[r.id]?.startsWith("Not enough SOL"));
       // Plain sells allow exactly what's set aside; with bots on, re-sign when it no longer covers what they hold, or the USDC side was refilled.
       if (!short && (bots.length ? wsolAllowed < target || l.dirty || usdcRefilled : wsolAllowed !== allow)) { ixs.push(createApproveInstruction(wsolA, delegate, this.owner, allow)); wsolAllowed = allow; }
-    } else if (Object.keys(l.rules).length === 0 && wsol.exists && wsolBal > 0n) {
+    } else if (want.length === 0 && wsol.exists && wsolBal > 0n) {
       // Nothing on 24/7 any more (Autopilot turned off, or every switch off): unwrap it all back to plain SOL.
       ixs.push(createCloseAccountInstruction(wsolA, this.owner, this.owner)); wsolAllowed = 0n; wsolBal = 0n;
     } else if (wsolAllowed > 0n) { ixs.push(createRevokeInstruction(wsolA, this.owner)); wsolAllowed = 0n; }
@@ -465,7 +469,7 @@ export class SolAlwaysOn {
         profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs,
         bot: { ...(r.state.bot ?? {}), ...(r.kind === "grid" ? { grid: r.state.grid } : {}), ...(splitTotal[r.id] ? { sell_total: splitTotal[r.id], v: (r.state.bot?.v ?? 0) + 1 } : {}) } })
       : ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, sell_amount: !isBuy(r) ? sellAmt(r) : undefined, trigger_price: r.trigger_price,
-      every: r.every, times: r.times, max_price: r.max_price, group: r.group, expires_at: r.expires_at, runs: r.state.runs, next_run: r.state.next_run })) };
+      every: r.every, times: r.times, max_price: r.max_price, group: r.group, expires_at: r.expires_at, runs: r.state.runs, next_run: r.state.next_run, ...(r.when ? { when: r.when } : {}) })) };
     let running: string[] = l0.running ?? [];
     try { const j = await this.call("sync", body); running = j.running ?? []; }
     catch (e) { for (const r of send) problems[r.id] = (e as Error).message.slice(0, 200); }

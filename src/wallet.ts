@@ -33,7 +33,8 @@ import { AlwaysOn } from "./alwayson.js";
 import { SolAlwaysOn } from "./alwayson-sol.js";
 import { DeviceSync } from "./devsync.js";
 import { PaperBook } from "./paper.js";
-import { liveBalance, type Executor } from "./autopilot.js";
+import { liveBalance, type Executor, type LpExecutor } from "./autopilot.js";
+import { buildClose, buildOpen, describePosition, feesOwed, readPool, readPosition } from "./orca.js";
 import { Staking, type StakingOptions } from "./stake.js";
 import { Sales, SEND_WINDOW_MS } from "./sell.js";
 import { signRamp, type RampAuth, type RampKind, type RampWhat } from "./rampauth.js";
@@ -593,7 +594,37 @@ export class TollkitWallet {
   executor(mode: "live" | "paper" = "live"): Executor {
     const slippageBps = Math.min(100, this.policy.max_slippage_bps);
     if (mode === "paper") { const pb = this.paper(); return { mode, slippageBps, swap: (r) => pb.swap(r), quote: (r) => this.quote(r), balance: async (c, t) => pb.balance(c, t) }; }
-    return { mode, slippageBps, swap: (r, o) => this.swap(r, o), quote: (r) => this.quote(r), balance: (c, t) => liveBalance(this.addresses, c, t, this.rpc(c), this.f) };
+    return { mode, slippageBps, swap: (r, o) => this.swap(r, o), quote: (r) => this.quote(r), balance: (c, t) => liveBalance(this.addresses, c, t, this.rpc(c), this.f), lp: this.lp(slippageBps) };
+  }
+
+  /**
+   * 0.9.9: the Range bot's Orca liquidity (src/orca.ts). Each step is one transaction signed here with the wallet's
+   * own key; the position is a token in this wallet. Orca checks the price hasn't moved more than the slippage.
+   */
+  lp(slippageBps = Math.min(100, this.policy.max_slippage_bps)): LpExecutor {
+    const conn = () => new Connection(this.rpc("solana"), "confirmed");
+    const on = () => { if (!this.policy.chains.includes("solana")) throw new Error("Solana is turned off."); };
+    return {
+      pool: async () => { const p = await readPool(conn()); return { price: p.price, spacing: p.data.tickSpacing }; },
+      open: async (o) => {
+        on();
+        const c = conn(), plan = await buildOpen(c, { owner: this.keys.solana.publicKey, lower: o.lower, upper: o.upper, maxSol: o.maxSol, maxUsdc: o.maxUsdc, slippageBps });
+        await o.beforeSend?.(plan.positionMint);
+        return { mint: plan.positionMint, tx: await sendAndConfirm(c, plan.tx, [this.keys.solana, ...plan.signers]) };
+      },
+      close: async (mint) => {
+        on();
+        const c = conn(), owner = this.keys.solana.publicKey;
+        const fees = (await feesOwed(c, owner, mint).catch(() => null)) ?? { sol: 0n, usdc: 0n };
+        const plan = await buildClose(c, { owner, positionMint: mint, slippageBps });
+        const tx = await sendAndConfirm(c, plan.tx, [this.keys.solana, ...plan.signers]);
+        return { tx, sol: plan.estSol + fees.sol, usdc: plan.estUsdc + fees.usdc, feesSol: fees.sol, feesUsdc: fees.usdc };
+      },
+      read: async (mint) => {
+        const c = conn(), pos = await readPosition(c, mint);
+        return pos ? describePosition(pos, await readPool(c, pos.whirlpool)) : null;
+      },
+    };
   }
 
   /** Drop the keys from memory. */

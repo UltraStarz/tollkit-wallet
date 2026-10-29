@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Keypair, PublicKey, type TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { SolAlwaysOn, solRunnable, coinMint, USDC_MINT, type TokenAcct, type CoinInfo } from "../src/alwayson-sol.js";
+import { SolAlwaysOn, solRunnable, coinMint, USDC_MINT, WSOL_MINT, type TokenAcct, type CoinInfo } from "../src/alwayson-sol.js";
 import { RuleStore } from "../src/rules.js";
 
 let pass = 0, fail = 0;
@@ -15,6 +15,7 @@ const rule = (x: any) => ({ id: "r1", status: "active", created_by: "owner", cre
 check(solRunnable(rule({ kind: "dca", amount_usd: 5, every: "day", token: COIN })) === null && coinMint(rule({ token: COIN }) as any) === COIN, "a Solana coin by its address can run 24/7");
 check(/Only SOL and Solana coins/.test(solRunnable(rule({ kind: "dca", amount_usd: 5, every: "day", token: "BONK" })) ?? ""), "a coin given only by its name can't (the server needs the address)");
 check(coinMint(rule({ token: USDC_MINT }) as any) === null, "USDC itself isn't a coin to trade against USDC");
+check(solRunnable(rule({ kind: "signal_buy", amount_usd: 5, token: COIN, when: { signal: "rsi_below" } })) === null && solRunnable(rule({ kind: "signal_sell", sell_percent: 50, when: { signal: "macd_down" } })) === null, "0.9.9: signal buys and sells can run 24/7 (no trigger price needed)");
 
 const kp = Keypair.generate(), OWN = kp.publicKey.toBase58(), DELEGATE = Keypair.generate().publicKey.toBase58();
 const atA = (m: string) => getAssociatedTokenAddressSync(new PublicKey(m), kp.publicKey).toBase58();
@@ -116,6 +117,19 @@ s.set(tp.id, true); await s.sync();
 await s.off();
 check(sent.at(-1)!.some((x) => x.name === "revoke" && x.acct === coinA) && !sent.at(-1)!.some((x) => x.name === "close" && x.acct === coinA), "turning 24/7 off revokes the coin allowance and keeps the coins", sent.at(-1));
 check(accts[coinA]!.amount === 900_000_000n, "the coins themselves never moved");
+
+// Cancelling every 24/7 rule hands the SOL back: the next sync unwraps it and ends the allowances, no Settings trip.
+const dir2 = mkdtempSync(path.join(os.tmpdir(), "aosc2-")), store2 = new RuleStore(dir2);
+const s2 = new SolAlwaysOn({ key: () => kp, address: OWN, dir: dir2, rpc: "http://unused", proxy: "https://api.tollkit.dev/wallet", rules: () => store2, chain, fetch: fakeFetch, coinInfo });
+const wsolA = atA(WSOL_MINT);
+accts[wsolA] = { exists: true, amount: 784_000_000n, delegate: DELEGATE, delegated: 784_000_000n, decimals: 9 };
+const g = await store2.add({ kind: "dca", chain: "solana", token: "SOL", amount_usd: 5, every: "day" }, "owner", true);
+s2.set(g.id, true, 50); await s2.sync();
+await store2.mutate((rs) => { rs.find((x) => x.id === g.id)!.status = "cancelled"; });
+await s2.sync();
+const last = sent.at(-1)!;
+check(last.some((x) => x.name === "close" && x.acct === wsolA) && last.some((x) => x.name === "revoke" && x.acct === usdcA), "every 24/7 rule cancelled: the wrapped SOL is unwrapped and the USDC allowance ends", last);
+check(s2.view().rules.length === 0, "and the cancelled rule's switch is gone", s2.view().rules);
 
 console.log(`\nalwayson-sol-coins: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

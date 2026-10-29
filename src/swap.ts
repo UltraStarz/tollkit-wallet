@@ -12,6 +12,7 @@
  * registry, github.com/0xProject/0x-settler README), and simulates Solana
  * swaps, refusing any that take more than the coin being sold.
  */
+import { JITO_TIP_LAMPORTS, jitoTipIx } from "./jito.js";
 import { AddressLookupTableAccount, ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { AbiCoder, Contract, Interface, JsonRpcProvider, ZeroAddress, type Wallet, type HDNodeWallet } from "ethers";
 import { KNOWN } from "./tokens.js";
@@ -311,25 +312,28 @@ const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
  * transaction: compute-unit limit from a simulation (x1.2, at most 1.4M), Jupiter's priority price, a fresh
  * blockhash. Checked with the same rules as any swap, then sent and confirmed by polling.
  */
-export async function assembleBuilt(q: SwapQuote, payer: PublicKey, conn: Pick<Connection, "getLatestBlockhash" | "simulateTransaction">): Promise<{ tx: VersionedTransaction; lastValidBlockHeight: number; feeLamports: bigint }> {
+export async function assembleBuilt(q: SwapQuote, payer: PublicKey, conn: Pick<Connection, "getLatestBlockhash" | "simulateTransaction">): Promise<{ tx: VersionedTransaction; lastValidBlockHeight: number; feeLamports: bigint; tipLamports: bigint }> {
   const b = q.raw.build, fee = q.raw.fee as { lamports: string; to: string } | undefined;
   const feeLamports = fee ? BigInt(fee.lamports) : 0n;
   const price = (b.computeBudgetInstructions ?? []).map(toIx).filter((ix: TransactionInstruction) => !(ix.programId.toBase58() === COMPUTE_BUDGET && ix.data[0] === 2));
   const body: TransactionInstruction[] = [...(b.setupInstructions ?? []).map(toIx), toIx(b.swapInstruction), ...(b.cleanupInstruction ? [toIx(b.cleanupInstruction)] : []), ...(b.otherInstructions ?? []).map(toIx)];
   if (feeLamports > 0n) body.push(SystemProgram.transfer({ fromPubkey: payer, toPubkey: new PublicKey(fee!.to), lamports: feeLamports }));
+  // 0.9.9: private sending. A small Jito tip with the dontfront marker; Tollkit's Solana route sends the swap through
+  // Jito so it can't be sandwiched (src/jito.ts). The safety check counts it with Tollkit's fee (executeBuilt).
+  body.push(jitoTipIx(payer));
   const luts = Object.entries(b.addressesByLookupTableAddress ?? {}).map(([key, addrs]) => new AddressLookupTableAccount({ key: new PublicKey(key), state: { deactivationSlot: 18446744073709551615n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: (addrs as string[]).map((a) => new PublicKey(a)) } }));
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   const compile = (units: number) => new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units }), ...price, ...body] }).compileToV0Message(luts));
   const sim = await conn.simulateTransaction(compile(1_400_000), { sigVerify: false, replaceRecentBlockhash: true });
   if (sim.value.err) throw new Error(`This swap would fail right now (${JSON.stringify(sim.value.err)}). Try again in a moment.`);
   const units = Math.min(1_400_000, Math.ceil((sim.value.unitsConsumed ?? 1_200_000) * 1.2));
-  return { tx: compile(units), lastValidBlockHeight, feeLamports };
+  return { tx: compile(units), lastValidBlockHeight, feeLamports, tipLamports: JITO_TIP_LAMPORTS };
 }
 
 async function executeBuilt(q: SwapQuote, keys: { solana: Keypair }, deps: ExecDeps): Promise<string> {
   const conn = (deps.verify?.conn as unknown as Connection) ?? new Connection(deps.rpc?.solana ?? DEFAULT_RPC.solana, "confirmed");
-  const { tx, lastValidBlockHeight, feeLamports } = await assembleBuilt(q, keys.solana.publicKey, conn);
-  await verifySwapTx(q, { evm: "", solana: keys.solana.publicKey }, { ...deps, ...deps.verify, vtx: tx, extraLamports: feeLamports });
+  const { tx, lastValidBlockHeight, feeLamports, tipLamports } = await assembleBuilt(q, keys.solana.publicKey, conn);
+  await verifySwapTx(q, { evm: "", solana: keys.solana.publicKey }, { ...deps, ...deps.verify, vtx: tx, extraLamports: feeLamports + tipLamports });
   tx.sign([keys.solana]);
   const sig = await conn.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed", maxRetries: 3 });
   return pollSolana(conn, sig, lastValidBlockHeight, "swap", { pollMs: deps.pollMs });

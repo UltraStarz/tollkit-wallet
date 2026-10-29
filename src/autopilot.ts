@@ -8,8 +8,9 @@
  * with `tollkit-wallet autopilot` (for a server that stays on). Only one
  * process runs rules at a time (a lease file), so two copies never double-fill.
  */
-import { checkAlert, hourlyCloses } from "./indicators.js";
-import { autopilotSpentToday, isAutopilotRule, isPaperRule, nothingToSell, sellableFor } from "./ownership.js";
+import { checkAlert, checkSignal, hourlyCloses } from "./indicators.js";
+import { autopilotSpentToday, isAutopilotRule, isPaperRule, nothingToSell, ownerBotUnits, sellableFor, unitsToAtomic } from "./ownership.js";
+import { allocateSells, sellTier, type SellAsk } from "./pools.js";
 import { plainError } from "./errors.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -18,6 +19,8 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { DEFAULT_RPC, LOW_FEE_BOTS, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { BUY_KINDS, nextRun, RuleStore, type Rule } from "./rules.js";
+import { DEC_A, DEC_B } from "./orca.js";
+import { rangeTicks, shareInA, tickToPrice } from "./clmm.js";
 import { applyFill, decide, isBotKind, type BotState } from "./botlogic.js";
 import { KNOWN, resolveToken, toAtomic, type Token } from "./tokens.js";
 import type { Price } from "./prices.js";
@@ -30,6 +33,15 @@ export interface Executor {
   quote(req: SwapRequest): Promise<SwapResult>;
   balance(chain: Chain, token: Token): Promise<bigint>;
   slippageBps: number;
+  /** 0.9.9: Orca liquidity for the Range bot (live wallets only; src/orca.ts). */
+  lp?: LpExecutor;
+}
+/** 0.9.9: what the Range bot needs from the wallet. Amounts in smallest units (SOL 9 decimals, USDC 6). */
+export interface LpExecutor {
+  pool(): Promise<{ price: number; spacing: number }>;
+  open(o: { lower: number; upper: number; maxSol: bigint; maxUsdc: bigint; beforeSend?: (mint: string) => Promise<void> }): Promise<{ mint: string; tx: string }>;
+  close(mint: string): Promise<{ tx: string; sol: bigint; usdc: bigint; feesSol: bigint; feesUsdc: bigint }>;
+  read(mint: string): Promise<{ sol: number; usdc: number; inRange: boolean; lower: number; upper: number } | null>;
 }
 export interface PriceSource { snapshot(): { prices: Record<string, Price> } }
 
@@ -126,9 +138,45 @@ export class Autopilot {
     try {
       if (!this.takeLease()) return;
       this.lastTick = new Date(this.now()).toISOString();
-      const due = this.store.list().filter((r) => r.status === "active");
+      // 0.9.9: stops first, then take-profits, then bots, then the rest (src/pools.ts). Plain sells that fire in the
+      // same check are collected and share the coins by tier before any of them trades.
+      const due = this.store.list().filter((r) => r.status === "active").sort((a, b) => sellTier(a.kind) - sellTier(b.kind));
+      this.pending = [];
       for (const r of due) await this.consider(r).catch((e) => this.record(r.id, { error: (e as Error).message }));
+      // 0.9.9: a Range bot that was stopped takes its money out of the pool, back into the wallet.
+      for (const r of this.store.list()) if (r.kind === "range" && r.status === "cancelled" && r.state.range?.mint && !this.o.skip?.(r.id))
+        await this.rangeWithdraw(r).catch((e) => this.record(r.id, { error: plainError((e as Error).message, "solana") }));
+      const fired = this.pending; this.pending = null;
+      if (fired.length) await this.fireSells(fired);
     } finally { this.running = false; }
+  }
+
+  private pending: { r: Rule; t: Token; p: number }[] | null = null;
+
+  /**
+   * 0.9.9: the plain sells that fired together, per coin and owner (Autopilot's or yours): each asks for its amount,
+   * and allocateSells shares what may be sold. Stops may sell the coins your bots hold; take-profits and limit sells
+   * only what no bot holds. Then each trades its share.
+   */
+  private async fireSells(fired: { r: Rule; t: Token; p: number }[]) {
+    const groups = new Map<string, typeof fired>();
+    for (const f of fired) { const k = `${f.r.chain}|${f.t.address}|${isAutopilotRule(f.r) ? "ap" : "you"}`; groups.set(k, [...(groups.get(k) ?? []), f]); }
+    for (const g of groups.values()) {
+      const { r: r0, t } = g[0]!, paper = this.exec.mode === "paper";
+      let bal = await this.exec.balance(r0.chain, t).catch(() => 0n);
+      if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r0.chain] ? bal - GAS_RESERVE[r0.chain] : 0n;
+      const all = this.store.list();
+      const mine = sellableFor(r0, bal, all, t, paper);
+      const bots = isAutopilotRule(r0) ? 0n : unitsToAtomic(ownerBotUnits(all, r0.chain, t.symbol, t.address, paper), t.decimals);
+      const free = mine > bots ? mine - bots : 0n;
+      const asks: SellAsk[] = g.map(({ r }) => {
+        const pool = sellTier(r.kind) === 0 ? mine : free;
+        const want = r.sell_percent !== undefined ? (pool * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : BigInt(toAtomic(r.sell_amount!, t.decimals));
+        return { id: r.id, tier: sellTier(r.kind), want };
+      });
+      const got = allocateSells(asks, (tier) => (tier === 0 ? mine : free));
+      for (const { r, t: tk, p } of g) await this.fire(r, tk, p, got.get(r.id) ?? 0n, bal > 0n).catch((e) => this.record(r.id, { error: (e as Error).message }));
+    }
   }
 
   private async consider(r: Rule) {
@@ -150,8 +198,22 @@ export class Autopilot {
     const p = await this.price(r.chain, t);
     if (p === undefined) { await this.record(r.id, { checked: true }); return; }
     try { this.o.onPrice?.(r, p); } catch { /* charts never break trading */ }
+    if (r.kind === "range") { await this.record(r.id, { price: p, checked: true }); await this.range(r, t, p); return; }
     if (isBotKind(r.kind)) { await this.record(r.id, { price: p, checked: true }); await this.bot(r, t, p); return; }
     if (r.kind === "alert") { await this.record(r.id, { price: p, checked: true }); await this.alert(r, t, p); return; }
+    // 0.9.9: signal rules trade when their momentum signal fires (src/indicators.ts checkSignal).
+    if ((r.kind === "signal_buy" || r.kind === "signal_sell") && r.when) {
+      let closes: number[] | null = null;
+      try { closes = await (this.o.hourly ?? ((c, tk) => hourlyCloses(c, tk)))(r.chain, t); } catch { closes = null; }
+      const c = checkSignal(r.when, p, closes);
+      let armed = r.state.alert_armed ?? true;
+      if (!armed && c.clear) armed = true;
+      await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (x) { x.state.alert_now = c.now; x.state.alert_armed = armed; x.state.last_price = p; x.state.last_checked = new Date(now).toISOString(); } });
+      if (!(armed && c.hit)) return;
+      if (this.pending && r.kind === "signal_sell") { this.pending.push({ r, t, p }); return; }
+      await this.fire(r, t, p);
+      return;
+    }
     let high = r.state.high;
     if (r.kind === "trailing_stop") high = Math.max(high ?? p, p);
     const hit =
@@ -169,10 +231,12 @@ export class Autopilot {
       }
       return;
     }
+    // 0.9.9: a plain sell waits for the others that fired in this check, so they can share the coins (fireSells).
+    if (this.pending && !BUY_KINDS.includes(r.kind) && !r.sell_from) { this.pending.push({ r, t, p }); return; }
     await this.fire(r, t, p);
   }
 
-  private async fire(r: Rule, t: Token, price: number) {
+  private async fire(r: Rule, t: Token, price: number, share?: bigint, held?: boolean) {
     const usdc = KNOWN[r.chain].USDC!;
     let req: SwapRequest;
     if (BUY_KINDS.includes(r.kind)) {
@@ -185,9 +249,11 @@ export class Autopilot {
       bal = sellableFor(r, bal, this.store.list(), t, this.exec.mode === "paper");
       const from = r.sell_from ? this.store.get(r.sell_from) : undefined;
       let amt = from ? BigInt(from.state.bought_atomic ?? "0") : r.sell_percent !== undefined ? (bal * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : BigInt(toAtomic(r.sell_amount!, t.decimals));
+      if (share !== undefined) amt = share; // 0.9.9: its share of what the sells that fired together may sell
       if (amt > bal) amt = bal;
       if (amt <= 0n) {
         if (bal <= 0n && (isAutopilotRule(r) || whole > 0n)) { await this.hold(r, this.now() + 5 * 60_000, nothingToSell(r, t.symbol, whole)); return; }
+        if (share !== undefined && held && bal > 0n) { await this.hold(r, this.now() + 5 * 60_000, `The ${t.symbol} it could sell went to a stop or another sell that fired first, or is held by your bots.`); return; }
         await this.fail(r, "insufficient_balance", `No ${t.symbol} to sell.`); return;
       }
       req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps };
@@ -217,6 +283,10 @@ export class Autopilot {
       if (x.kind === "dca") {
         x.state.next_run = nextRun(x, now).toISOString();
         if (x.times && x.state.runs >= x.times) x.status = "done";
+      } else if (x.kind === "signal_buy" || x.kind === "signal_sell") {
+        // 0.9.9: a signal rule waits for the signal to clear before it can fire again, up to `times` (default once).
+        x.state.alert_armed = false; x.state.last_alert = now.toISOString();
+        if (x.state.runs >= (x.times ?? 1)) x.status = "done";
       } else x.status = "done";
       if (x.group && x.status === "done") for (const s of rs) if (s.id !== x.id && s.group === x.group && (s.status === "active" || s.status === "paused" || s.status === "proposed")) {
         s.status = "cancelled"; s.state.last_error = `Cancelled because rule ${x.id} in the same group filled.`;
@@ -259,11 +329,14 @@ export class Autopilot {
     if (a.side === "buy") req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(a.usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps, ...bot };
     else {
       let amt = BigInt(a.atomic);
-      if (r.kind !== "grid") {
+      // 0.9.9: grids too: a bot never sells more than is held and is its owner's to sell (another rule may have sold it).
+      {
         let bal = await this.exec.balance(r.chain, t);
         if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
-        if (amt > bal) amt = bal;
-        if (amt <= 0n) { await this.hold(r, now + 5 * 60_000, nothingToSell(r, t.symbol, bal)); return; }
+        const may = sellableFor(r, bal, this.store.list(), t, this.exec.mode === "paper");
+        // Less than a tenth of the level left (another rule sold the rest): wait rather than sell dust.
+        if (amt > may && may * 10n < amt) { await this.hold(r, now + 5 * 60_000, may > 0n ? `Most of the ${t.symbol} for this level was sold by another rule; waiting.` : nothingToSell(r, t.symbol, bal)); return; }
+        if (amt > may) amt = may;
       }
       req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps, ...bot };
     }
@@ -284,6 +357,98 @@ export class Autopilot {
       if (out.done) x.status = "done";
     }, out.state);
     this.o.onEvent?.({ type: "filled", rule: updated, detail: `${a.why} at about $${p}${usd ? ` (${a.side === "buy" ? "spent" : "got"} $${usd.toFixed(2)})` : ""}${res.tx ? ` (${res.tx})` : ""}` });
+  }
+
+  /**
+   * 0.9.9: the Range bot. Puts its dollars into Orca's SOL/USDC pool between ±range_pct of the price, split so all of
+   * it fits (src/clmm.ts shareInA), buying the SOL share with the 0.25% bot fee. While the price stays in range the
+   * position earns the pool's trading fees. After recenter_min minutes outside, it takes everything out (coins and
+   * fees), swaps back to the right split and opens a new range around the price then. Only the owner can start one,
+   * and it runs only on this device: the position is the owner's token and only their key can move it.
+   */
+  private async range(r: Rule, t: Token, p: number): Promise<void> {
+    const lp = this.exec.lp;
+    if (!lp) { await this.hold(r, this.now() + 3600_000, this.exec.mode === "paper" ? "Range bots don't run on paper yet." : "This app can't reach Orca yet."); return; }
+    if (r.created_by !== "owner") { await this.finishAs(r.id, "cancelled", "Only you can start a Range bot."); return; }
+    const st = r.state.range ?? {}, now = this.now();
+    if (st.mint) {
+      const pos = await lp.read(st.mint);
+      // The app stopped while a new position was being sent: it either landed (carry on) or never did (open again).
+      if (st.phase === "opening") { await this.saveRange(r, pos ? { phase: undefined } : { phase: undefined, mint: undefined }); r = this.store.get(r.id)!; if (!pos) return this.range(r, t, p); }
+      if (!pos) { await this.saveRange(r, { mint: undefined, out_since: undefined, note: "The position was closed outside TOLLkit, so the bot stopped." }, "done"); return; }
+      const value = pos.sol * p + pos.usdc;
+      if (pos.inRange) { await this.saveRange(r, { in_range: true, out_since: undefined, value_usd: value, sol: pos.sol, usdc: pos.usdc }); return; }
+      const since = st.out_since ? Date.parse(st.out_since) : now;
+      await this.saveRange(r, { in_range: false, out_since: new Date(since).toISOString(), value_usd: value, sol: pos.sol, usdc: pos.usdc });
+      if (r.status !== "active" || now - since < (r.recenter_min ?? 30) * 60_000) return;
+      let out: Awaited<ReturnType<LpExecutor["close"]>>;
+      try { out = await lp.close(st.mint); } catch (e) { await this.fail(r, "lp_failed", (e as Error).message); return; }
+      const fees = (Number(out.feesSol) / 1e9) * p + Number(out.feesUsdc) / 1e6;
+      await this.saveRange(r, { mint: undefined, out_since: undefined, fees_usd: (st.fees_usd ?? 0) + fees, recenters: (st.recenters ?? 0) + 1, staged: true,
+        sol: Number(out.sol) / 1e9, usdc: Number(out.usdc) / 1e6, note: `Price left the range; took out $${value.toFixed(2)} to move it.` });
+      r = this.store.get(r.id)!;
+    }
+    // Open: first with amount_usd of USDC; after a re-center, with what came back out.
+    // `staged`: the coins it will put in are in the wallet already (after a re-center, or a swap whose open failed).
+    const first = !r.state.range?.staged && !r.state.range?.opened_at;
+    if (!first && !r.state.range?.staged) return;
+    const pool = await lp.pool();
+    const { lower, upper } = rangeTicks(pool.price, r.range_pct!, pool.spacing, DEC_A, DEC_B);
+    const lo = tickToPrice(lower, DEC_A, DEC_B), hi = tickToPrice(upper, DEC_A, DEC_B), share = shareInA(pool.price, lo, hi);
+    const usdc = KNOWN.solana.USDC!;
+    let solHave = first ? 0n : BigInt(Math.floor((r.state.range?.sol ?? 0) * 1e9)), usdcHave = first ? BigInt(toAtomic(r.amount_usd!.toFixed(6), 6)) : BigInt(Math.floor((r.state.range?.usdc ?? 0) * 1e6));
+    const total = (Number(solHave) / 1e9) * pool.price + Number(usdcHave) / 1e6, wantSolUsd = total * share, haveSolUsd = (Number(solHave) / 1e9) * pool.price;
+    const walletSol = await this.exec.balance("solana", t);
+    if (walletSol < solHave + GAS_RESERVE.solana * 3n) { await this.fail(r, "insufficient_balance", "Keep about 0.03 SOL in the wallet for fees and Orca's refundable deposit."); return; }
+    if (Math.abs(wantSolUsd - haveSolUsd) >= 1) {
+      const buy = wantSolUsd > haveSolUsd, usd = Math.abs(wantSolUsd - haveSolUsd);
+      const req: SwapRequest = buy
+        ? { chain: "solana", sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps, bot: true }
+        : { chain: "solana", sell_token: t.address, buy_token: usdc.address, sell_amount: BigInt(Math.floor((usd / pool.price) * 1e9)).toString(), slippage_bps: this.exec.slippageBps, bot: true };
+      const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
+      if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
+      const got = BigInt(String(res.quote?.buy_amount ?? "0"));
+      if (buy) { usdcHave -= BigInt(req.sell_amount); solHave += got; } else { solHave -= BigInt(req.sell_amount); usdcHave += got; }
+      await this.saveRange(r, { staged: true, sol: Number(solHave) / 1e9, usdc: Number(usdcHave < 0n ? 0n : usdcHave) / 1e6 });
+      await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id)!; x.state.fills.push({ ts: new Date(now).toISOString(), ok: true, usd, tx: res.tx, side: buy ? "buy" : "sell", units: Number(buy ? got : BigInt(req.sell_amount)) / 1e9 });
+        x.state.fills = x.state.fills.slice(-50); tally(x, buy ? "buy" : "sell", usd, Number(buy ? got : BigInt(req.sell_amount)) / 1e9); });
+    }
+    // Never ask Orca for more than the wallet holds (a swap can land a little under its quote).
+    const usdcBal = await this.exec.balance("solana", usdc), solBal = await this.exec.balance("solana", t);
+    if (usdcHave > usdcBal) usdcHave = usdcBal;
+    if (usdcHave < 0n) usdcHave = 0n;
+    if (solHave > solBal - GAS_RESERVE.solana * 2n) solHave = solBal > GAS_RESERVE.solana * 2n ? solBal - GAS_RESERVE.solana * 2n : 0n;
+    let opened: { mint: string; tx: string };
+    try { opened = await lp.open({ lower, upper, maxSol: solHave, maxUsdc: usdcHave, beforeSend: (mint) => this.saveRange(r, { phase: "opening", mint, staged: true, sol: Number(solHave) / 1e9, usdc: Number(usdcHave) / 1e6 }) }); }
+    catch (e) { await this.saveRange(r, { phase: undefined, mint: undefined }); await this.fail(r, "lp_failed", (e as Error).message); return; }
+    await this.saveRange(r, { phase: undefined, staged: undefined, mint: opened.mint, lower_tick: lower, upper_tick: upper, lower: lo, upper: hi, opened_at: new Date(now).toISOString(), in_range: true,
+      out_since: undefined, deposited_usd: first ? r.amount_usd : r.state.range?.deposited_usd, value_usd: total, note: `In Orca's SOL/USDC pool from $${lo.toFixed(2)} to $${hi.toFixed(2)}.` });
+    const updated = this.store.get(r.id)!;
+    this.o.onEvent?.({ type: "filled", rule: updated, detail: `Range $${lo.toFixed(2)}–$${hi.toFixed(2)} opened with about $${total.toFixed(2)} (${opened.tx})` });
+  }
+
+  /** A stopped Range bot: everything back to the wallet. */
+  private async rangeWithdraw(r: Rule) {
+    const lp = this.exec.lp; if (!lp || !r.state.range?.mint) return;
+    const p = r.state.last_price ?? (await lp.pool()).price;
+    const out = await lp.close(r.state.range.mint);
+    const back = (Number(out.sol) / 1e9) * p + Number(out.usdc) / 1e6, fees = (Number(out.feesSol) / 1e9) * p + Number(out.feesUsdc) / 1e6;
+    await this.saveRange(r, { mint: undefined, out_since: undefined, in_range: undefined, value_usd: 0, fees_usd: (r.state.range.fees_usd ?? 0) + fees,
+      note: `Took out about $${back.toFixed(2)} (${out.sol > 0n ? `${(Number(out.sol) / 1e9).toFixed(4)} SOL and ` : ""}${(Number(out.usdc) / 1e6).toFixed(2)} USDC) back to your wallet.` });
+    this.o.onEvent?.({ type: "cancelled", rule: this.store.get(r.id)!, detail: `Range bot stopped: about $${back.toFixed(2)} back in your wallet (${out.tx})` });
+  }
+
+  private async saveRange(r: Rule, u: Partial<NonNullable<Rule["state"]["range"]>> & { note?: string }, status?: "done") {
+    const { note, ...rest } = u;
+    await this.store.mutate((rs) => {
+      const x = rs.find((y) => y.id === r.id); if (!x) return;
+      const next: Record<string, unknown> = { ...(x.state.range ?? {}) };
+      for (const [k, v] of Object.entries(rest)) if (v === undefined) delete next[k]; else next[k] = v;
+      x.state.range = next as any;
+      if (note) x.state.note = note;
+      x.state.failures = 0; x.state.last_error = undefined; x.state.next_run = undefined;
+      if (status) x.status = status;
+    });
   }
 
   /**

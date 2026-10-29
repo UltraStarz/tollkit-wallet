@@ -152,8 +152,11 @@ async function wallet(o: { feeBps: number; balance: bigint; sendFails?: boolean 
   const progs = ins.map((i) => keys[i.programIdIndex]!.toBase58());
   const limit = Buffer.from(ins[0]!.data).readUInt32LE(1);
   const xfer = ins[3]!, to = keys[xfer.accountKeyIndexes[1]!]!.toBase58(), lamports = Buffer.from(xfer.data).readBigUInt64LE(4);
-  check(progs.join() === ["ComputeBudget111111111111111111111111111111", "ComputeBudget111111111111111111111111111111", JUP6, SystemProgram.programId.toBase58()].join() && limit === 240_000, "one transaction: compute limit (1.2 x simulated), Jupiter's priority price, the swap, then Tollkit's fee", { progs, limit });
+  check(progs.join() === ["ComputeBudget111111111111111111111111111111", "ComputeBudget111111111111111111111111111111", JUP6, SystemProgram.programId.toBase58(), SystemProgram.programId.toBase58()].join() && limit === 240_000, "one transaction: compute limit (1.2 x simulated), Jupiter's priority price, the swap, Tollkit's fee, then the Jito tip", { progs, limit });
   check(to === FEE_TO && lamports === 1_560_000n && feeLamports === 1_560_000n, "the fee goes to Tollkit's Solana fee wallet, the amount the wallet worked out", { to, lamports: String(lamports) });
+  { const { DONT_FRONT, JITO_TIP_ACCOUNTS } = await import("../src/jito.js");
+    const tip = ins[4]!, tipTo = keys[tip.accountKeyIndexes[1]!]!.toBase58(), tipAmt = Buffer.from(tip.data).readBigUInt64LE(4), marker = keys[tip.accountKeyIndexes[2]!]!.toBase58();
+    check(JITO_TIP_ACCOUNTS.includes(tipTo) && tipAmt === 10_000n && marker === DONT_FRONT, "0.9.9: a 10,000-lamport Jito tip carrying the dontfront marker, so Tollkit's route sends it privately", { tipTo, tipAmt: String(tipAmt), marker }); }
 
   // Signed and sent only if the simulated result checks out, with the fee allowed on top of network fees
   const tokData = (amt: bigint) => { const b = Buffer.alloc(165); me.publicKey.toBuffer().copy(b, 32); b.writeBigUInt64LE(amt, 64); return [b.toString("base64"), "base64"]; };
