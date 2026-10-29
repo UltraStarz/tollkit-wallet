@@ -267,7 +267,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           rules: w.rules().list().slice(-200).reverse().map((r) => ({ ...r, description: describeRule(r) })),
           ideas: w.ideas().list().slice(-60),
           always: w.always().view(), always_sol: w.alwaysSol().view(), devices: devs.view(),
-          bots: botsView(), bot_templates: TEMPLATES, bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
+          bots: botsView(), bot_templates: TEMPLATES,
+          // 0.9.9: money in Orca pools (Range bots), for Home's balance.
+          pools: w.rules().list().filter((r) => r.kind === "range" && r.state.range?.mint).map((r) => { const g = r.state.range!; return { bot: r.bot ?? null, sol: g.sol ?? 0, usdc: g.usdc ?? 0, value_usd: g.value_usd ?? null, lower: g.lower ?? null, upper: g.upper ?? null, in_range: g.in_range ?? null, fees_pending_usd: g.fees_pending_usd ?? 0 }; }), bot_share: shareSettings(w.dir).share, bot_board: board, trade_mode: tradeMode(w.dir),
           autopilot: { ...Autopilot.status(w.dir), here: !!autopilot?.holdsLease, last_tick: autopilot?.lastTick ?? null, agent_rules: w.policy.agent_rules },
           connect: { password_file: passwordFile(w.dir), ready: existsSync(passwordFile(w.dir)), windows: process.platform === "win32", launch: launchConfig(w.dir), apps: o.connectApps === false ? [] : appStatus(w.dir), vscode: vscodeLink(w.dir), remote: o.remote ? o.remote.view() : null },
           ai: ai ? ai.view() : null,

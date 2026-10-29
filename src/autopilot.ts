@@ -44,6 +44,8 @@ export interface LpExecutor {
   read(mint: string): Promise<{ sol: number; usdc: number; inRange: boolean; lower: number; upper: number } | null>;
   /** Fees the position has earned and not yet collected (optional; shown on the bot card). */
   fees?(mint: string): Promise<{ sol: bigint; usdc: bigint } | null>;
+  /** Add the Activity line for a position opened before Activity listed pool moves (once). */
+  backfill?(mint: string, o: { ts: string; usd: number; lower: number; upper: number }): Promise<void>;
 }
 export interface PriceSource { snapshot(): { prices: Record<string, Price> } }
 
@@ -381,6 +383,7 @@ export class Autopilot {
       const value = pos.sol * p + pos.usdc;
       // 0.9.9: a bot whose first open was retried lost what went in; it's the dollars it started with.
       if (!st.deposited_usd && !st.recenters) await this.saveRange(r, { deposited_usd: r.amount_usd });
+      if (!st.ledgered && lp.backfill && st.opened_at && st.lower && st.upper) { await lp.backfill(st.mint, { ts: st.opened_at, usd: st.value_usd ?? r.amount_usd ?? 0, lower: st.lower, upper: st.upper }).catch(() => {}); await this.saveRange(r, { ledgered: true }); }
       // Fees earned so far, looked up every 5 minutes (they're only paid out when the position is touched).
       let pending: { fees_pending_usd?: number; fees_checked_at?: string } = {};
       if (lp.fees && (!st.fees_checked_at || now - Date.parse(st.fees_checked_at) >= 5 * 60_000)) {
@@ -439,7 +442,7 @@ export class Autopilot {
     let opened: { mint: string; tx: string };
     try { opened = await lp.open({ lower, upper, maxSol: solHave, maxUsdc: usdcHave, beforeSend: (mint) => this.saveRange(r, { phase: "opening", mint, staged: true, sol: Number(solHave) / 1e9, usdc: Number(usdcHave) / 1e6 }) }); }
     catch (e) { await this.saveRange(r, { phase: undefined, mint: undefined }); await this.fail(r, "lp_failed", (e as Error).message); return; }
-    await this.saveRange(r, { phase: undefined, staged: undefined, mint: opened.mint, lower_tick: lower, upper_tick: upper, lower: lo, upper: hi, opened_at: new Date(now).toISOString(), in_range: true,
+    await this.saveRange(r, { phase: undefined, staged: undefined, ledgered: true, mint: opened.mint, lower_tick: lower, upper_tick: upper, lower: lo, upper: hi, opened_at: new Date(now).toISOString(), in_range: true,
       out_since: undefined, deposited_usd: r.state.range?.deposited_usd ?? r.amount_usd, value_usd: total, fees_pending_usd: 0, fees_checked_at: new Date(now).toISOString(),
       note: `In Orca's SOL/USDC pool from $${lo.toFixed(2)} to $${hi.toFixed(2)}.`,
       event: `Put about $${total.toFixed(2)} into Orca's SOL/USDC pool between $${lo.toFixed(2)} and $${hi.toFixed(2)}. It earns a share of the pool's trading fees while SOL stays in between.` });

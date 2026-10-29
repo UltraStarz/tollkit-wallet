@@ -16,6 +16,7 @@ import { addresses, unlock, type Keys } from "./keystore.js";
 import { TokenList } from "./holdings.js";
 import { findListed, isCoreToken, loadExtraLists, solanaInfo } from "./tokenlist.js";
 import { entries, exportCsv, LimitError, record, reserve, settle, spentToday, type Entry } from "./ledger.js";
+import { tickToPrice } from "./clmm.js";
 import { payFetch, type PayResult } from "./pay.js";
 import { loadPolicy, savePolicy, type Policy } from "./policy.js";
 import { files, walletHome } from "./paths.js";
@@ -610,17 +611,37 @@ export class TollkitWallet {
         on();
         const c = conn(), plan = await buildOpen(c, { owner: this.keys.solana.publicKey, lower: o.lower, upper: o.upper, maxSol: o.maxSol, maxUsdc: o.maxUsdc, slippageBps });
         await o.beforeSend?.(plan.positionMint);
-        return { mint: plan.positionMint, tx: await sendAndConfirm(c, plan.tx, [this.keys.solana, ...plan.signers]) };
+        // 0.9.9: money into or out of an Orca pool shows in Activity.
+        const sol = Number(o.maxSol) / 1e9, usdc = Number(o.maxUsdc) / 1e6, lo = tickToPrice(o.lower, 9, 6), hi = tickToPrice(o.upper, 9, 6);
+        const base = { ts: new Date().toISOString(), kind: "pool" as const, chain: "solana", seller: "Orca", tool: "deposit", usd: Math.round((sol * plan.price + usdc) * 100) / 100,
+          detail: `${Number(sol.toFixed(4))} SOL + ${usdc.toFixed(2)} USDC into Orca's SOL/USDC pool ($${lo.toFixed(2)}–$${hi.toFixed(2)})` };
+        try {
+          const tx = await sendAndConfirm(c, plan.tx, [this.keys.solana, ...plan.signers]);
+          record({ ...base, id: `pool-in-${plan.positionMint}`, status: "done", tx }, this.o.dir);
+          return { mint: plan.positionMint, tx };
+        } catch (e) { record({ ...base, id: randomUUID(), status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir); throw e; }
       },
       close: async (mint) => {
         on();
         const c = conn(), owner = this.keys.solana.publicKey;
         const fees = (await feesOwed(c, owner, mint).catch(() => null)) ?? { sol: 0n, usdc: 0n };
         const plan = await buildClose(c, { owner, positionMint: mint, slippageBps });
-        const tx = await sendAndConfirm(c, plan.tx, [this.keys.solana, ...plan.signers]);
+        const sol = Number(plan.estSol + fees.sol) / 1e9, usdc = Number(plan.estUsdc + fees.usdc) / 1e6, feeUsd = (Number(fees.sol) / 1e9) * plan.price + Number(fees.usdc) / 1e6;
+        const base = { ts: new Date().toISOString(), kind: "pool" as const, chain: "solana", seller: "Orca", tool: "withdraw", usd: Math.round((sol * plan.price + usdc) * 100) / 100,
+          detail: `${Number(sol.toFixed(4))} SOL + ${usdc.toFixed(2)} USDC back from Orca's SOL/USDC pool (fees earned $${feeUsd.toFixed(2)})` };
+        let tx: string;
+        try { tx = await sendAndConfirm(c, plan.tx, [this.keys.solana, ...plan.signers]); }
+        catch (e) { record({ ...base, id: randomUUID(), status: "failed", reason: (e as Error).message.slice(0, 300) }, this.o.dir); throw e; }
+        record({ ...base, id: `pool-out-${mint}`, status: "done", tx }, this.o.dir);
         return { tx, sol: plan.estSol + fees.sol, usdc: plan.estUsdc + fees.usdc, feesSol: fees.sol, feesUsdc: fees.usdc };
       },
       fees: (mint) => feesOwed(conn(), this.keys.solana.publicKey, mint),
+      // A position opened before Activity listed pool moves gets its line once, at the time it opened.
+      backfill: async (mint, o) => {
+        if (entries(this.o.dir).some((e) => e.id === `pool-in-${mint}`)) return;
+        record({ id: `pool-in-${mint}`, ts: o.ts, kind: "pool", status: "done", chain: "solana", seller: "Orca", tool: "deposit", usd: Math.round(o.usd * 100) / 100,
+          detail: `About $${o.usd.toFixed(2)} into Orca's SOL/USDC pool ($${o.lower.toFixed(2)}–$${o.upper.toFixed(2)})` }, this.o.dir);
+      },
       read: async (mint) => {
         const c = conn(), pos = await readPosition(c, mint);
         return pos ? describePosition(pos, await readPool(c, pos.whirlpool)) : null;

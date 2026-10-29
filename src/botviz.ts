@@ -94,7 +94,7 @@ export interface Level { price: number; kind: "buy" | "sell" | "stop" | "grid" |
 export interface Trade { ts: string; ok: boolean; side: "buy" | "sell" | null; usd: number | null; units: number | null; price: number | null; paper: boolean; reason?: string }
 export interface NextMove { text: string; price?: number; at?: string; dist_pct?: number }
 
-const fmt = (n: number) => `$${n.toLocaleString("en-US", { maximumFractionDigits: n < 1 ? 6 : n < 100 ? 4 : 2 })}`;
+const fmt = (n: number) => (n > 0 && n < 0.01 ? `$${n.toPrecision(2)}` : `$${n.toLocaleString("en-US", Number.isInteger(n) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`); // 0.9.9: dollars to the cent
 const open = (r: Rule) => r.status === "active" || r.status === "paused";
 
 /** The prices a bot acts at, for drawing on its chart. Finished steps are kept, faded (live: false). */

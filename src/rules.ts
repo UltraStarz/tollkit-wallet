@@ -144,7 +144,7 @@ export interface Rule extends RuleInput {
       /** Fees earned and not yet collected (looked up every 5 minutes), and what the bot has done, newest last. */
       fees_pending_usd?: number; fees_checked_at?: string; log?: { ts: string; text: string }[];
       /** When it moved the range (the last 10). */
-      recenter_at?: string[] };
+      recenter_at?: string[]; ledgered?: boolean };
     /** Grid: completed buy-then-sell round trips and their profit. */
     round_trips?: number; grid_profit_usd?: number;
     /** 0.9.3: Smart DCA, rebalancer, infinity grid and split orders (src/botlogic.ts). */
@@ -155,7 +155,7 @@ export interface Rule extends RuleInput {
 /** Plain-language summary, shown to the owner before a rule is turned on. */
 export function describeRule(r: RuleInput): string {
   const t = r.token.length > 12 ? `${r.token.slice(0, 6)}…${r.token.slice(-4)}` : r.token.toUpperCase();
-  const $ = (n?: number) => (n === undefined ? "?" : `$${n.toLocaleString("en-US", { maximumFractionDigits: n < 1 ? 6 : 2 })}`);
+  const $ = (n?: number) => (n === undefined ? "?" : n > 0 && n < 0.01 ? `$${n.toPrecision(2)}` : `$${n.toLocaleString("en-US", Number.isInteger(n) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`); // 0.9.9: dollars to the cent
   // 0.9.7: a sell that follows a buy (sell_from) and names no amount sells what that buy got: say so, not "? SOL".
   const sell = r.sell_percent !== undefined ? (r.sell_percent >= 100 ? `all ${t}` : `${r.sell_percent}% of ${t}`) : r.sell_amount !== undefined ? `${r.sell_amount} ${t}` : r.sell_from ? `the ${t} it bought` : `? ${t}`;
   const on = ` on ${r.chain[0]!.toUpperCase()}${r.chain.slice(1)}`;

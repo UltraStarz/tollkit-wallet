@@ -9,7 +9,7 @@ import { files, walletHome } from "./paths.js";
 import type { Policy } from "./policy.js";
 import { budgetProblem } from "./appbudget.js";
 
-export type Kind = "trade" | "payment" | "withdrawal" | "stake" | "move" | "dapp";
+export type Kind = "trade" | "payment" | "withdrawal" | "stake" | "move" | "dapp" | "pool";
 export type Status = "pending" | "done" | "failed";
 
 export interface Entry {

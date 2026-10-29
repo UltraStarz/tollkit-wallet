@@ -70,7 +70,7 @@ function tempWsol(owner: PublicKey, lamports: bigint) {
   };
 }
 
-export interface OpenPlan { tx: Transaction; signers: Keypair[]; positionMint: string; lower: number; upper: number; newArrays: number }
+export interface OpenPlan { tx: Transaction; signers: Keypair[]; positionMint: string; lower: number; upper: number; newArrays: number; price: number }
 /**
  * Open a position between two ticks with up to `maxSol` lamports and `maxUsdc` (6 decimals). Slippage: the pool's
  * price may move `slippageBps` before it lands, or the transaction fails and nothing moves.
@@ -111,10 +111,10 @@ export async function buildOpen(conn: Pick<Connection, "getAccountInfo" | "getMu
   ixs.push(wsol.close);
   const tx = new Transaction().add(...ixs);
   tx.feePayer = owner;
-  return { tx, signers: [mint, wsol.kp], positionMint: mint.publicKey.toBase58(), lower: o.lower, upper: o.upper, newArrays };
+  return { tx, signers: [mint, wsol.kp], positionMint: mint.publicKey.toBase58(), lower: o.lower, upper: o.upper, newArrays, price: pool.price };
 }
 
-export interface ClosePlan { tx: Transaction; signers: Keypair[]; estSol: bigint; estUsdc: bigint; feesSol: bigint; feesUsdc: bigint }
+export interface ClosePlan { tx: Transaction; signers: Keypair[]; estSol: bigint; estUsdc: bigint; feesSol: bigint; feesUsdc: bigint; price: number }
 /** Take everything out of a position (its coins, fees and any rewards) and close it, back into the owner's wallet. */
 export async function buildClose(conn: Pick<Connection, "getAccountInfo">, o: { owner: PublicKey; positionMint: string; slippageBps: number; pool?: Pool }): Promise<ClosePlan> {
   const pos = await readPosition(conn, o.positionMint);
@@ -150,7 +150,7 @@ export async function buildClose(conn: Pick<Connection, "getAccountInfo">, o: { 
   ixs.push(wsol.close);
   const tx = new Transaction().add(...ixs);
   tx.feePayer = owner;
-  return { tx, signers: [wsol.kp], estSol: est.a, estUsdc: est.b, feesSol: pos.feeOwedA, feesUsdc: pos.feeOwedB };
+  return { tx, signers: [wsol.kp], estSol: est.a, estUsdc: est.b, feesSol: pos.feeOwedA, feesUsdc: pos.feeOwedB, price: pool.price };
 }
 
 /** What a position holds now, in plain numbers. */

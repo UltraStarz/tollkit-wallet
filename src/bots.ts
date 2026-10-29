@@ -48,7 +48,7 @@ export const TEMPLATES: Template[] = [
       { key: "sell_pct", label: "Sell: % of what you hold", kind: "pct", default: 50, min: 1, max: 100 },
       { key: "times", label: "How many times", kind: "int", default: 1, min: 1, max: 50 }] },
   { id: "range", name: "Range bot", blurb: "Puts your dollars into Orca's SOL/USDC pool, between a low and a high price around today's. While SOL trades inside that range, you earn a share of the pool's trading fees. If the price leaves the range for a while, it takes everything out and opens a new range around the new price. The swaps it makes pay the 0.25% TOLLkit bot fee.",
-    risk: "If SOL moves a lot, you can end up with less than if you had just held (impermanent loss), and each re-center locks that in and pays swap fees. Fees earned aren't guaranteed. Runs on this device only, while the wallet app is open.",
+    risk: "If SOL moves a lot, you can end up with less than if you had just held (impermanent loss), and each re-center locks that in and pays swap fees. Fees earned aren't guaranteed. The money earns 24/7 while SOL is in range, even with the app closed; moving the range and Stop happen only while the wallet app is open and unlocked.",
     fields: [{ key: "amount_usd", label: "Dollars to put in (USDC)", kind: "usd", default: 100, min: 20, max: 100000 },
       { key: "range_pct", label: "Range around today's price (± %)", kind: "pct", default: 5, min: 1, max: 50 },
       { key: "recenter_min", label: "Re-center after this many minutes outside", kind: "int", default: 30, min: 5, max: 1440 }] },
