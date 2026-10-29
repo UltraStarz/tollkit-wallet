@@ -113,6 +113,8 @@ interface State {
   marks: { day: string; day_start: number; week: string; week_start: number } | null;
   /** 0.9.8: Trending on X coins the owner hid (lowercased addresses): not shown, never paper-tested. */
   x_hidden?: string[];
+  /** 0.9.9: the owner tapped Not now on the Range bot idea; it stays hidden until then. */
+  range_idea_until?: string;
   stats: { cycles: number; steps: number; step_usd: number; last_cycle: string | null; last_step: string | null; last_snapshot: string | null; last_error: string | null; last_report: string | null; snap_fails?: number };
 }
 
@@ -249,8 +251,67 @@ export class SuperBot {
       next_cycle: s.enabled && s.stats.last_cycle ? nowIso(Date.parse(s.stats.last_cycle) + s.settings.rethink_minutes * 60_000) : null,
       // 0.33.0: X through Grok, from Tollkit's shared snapshot: the mood per coin and the trending memes (paper only).
       x: this.xView(),
+      range_idea: this.rangeIdea(s, all),
       ...(this.d.decide ? { brain: { own: true, label: this.d.decide.label() } } : {}),
     };
+  }
+
+  /**
+   * 0.9.9: when Autopilot has nothing to do (its last decisions over 12 hours all read the market as flat and changed
+   * nothing, and none of its strategies traded), a Range bot on Orca's SOL/USDC pool is the kind of thing that earns in
+   * a flat market. Autopilot only suggests it: the owner opens the form and starts it, and the money is never moved by
+   * Autopilot. Not shown while a Range bot is already running or the owner said Not now.
+   */
+  rangeIdea(s: State = this.load(), all: Rule[] = this.w.rules().list()): { why: string; amount_usd: number; range_pct: number; recenter_min: number } | null {
+    const now = this.now(), since = now - 12 * 3600_000;
+    if (!s.enabled || s.halted) return null;
+    if (!s.settings.tokens.some((t) => t.chain === "solana" && /^SOL$/i.test(t.token))) return null;
+    if (s.range_idea_until && Date.parse(s.range_idea_until) > now) return null;
+    if (all.some((r) => r.kind === "range" && !r.archived && ["active", "paused", "proposed"].includes(r.status))) return null;
+    const recent = s.decisions.filter((d) => Date.parse(d.ts) >= since && d.by === "strategist");
+    if (recent.length < 3) return null;
+    const flat = recent.every((d) => d.market_view === "neutral" && d.actions.every((a) => a.type === "keep" || !a.applied));
+    if (!flat) return null;
+    const traded = s.strategies.some((st) => this.rulesOf(s, st, all).some((r) => r.state.fills.some((f) => f.ok && Date.parse(f.ts) >= since)));
+    if (traded) return null;
+    return { why: `For the last 12 hours Autopilot has read the market as flat and its strategies haven't traded. A Range bot earns a share of Orca's SOL/USDC trading fees while SOL stays in a band, which is when a flat market pays.`,
+      amount_usd: 100, range_pct: 5, recenter_min: 30 };
+  }
+  /**
+   * 0.9.9: a Range bot started from Autopilot's idea ends (everything goes back to the wallet) when the reason for it
+   * is gone: Autopilot's last 2 decisions read the market as moving, it moved the range 3 times in 24 hours (SOL is
+   * trending), or it's down more than 3% of what went in, counting fees earned. Range bots the owner set up on their
+   * own are never touched. Ending = cancelling the rule; the device running it takes the money out.
+   */
+  private async endRangeIdeas() {
+    const s = this.load(), now = this.now(), rules = this.w.rules();
+    for (const r of rules.list()) {
+      if (r.kind !== "range" || r.suggested_by !== "autopilot" || !["active", "paused"].includes(r.status)) continue;
+      const g = r.state.range ?? {}, since = Date.parse(r.created_at);
+      const views = s.decisions.filter((d) => d.by === "strategist" && Date.parse(d.ts) > since).slice(-2);
+      let why: string | null = null;
+      if (views.length === 2 && views.every((d) => d.market_view !== "neutral")) why = `the market stopped being flat (Autopilot's last two reads: ${views.map((d) => d.market_view.replace("_", " ")).join(", ")})`;
+      const moves = (g.recenter_at ?? []).filter((t) => now - Date.parse(t) <= 86_400_000).length;
+      if (!why && moves >= 3) why = `it moved the range ${moves} times in 24 hours, so SOL is trending rather than flat`;
+      const p = r.state.last_price;
+      const worth = g.mint ? g.value_usd : g.staged && p ? (g.sol ?? 0) * p + (g.usdc ?? 0) : undefined;
+      if (!why && g.deposited_usd && worth !== undefined) {
+        const res = worth + (g.fees_pending_usd ?? 0) - g.deposited_usd;
+        if (res < -0.03 * g.deposited_usd) why = `it was down $${Math.abs(res).toFixed(2)} (${((-res / g.deposited_usd) * 100).toFixed(1)}%) of the $${g.deposited_usd.toFixed(2)} that went in, counting fees`;
+      }
+      if (!why) continue;
+      const text = `Autopilot ended it: ${why}. Everything goes back to your wallet.`;
+      await rules.mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (!x) return; x.status = "cancelled"; x.state.note = text;
+        const gg = x.state.range ?? {}; x.state.range = { ...gg, log: [...(gg.log ?? []), { ts: nowIso(now), text }].slice(-20) }; });
+      await this.log("rule", `Ended the Range bot it suggested: ${why}.`, [{ type: "retire", reason: text, sources: ["Range bot idea"], applied: true, outcome: "ended" }]);
+      await this.d.notify?.(`Autopilot ended your Range bot: ${why}. The money goes back to your wallet.`).catch(() => {});
+    }
+  }
+
+  /** The owner tapped Not now: hide the idea for 3 days. */
+  async rangeIdeaLater() {
+    await this.update((st) => { st.range_idea_until = nowIso(this.now() + 3 * 86_400_000); });
+    return this.view();
   }
 
   // ─── owner actions ───────────────────────────────────────────────────────
@@ -319,6 +380,7 @@ export class SuperBot {
       await this.checkLosses(s, all);
       await this.promoteDemote(all);
       await this.dailyReport(all);
+      await this.endRangeIdeas();
       const after = this.load();
       if (after.halted) return;
       const snap = await this.snapshot();
@@ -338,7 +400,7 @@ export class SuperBot {
       const active = (after.settings.pace ?? "steady") !== "steady"; // "active" or "max"
       await this.noticeOwnerStops(this.w.rules().list());
       if (active) await this.tightenIdle(this.w.rules().list());
-      if (force || moved || stale || active) await this.step(snap);
+      if (force || moved || stale || active) { await this.step(snap); await this.endRangeIdeas(); }
     } catch (e) {
       await this.update((x) => { x.stats.last_error = (e as Error).message.slice(0, 300); });
     } finally { this.busy = false; }

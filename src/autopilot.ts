@@ -42,6 +42,8 @@ export interface LpExecutor {
   open(o: { lower: number; upper: number; maxSol: bigint; maxUsdc: bigint; beforeSend?: (mint: string) => Promise<void> }): Promise<{ mint: string; tx: string }>;
   close(mint: string): Promise<{ tx: string; sol: bigint; usdc: bigint; feesSol: bigint; feesUsdc: bigint }>;
   read(mint: string): Promise<{ sol: number; usdc: number; inRange: boolean; lower: number; upper: number } | null>;
+  /** Fees the position has earned and not yet collected (optional; shown on the bot card). */
+  fees?(mint: string): Promise<{ sol: bigint; usdc: bigint } | null>;
 }
 export interface PriceSource { snapshot(): { prices: Record<string, Price> } }
 
@@ -375,17 +377,31 @@ export class Autopilot {
       const pos = await lp.read(st.mint);
       // The app stopped while a new position was being sent: it either landed (carry on) or never did (open again).
       if (st.phase === "opening") { await this.saveRange(r, pos ? { phase: undefined } : { phase: undefined, mint: undefined }); r = this.store.get(r.id)!; if (!pos) return this.range(r, t, p); }
-      if (!pos) { await this.saveRange(r, { mint: undefined, out_since: undefined, note: "The position was closed outside TOLLkit, so the bot stopped." }, "done"); return; }
+      if (!pos) { await this.saveRange(r, { mint: undefined, out_since: undefined, note: "The position was closed outside TOLLkit, so the bot stopped.", event: "The position was closed outside TOLLkit, so the bot stopped." }, "done"); return; }
       const value = pos.sol * p + pos.usdc;
-      if (pos.inRange) { await this.saveRange(r, { in_range: true, out_since: undefined, value_usd: value, sol: pos.sol, usdc: pos.usdc }); return; }
+      // 0.9.9: a bot whose first open was retried lost what went in; it's the dollars it started with.
+      if (!st.deposited_usd && !st.recenters) await this.saveRange(r, { deposited_usd: r.amount_usd });
+      // Fees earned so far, looked up every 5 minutes (they're only paid out when the position is touched).
+      let pending: { fees_pending_usd?: number; fees_checked_at?: string } = {};
+      if (lp.fees && (!st.fees_checked_at || now - Date.parse(st.fees_checked_at) >= 5 * 60_000)) {
+        const f = await lp.fees(st.mint).catch(() => null);
+        if (f) pending = { fees_pending_usd: (Number(f.sol) / 1e9) * p + Number(f.usdc) / 1e6, fees_checked_at: new Date(now).toISOString() };
+      }
+      if (pos.inRange) {
+        await this.saveRange(r, { in_range: true, out_since: undefined, value_usd: value, sol: pos.sol, usdc: pos.usdc, ...pending,
+          ...(st.out_since ? { event: `SOL came back into the range at $${p.toFixed(2)}, so it stays put and keeps earning.` } : {}) });
+        return;
+      }
       const since = st.out_since ? Date.parse(st.out_since) : now;
-      await this.saveRange(r, { in_range: false, out_since: new Date(since).toISOString(), value_usd: value, sol: pos.sol, usdc: pos.usdc });
+      await this.saveRange(r, { in_range: false, out_since: new Date(since).toISOString(), value_usd: value, sol: pos.sol, usdc: pos.usdc, ...pending,
+        ...(!st.out_since ? { event: `SOL ${p > (st.upper ?? p) ? "rose above" : "fell below"} the range ($${p.toFixed(2)}). It earns no fees out here; if it stays out ${r.recenter_min ?? 30} minutes, the bot moves the range.` } : {}) });
       if (r.status !== "active" || now - since < (r.recenter_min ?? 30) * 60_000) return;
       let out: Awaited<ReturnType<LpExecutor["close"]>>;
       try { out = await lp.close(st.mint); } catch (e) { await this.fail(r, "lp_failed", (e as Error).message); return; }
       const fees = (Number(out.feesSol) / 1e9) * p + Number(out.feesUsdc) / 1e6;
-      await this.saveRange(r, { mint: undefined, out_since: undefined, fees_usd: (st.fees_usd ?? 0) + fees, recenters: (st.recenters ?? 0) + 1, staged: true,
-        sol: Number(out.sol) / 1e9, usdc: Number(out.usdc) / 1e6, note: `Price left the range; took out $${value.toFixed(2)} to move it.` });
+      await this.saveRange(r, { mint: undefined, out_since: undefined, fees_usd: (st.fees_usd ?? 0) + fees, fees_pending_usd: 0, recenters: (st.recenters ?? 0) + 1, staged: true, recenter_at: [...(st.recenter_at ?? []), new Date(now).toISOString()].slice(-10),
+        sol: Number(out.sol) / 1e9, usdc: Number(out.usdc) / 1e6, note: `Price left the range; took out $${value.toFixed(2)} to move it.`,
+        event: `Out of range for ${r.recenter_min ?? 30} minutes: took out $${(value + fees).toFixed(2)} (including $${fees.toFixed(2)} in fees) to open a new range around $${p.toFixed(2)}.` });
       r = this.store.get(r.id)!;
     }
     // Open: first with amount_usd of USDC; after a re-center, with what came back out.
@@ -409,7 +425,9 @@ export class Autopilot {
       if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
       const got = BigInt(String(res.quote?.buy_amount ?? "0"));
       if (buy) { usdcHave -= BigInt(req.sell_amount); solHave += got; } else { solHave -= BigInt(req.sell_amount); usdcHave += got; }
-      await this.saveRange(r, { staged: true, sol: Number(solHave) / 1e9, usdc: Number(usdcHave < 0n ? 0n : usdcHave) / 1e6 });
+      await this.saveRange(r, { staged: true, sol: Number(solHave) / 1e9, usdc: Number(usdcHave < 0n ? 0n : usdcHave) / 1e6,
+        event: buy ? `Bought ${(Number(got) / 1e9).toFixed(4)} SOL for $${usd.toFixed(2)}, so the money goes in about ${Math.round(share * 100)}% SOL and ${100 - Math.round(share * 100)}% USDC.`
+          : `Sold ${(Number(req.sell_amount) / 1e9).toFixed(4)} SOL for about $${usd.toFixed(2)} to get back to about ${Math.round(share * 100)}% SOL and ${100 - Math.round(share * 100)}% USDC.` });
       await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id)!; x.state.fills.push({ ts: new Date(now).toISOString(), ok: true, usd, tx: res.tx, side: buy ? "buy" : "sell", units: Number(buy ? got : BigInt(req.sell_amount)) / 1e9 });
         x.state.fills = x.state.fills.slice(-50); tally(x, buy ? "buy" : "sell", usd, Number(buy ? got : BigInt(req.sell_amount)) / 1e9); });
     }
@@ -422,7 +440,9 @@ export class Autopilot {
     try { opened = await lp.open({ lower, upper, maxSol: solHave, maxUsdc: usdcHave, beforeSend: (mint) => this.saveRange(r, { phase: "opening", mint, staged: true, sol: Number(solHave) / 1e9, usdc: Number(usdcHave) / 1e6 }) }); }
     catch (e) { await this.saveRange(r, { phase: undefined, mint: undefined }); await this.fail(r, "lp_failed", (e as Error).message); return; }
     await this.saveRange(r, { phase: undefined, staged: undefined, mint: opened.mint, lower_tick: lower, upper_tick: upper, lower: lo, upper: hi, opened_at: new Date(now).toISOString(), in_range: true,
-      out_since: undefined, deposited_usd: first ? r.amount_usd : r.state.range?.deposited_usd, value_usd: total, note: `In Orca's SOL/USDC pool from $${lo.toFixed(2)} to $${hi.toFixed(2)}.` });
+      out_since: undefined, deposited_usd: r.state.range?.deposited_usd ?? r.amount_usd, value_usd: total, fees_pending_usd: 0, fees_checked_at: new Date(now).toISOString(),
+      note: `In Orca's SOL/USDC pool from $${lo.toFixed(2)} to $${hi.toFixed(2)}.`,
+      event: `Put about $${total.toFixed(2)} into Orca's SOL/USDC pool between $${lo.toFixed(2)} and $${hi.toFixed(2)}. It earns a share of the pool's trading fees while SOL stays in between.` });
     const updated = this.store.get(r.id)!;
     this.o.onEvent?.({ type: "filled", rule: updated, detail: `Range $${lo.toFixed(2)}–$${hi.toFixed(2)} opened with about $${total.toFixed(2)} (${opened.tx})` });
   }
@@ -434,16 +454,18 @@ export class Autopilot {
     const out = await lp.close(r.state.range.mint);
     const back = (Number(out.sol) / 1e9) * p + Number(out.usdc) / 1e6, fees = (Number(out.feesSol) / 1e9) * p + Number(out.feesUsdc) / 1e6;
     await this.saveRange(r, { mint: undefined, out_since: undefined, in_range: undefined, value_usd: 0, fees_usd: (r.state.range.fees_usd ?? 0) + fees,
-      note: `Took out about $${back.toFixed(2)} (${out.sol > 0n ? `${(Number(out.sol) / 1e9).toFixed(4)} SOL and ` : ""}${(Number(out.usdc) / 1e6).toFixed(2)} USDC) back to your wallet.` });
+      note: `Took out about $${back.toFixed(2)} (${out.sol > 0n ? `${(Number(out.sol) / 1e9).toFixed(4)} SOL and ` : ""}${(Number(out.usdc) / 1e6).toFixed(2)} USDC) back to your wallet.`, fees_pending_usd: 0,
+      event: `Stopped: took out about $${back.toFixed(2)} (including $${fees.toFixed(2)} in fees) back to your wallet.` });
     this.o.onEvent?.({ type: "cancelled", rule: this.store.get(r.id)!, detail: `Range bot stopped: about $${back.toFixed(2)} back in your wallet (${out.tx})` });
   }
 
-  private async saveRange(r: Rule, u: Partial<NonNullable<Rule["state"]["range"]>> & { note?: string }, status?: "done") {
-    const { note, ...rest } = u;
+  private async saveRange(r: Rule, u: Partial<NonNullable<Rule["state"]["range"]>> & { note?: string; event?: string }, status?: "done") {
+    const { note, event, ...rest } = u;
     await this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id); if (!x) return;
       const next: Record<string, unknown> = { ...(x.state.range ?? {}) };
       for (const [k, v] of Object.entries(rest)) if (v === undefined) delete next[k]; else next[k] = v;
+      if (event) next.log = [...((next.log as { ts: string; text: string }[] | undefined) ?? []), { ts: new Date(this.now()).toISOString(), text: event }].slice(-20);
       x.state.range = next as any;
       if (note) x.state.note = note;
       x.state.failures = 0; x.state.last_error = undefined; x.state.next_run = undefined;
@@ -495,6 +517,8 @@ export class Autopilot {
   /** Back off after a failure. Stops retry fast; anything else slows down and stops after 5 tries. */
   private async fail(r: Rule, code: string, reason: string) {
     reason = plainError(reason, r.chain);
+    if (r.kind === "range") await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (!x) return; const g = x.state.range ?? {};
+      x.state.range = { ...g, log: [...(g.log ?? []), { ts: new Date(this.now()).toISOString(), text: `Couldn't go ahead: ${reason} It tries again in 5 minutes.` }].slice(-20) }; });
     const urgent = r.kind === "stop_loss" || r.kind === "trailing_stop";
     const wait = code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
     const updated = await this.store.mutate((rs) => {

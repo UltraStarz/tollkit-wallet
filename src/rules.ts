@@ -100,6 +100,8 @@ export const RuleInput = z.object({
    *  recenter_min minutes out of range, take it out and open a new range around the price then. Runs on this device only. */
   range_pct: z.number().min(1).max(50).optional(),
   recenter_min: z.number().int().min(5).max(1440).optional(),
+  /** 0.9.9: started from Autopilot's Range bot idea, so Autopilot may end it (src/superbot.ts endRangeIdeas). */
+  suggested_by: z.enum(["autopilot"]).optional(),
 });
 export type RuleInput = z.infer<typeof RuleInput>;
 
@@ -138,7 +140,11 @@ export interface Rule extends RuleInput {
     /** 0.9.9, Range bot: the open Orca position (its token's mint), its range, and how it's doing. `liq` is the paper
      *  position's liquidity (paper only). out_since: when the price left the range. */
     range?: { mint?: string; lower_tick?: number; upper_tick?: number; lower?: number; upper?: number; opened_at?: string; out_since?: string;
-      in_range?: boolean; value_usd?: number; sol?: number; usdc?: number; fees_usd?: number; recenters?: number; liq?: string; deposited_usd?: number; phase?: "opening" | "closing"; staged?: boolean };
+      in_range?: boolean; value_usd?: number; sol?: number; usdc?: number; fees_usd?: number; recenters?: number; liq?: string; deposited_usd?: number; phase?: "opening" | "closing"; staged?: boolean;
+      /** Fees earned and not yet collected (looked up every 5 minutes), and what the bot has done, newest last. */
+      fees_pending_usd?: number; fees_checked_at?: string; log?: { ts: string; text: string }[];
+      /** When it moved the range (the last 10). */
+      recenter_at?: string[] };
     /** Grid: completed buy-then-sell round trips and their profit. */
     round_trips?: number; grid_profit_usd?: number;
     /** 0.9.3: Smart DCA, rebalancer, infinity grid and split orders (src/botlogic.ts). */

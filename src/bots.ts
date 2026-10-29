@@ -138,7 +138,8 @@ export interface BotSummary {
   result_usd: number | null; result_pct: number | null;
   round_trips: number; last_trade: string | null; last_price: number | null; started: string;
   /** 0.9.9: a Range bot's position. */
-  range?: { in_range: boolean | null; lower: number | null; upper: number | null; value_usd: number | null; fees_usd: number; recenters: number; out_since: string | null; open: boolean };
+  range?: { in_range: boolean | null; lower: number | null; upper: number | null; value_usd: number | null; fees_usd: number; fees_pending_usd: number; recenters: number; out_since: string | null;
+    opened_at: string | null; open: boolean; deposited_usd: number | null; sol: number | null; usdc: number | null; log: { ts: string; text: string }[]; recenter_min: number; by_autopilot: boolean; error: string | null; retry_at: string | null };
 }
 
 /** Status board: rules grouped into bots (a rule made by hand is a bot of one). */
@@ -158,7 +159,7 @@ export function summarize(rules: Rule[]): BotSummary[] {
     const last = rs.flatMap((r) => r.state.fills.filter((x) => x.ok).map((x) => x.ts)).sort().at(-1) ?? null;
     let result = spent > 0 && value !== null ? got + value - spent : spent > 0 && held === 0 ? got - spent : null;
     // 0.9.9: a Range bot: what its position (or the coins between ranges) is worth now, against what went in.
-    const rg = rs.find((r) => r.kind === "range")?.state.range;
+    const rr0 = rs.find((r) => r.kind === "range"), rg = rr0 ? rr0.state.range ?? {} : undefined;
     let rangeValue: number | null = null;
     if (rg?.deposited_usd) {
       rangeValue = rg.mint ? rg.value_usd ?? null : rg.staged && price !== null ? (rg.sol ?? 0) * price + (rg.usdc ?? 0) : null;
@@ -170,7 +171,9 @@ export function summarize(rules: Rule[]): BotSummary[] {
       trades_ok: ok, trades_failed: bad, success_rate: ok + bad ? Math.round((ok / (ok + bad)) * 1000) / 10 : null,
       spent_usd: Math.round(spent * 100) / 100, received_usd: Math.round(got * 100) / 100, units_held: held, value_now_usd: value === null ? null : Math.round(value * 100) / 100,
       result_usd: result === null ? null : Math.round(result * 100) / 100, result_pct: result === null ? null : Math.round((result / (rg?.deposited_usd || spent)) * 1000) / 10,
-      ...(rg ? { range: { in_range: rg.in_range ?? null, lower: rg.lower ?? null, upper: rg.upper ?? null, value_usd: rangeValue, fees_usd: rg.fees_usd ?? 0, recenters: rg.recenters ?? 0, out_since: rg.out_since ?? null, open: !!rg.mint } } : {}),
+      ...(rg ? { range: { in_range: rg.in_range ?? null, lower: rg.lower ?? null, upper: rg.upper ?? null, value_usd: rangeValue, fees_usd: rg.fees_usd ?? 0, fees_pending_usd: rg.fees_pending_usd ?? 0,
+        recenters: rg.recenters ?? 0, out_since: rg.out_since ?? null, opened_at: rg.opened_at ?? null, open: !!rg.mint, deposited_usd: rg.deposited_usd ?? null, sol: rg.sol ?? null, usdc: rg.usdc ?? null,
+        log: (rg.log ?? []).slice(-6).reverse(), ...(() => { const x = rs.find((r) => r.kind === "range")!; return { recenter_min: x.recenter_min ?? 30, by_autopilot: x.suggested_by === "autopilot", error: x.state.last_error ?? null, retry_at: x.state.failures ? x.state.next_run ?? null : null }; })() } } : {}),
       round_trips: s((r) => r.state.round_trips), last_trade: last, last_price: price, started: rs.map((r) => r.created_at).sort()[0]!,
     });
   }

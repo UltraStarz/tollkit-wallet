@@ -40,6 +40,7 @@ const lp: LpExecutor = {
     const a = amountsForLiquidity(p.L, sqrtNow(), tickToSqrtPrice(p.lower), tickToSqrtPrice(p.upper));
     st.wallet.sol += a.a + 1_000_000n; st.wallet.usdc += a.b + 100_000n;
     return { tx: `close${st.closes}`, sol: a.a + 1_000_000n, usdc: a.b + 100_000n, feesSol: 1_000_000n, feesUsdc: 100_000n }; },
+  fees: async (mint) => (positions.has(mint) ? { sol: 2_000_000n, usdc: 300_000n } : null),
   read: async (mint) => { const p = positions.get(mint); if (!p) return null; const a = amountsForLiquidity(p.L, sqrtNow(), tickToSqrtPrice(p.lower), tickToSqrtPrice(p.upper));
     const lo = tickToPrice(p.lower, 9, 6), hi = tickToPrice(p.upper, 9, 6); return { sol: Number(a.a) / 1e9, usdc: Number(a.b) / 1e6, inRange: st.price >= lo && st.price < hi, lower: lo, upper: hi }; },
 };
@@ -62,12 +63,16 @@ check(st.swaps.length === 1 && st.swaps[0]!.sell_token === USDC && st.swaps[0]!.
 check(st.opens.length === 1 && !!rg.mint && rg.lower! < 100 && rg.upper! > 100 && Math.abs(rg.lower! - 95) < 0.3 && Math.abs(rg.upper! - 105) < 0.3, "opens $95–$105 around $100", rg);
 check(Number(st.opens[0].used.a) > Number(st.opens[0].maxSol) * 0.98 && Number(st.opens[0].used.b) > Number(st.opens[0].maxUsdc) * 0.98, "nearly all of both coins go in", st.opens[0]);
 check(rg.deposited_usd === 100 && !rg.staged && !rg.phase, "deposited $100; nothing left waiting");
+check((rg.log ?? []).length === 2 && /Bought .* SOL for \$/.test(rg.log![0]!.text) && /Put about \$.* between \$/.test(rg.log![1]!.text), "it says what it did, in words", rg.log);
 
 st.price = 103; await tick();
+await tick(5 * 60_000);
 check(s.get(r!.id)!.state.range!.in_range === true && st.closes === 0, "inside the range: stays put");
+check(Math.abs((s.get(r!.id)!.state.range!.fees_pending_usd ?? 0) - (0.002 * 103 + 0.3)) < 0.01, "fees earned so far are looked up every 5 minutes", s.get(r!.id)!.state.range);
 st.price = 108; await tick();
 const out1 = s.get(r!.id)!.state.range!;
 check(out1.in_range === false && !!out1.out_since && st.closes === 0, "leaves the range: starts the clock, doesn't move yet", out1);
+check(/rose above the range/.test(out1.log!.at(-1)!.text), "and says so", out1.log!.at(-1));
 await tick(20 * 60_000);
 check(st.closes === 0, "20 minutes out: still waiting (recenter after 30)");
 st.price = 108.5; await tick(11 * 60_000);
@@ -78,6 +83,7 @@ check(Math.abs((r2.fees_usd ?? 0) - (0.001 * 108.5 + 0.1)) < 0.01, "fees taken o
 
 const sum = summarize(s.list()).find((b) => b.template === "range")!;
 check(!!sum.range && sum.range.open && sum.range.recenters === 1 && sum.result_usd !== null, "status board: open, one re-center, a result against the $100", sum.range);
+check(sum.range!.log.length > 0 && /new range around/.test(sum.range!.log.map((e) => e.text).join(" ")) && sum.range!.error === null, "the card gets the latest events, newest first", sum.range!.log[0]);
 
 // A failed open leaves the coins in the wallet and retries with them, without buying again.
 st.price = 120; st.failOpen = true; await tick(); await tick(31 * 60_000);
@@ -100,5 +106,11 @@ await tick();
 const qq = s.get(q!.id)!.state.range!;
 check(qq.mint !== "ghost" && !!qq.mint && !qq.phase, "an open that never landed is opened again", qq);
 
+// A first open that fails (the network dropped it) and works on the retry still counts the $ it started with.
+{ st.wallet.usdc += 300_000_000n; st.failOpen = true;
+  const [n1] = await s.addBot(buildBot("range", "SOL", "solana", { amount_usd: 60, range_pct: 5, recenter_min: 30 }, st.price).rules, "owner", true);
+  await tick(); st.failOpen = false; await tick(6 * 60_000);
+  const g1 = s.get(n1!.id)!.state.range!, b1 = summarize(s.list()).find((b) => b.rules[0]!.id === n1!.id)!;
+  check(!!g1.mint && g1.deposited_usd === 60 && b1.range!.value_usd !== null && b1.result_usd !== null, "a retried first open still knows the $60 that went in", { g1, r: b1.range }); }
 console.log(`\nrange: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

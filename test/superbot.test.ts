@@ -419,5 +419,66 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   check(/owner paused it/.test(String((await (C.bot as any).apply({ type: "adjust", strategy_id: sc.id, params: { drop_pct: 2 }, reason: "x", sources: [] }))?.outcome)), "and the AI can't adjust it either");
 }
 
+// ─── 0.9.9: a flat market with nothing to do suggests a Range bot (the owner starts it) ─────────────────
+{
+  const W = world();
+  await W.bot.enable({});
+  await new Promise((r) => setTimeout(r, 30));
+  check(W.bot.view().range_idea === null, "one flat decision isn't enough");
+  for (let i = 0; i < 3; i++) { W.advance(61 * 60_000); await W.bot.tick(); }
+  const idea = W.bot.view().range_idea;
+  check(!!idea && idea.amount_usd === 100 && idea.range_pct === 5 && /flat/.test(idea.why), "three flat decisions in 12 hours and no trades: it suggests a Range bot", idea);
+  await W.bot.rangeIdeaLater();
+  check(W.bot.view().range_idea === null, "Not now hides it");
+  W.advance(3 * 86_400_000 + 60_000);
+  W.setDecision(() => ({ assessment: "Risk on.", market_view: "risk_on", confidence: 0.7, actions: [{ type: "keep", reason: "x", sources: [] }] }));
+  for (let i = 0; i < 2; i++) { W.advance(61 * 60_000); await W.bot.tick(); }
+  check(W.bot.view().range_idea === null, "not when Autopilot reads the market as moving");
+  const W2 = world();
+  await W2.bot.enable({});
+  for (let i = 0; i < 3; i++) { W2.advance(61 * 60_000); await W2.bot.tick(); }
+  await W2.store.add({ kind: "range", chain: "solana", token: "SOL", amount_usd: 50, range_pct: 5 }, "owner", true);
+  check(W2.bot.view().range_idea === null, "not while a Range bot is already running");
+  const W3 = world();
+  await W3.bot.enable({ tokens: [{ chain: "base", token: "ETH" }] });
+  for (let i = 0; i < 3; i++) { W3.advance(61 * 60_000); await W3.bot.tick(); }
+  check(W3.bot.view().range_idea === null, "not when Autopilot doesn't trade SOL");
+}
+
+// ─── 0.9.9: Autopilot ends a Range bot it suggested once the reason is gone; never one the owner set up alone ──
+{
+  const mk = async (W: any, o: { mine?: boolean; range?: any }) => {
+    const r = await W.store.add({ kind: "range", chain: "solana", token: "SOL", amount_usd: 100, range_pct: 5, ...(o.mine ? {} : { suggested_by: "autopilot" }) }, "owner", true);
+    await W.store.mutate((rs: any[]) => { const x = rs.find((y) => y.id === r.id); x.created_at = "2026-10-20T08:00:00.000Z"; x.state.last_price = 100; x.state.range = { mint: "m", deposited_usd: 100, value_usd: 100, in_range: true, ...o.range }; });
+    return r.id as string;
+  };
+  const cycles = async (W: any, n: number) => { for (let i = 0; i < n; i++) { W.advance(61 * 60_000); await W.bot.tick(); } };
+  // the market starts moving
+  const A = world(); await A.bot.enable({});
+  const a1 = await mk(A, {}), a2 = await mk(A, { mine: true });
+  await cycles(A, 1);
+  check(A.store.get(a1)!.status === "active", "still flat: it keeps running");
+  A.setDecision(() => ({ assessment: "Breaking out.", market_view: "risk_on", confidence: 0.7, actions: [{ type: "keep", reason: "x", sources: [] }] }));
+  await cycles(A, 1);
+  check(A.store.get(a1)!.status === "active", "one moving read isn't enough");
+  await cycles(A, 1);
+  const ea = A.store.get(a1)!;
+  check(ea.status === "cancelled" && /stopped being flat/.test(ea.state.note ?? "") && /Autopilot ended it/.test(ea.state.range!.log!.at(-1)!.text), "two moving reads in a row: Autopilot ends the bot it suggested", ea.state.note);
+  check(A.store.get(a2)!.status === "active", "the owner's own Range bot is left alone");
+  check(A.notes.some((n) => /ended your Range bot/.test(n)) && A.bot.view().decisions.some((d: any) => /Ended the Range bot/.test(d.assessment)), "it says so in the log and the notification");
+  // moving the range too often
+  const B = world(); await B.bot.enable({});
+  const t0 = new Date(Date.parse("2026-10-20T08:00:00Z")).toISOString();
+  const b1 = await mk(B, { range: { recenter_at: [t0, t0, t0] } });
+  await cycles(B, 1);
+  check(B.store.get(b1)!.status === "cancelled" && /moved the range 3 times/.test(B.store.get(b1)!.state.note ?? ""), "3 moves in 24 hours: ended");
+  // losing more than 3%
+  const C = world(); await C.bot.enable({});
+  const c1 = await mk(C, { range: { value_usd: 97.5, fees_pending_usd: 0.4 } }), c2 = await mk(C, { range: { value_usd: 96.5, fees_pending_usd: 0.2 } });
+  await cycles(C, 1);
+  check(C.store.get(c1)!.status === "active", "down 2.1% after fees: keeps going");
+  check(C.store.get(c2)!.status === "cancelled" && /down \$3\.30 \(3\.3%\)/.test(C.store.get(c2)!.state.note ?? ""), "down 3.3% after fees: ended", C.store.get(c2)!.state.note);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

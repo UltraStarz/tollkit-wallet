@@ -357,6 +357,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         try { built = buildBot(String(b.template ?? ""), tok.symbol && /^[A-Z0-9.]{2,12}$/i.test(tok.symbol) && isCoreToken(chain, tok.address) ? tok.symbol : tok.address, chain, (b.params ?? {}) as Record<string, unknown>, price); }
         catch (e) { return send(res, 400, { error: (e as Error).message }); }
         if (p === "/api/bots/preview") return send(res, 200, { name: built.name, price: price ?? null, rules: built.rules.map((r) => ({ description: describeRule(r) })) });
+        // 0.9.9: a Range bot started from Autopilot's idea is marked so Autopilot may end it.
+        if (b.from === "autopilot" && String(b.template) === "range") built.rules = built.rules.map((r) => ({ ...r, suggested_by: "autopilot" as const }));
         const made = await w.rules().addBot(built.rules, "owner", false);
         void autopilot?.tick(); void alwaysSync();
         return send(res, 200, { bot: built.bot, rules: made.map((r) => r.id) });
@@ -470,6 +472,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           // 0.9.9: Stop any strategy for good, or Remove it from the list.
           if (action === "stop") return send(res, 200, { superbot: await superbot.stopStrategy(b.id) });
           if (action === "remove") return send(res, 200, { superbot: await superbot.removeStrategy(b.id) });
+          // 0.9.9: Not now on the Range bot idea.
+          if (action === "range_idea_later") return send(res, 200, { superbot: await superbot.rangeIdeaLater() });
           if (action === "x_hide") return send(res, 200, { superbot: await superbot.xHide(b.address, true) });
           if (action === "x_unhide") return send(res, 200, { superbot: await superbot.xHide(null, false) });
           if (action === "cycle") { await superbot.cycle(true); return send(res, 200, { superbot: superbot.view() }); }

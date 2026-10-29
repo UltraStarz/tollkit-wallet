@@ -620,6 +620,7 @@ export class TollkitWallet {
         const tx = await sendAndConfirm(c, plan.tx, [this.keys.solana, ...plan.signers]);
         return { tx, sol: plan.estSol + fees.sol, usdc: plan.estUsdc + fees.usdc, feesSol: fees.sol, feesUsdc: fees.usdc };
       },
+      fees: (mint) => feesOwed(conn(), this.keys.solana.publicKey, mint),
       read: async (mint) => {
         const c = conn(), pos = await readPosition(c, mint);
         return pos ? describePosition(pos, await readPool(c, pos.whirlpool)) : null;
