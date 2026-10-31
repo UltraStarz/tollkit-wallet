@@ -78,12 +78,16 @@ export interface SuperbotSettings {
   daily_share_pct: number;
   /** 0.9.6: "active" asks the strategist for more, smaller trades (still on paper first, inside every limit). */
   pace: "steady" | "active" | "max";
+  /** 0.9.10: Think 24/7: while no device is checking, Autopilot keeps deciding on TOLLkit's server (Solana, paid from the
+   *  prepaid AI balance). Active mode: a strategy that passed its paper trial goes live by itself, inside the budget. */
+  think_24_7: boolean; active_mode: boolean;
 }
 export const DEFAULT_SETTINGS: SuperbotSettings = {
   chains: ["base", "solana"], tokens: [{ chain: "base", token: "ETH" }, { chain: "solana", token: "SOL" }],
   sources: { news: true, farcaster: true, x: false },
   budget_usd: 100, per_trade_usd: 20, max_token_pct: 25, daily_loss_pct: 5, weekly_loss_pct: 15, slippage_bps: 100,
   paper_days: 7, paper_trades: 20, rethink_minutes: 30, max_strategies: 4, always_on: false, daily_share_pct: 50, pace: "steady",
+  think_24_7: false, active_mode: false,
 };
 
 export interface Strategy {
@@ -104,7 +108,7 @@ export interface Strategy {
   ready?: { at: string; result_pct: number; trades: number } | null;
 }
 export interface AppliedAction { type: string; strategy_id?: string; template?: string; chain?: string; token?: string; params?: Record<string, unknown>; reason: string; sources: string[]; applied: boolean; outcome: string }
-export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" | "away" }
+export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" | "away" | "server" }
 export interface Report { date: string; text: string; live_result_usd: number | null; trades: number; decisions: number }
 interface State {
   enabled: boolean; since: string | null; settings: SuperbotSettings; strategies: Strategy[]; decisions: Decision[]; reports: Report[];
@@ -115,6 +119,8 @@ interface State {
   x_hidden?: string[];
   /** 0.9.9: the owner tapped Not now on the Range bot idea; it stays hidden until then. */
   range_idea_until?: string;
+  /** 0.9.10: the server's decisions already copied into the log. */
+  server_seen?: string[];
   stats: { cycles: number; steps: number; step_usd: number; last_cycle: string | null; last_step: string | null; last_snapshot: string | null; last_error: string | null; last_report: string | null; snap_fails?: number };
 }
 
@@ -133,6 +139,8 @@ export interface SuperBotDeps {
    * `label` names the model (null until a key is added); `run` makes one forced `decide` call (app/own-ai.ts).
    */
   decide?: { label(): string | null; run(system: string, user: string, tool: typeof DECIDE_TOOL): Promise<{ input: unknown; model: string }> };
+  /** 0.9.10: what TOLLkit's server reported about Think 24/7 at the last sync (its balance, whether it's thinking). */
+  serverBrain?: () => unknown;
 }
 
 const nowIso = (ms: number) => new Date(ms).toISOString();
@@ -162,6 +170,8 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   if (b.rethink_minutes !== undefined) { const m = Number(b.rethink_minutes); if (!(SUPERBOT.rethink as readonly number[]).includes(m)) throw new Error("Rethink every 15, 30 or 60 minutes."); s.rethink_minutes = m as 15 | 30 | 60; }
   if (b.max_strategies !== undefined) s.max_strategies = num(b.max_strategies, 4, 1, 10);
   if (b.always_on !== undefined) s.always_on = !!b.always_on;
+  if (b.think_24_7 !== undefined) s.think_24_7 = !!b.think_24_7;
+  if (b.active_mode !== undefined) s.active_mode = !!b.active_mode;
   if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max") throw new Error("Pace is steady, active or max."); s.pace = b.pace; }
   if (s.per_trade_usd > s.budget_usd) throw new Error("The per-trade cap can't be more than the budget.");
   if (s.tokens.some((t) => !s.chains.includes(t.chain))) throw new Error("Every token's network must be turned on.");
@@ -245,13 +255,14 @@ export class SuperBot {
     const live = strategies.filter((x) => x.stage === "live");
     return {
       enabled: s.enabled, since: s.since, settings: s.settings, halted: s.halted, stats: s.stats,
-      strategies, decisions: s.decisions.slice(-40).reverse(), reports: s.reports.slice(-7).reverse(),
+      strategies, decisions: s.decisions.slice().sort((x, y) => x.ts.localeCompare(y.ts)).slice(-40).reverse(), reports: s.reports.slice(-7).reverse(),
       totals: { live: live.length, paper: strategies.filter((x) => x.stage === "paper").length, retired: strategies.filter((x) => x.stage === "retired").length,
         live_result_usd: r2(live.reduce((a, x) => a + (x.result_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
       next_cycle: s.enabled && s.stats.last_cycle ? nowIso(Date.parse(s.stats.last_cycle) + s.settings.rethink_minutes * 60_000) : null,
       // 0.33.0: X through Grok, from Tollkit's shared snapshot: the mood per coin and the trending memes (paper only).
       x: this.xView(),
       range_idea: this.rangeIdea(s, all),
+      server: this.d.serverBrain?.() ?? null,
       ...(this.d.decide ? { brain: { own: true, label: this.d.decide.label() } } : {}),
     };
   }
@@ -447,6 +458,17 @@ export class SuperBot {
         // 0.9.8: a strategy that beat holding USDC waits for the owner's Go live; it keeps practising on paper meanwhile.
         // A trending meme also needs the coin added on Home before it can go live (checked again on Go live).
         if (pct !== null && pct > 0) {
+          // 0.9.10 Active mode: it goes live by itself when it fits the budget (never a Trending-on-X coin: those need the owner).
+          if (s.settings.active_mode && !st.paper_only) {
+            const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC. Active mode is on, so it went live with real money.`;
+            const ok = await this.restage(st, "live", why, all);
+            if (ok.applied) {
+              await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
+              await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`, "Active mode"], applied: true, outcome: ok.outcome }]);
+              await this.d.notify?.(`Autopilot: ${st.name} passed its paper trial (+${pct}%) and went live (Active mode).`).catch(() => {});
+              continue;
+            }
+          }
           if (!st.ready) {
             const sym = st.symbol ? `$${st.symbol}` : st.token.length > 12 ? `${st.token.slice(0, 4)}…` : st.token;
             const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC. Ready to go live with real money when you tap Go live.`;
@@ -810,6 +832,63 @@ export class SuperBot {
     return { params: out };
   }
 
+  // ─── 0.9.10: Think 24/7 ──────────────────────────────────────────────────
+  /** What TOLLkit's server needs to keep deciding while no device checks: settings and the Solana strategies. Null: off. */
+  brainInfo(): unknown | null {
+    const s = this.load();
+    if (!s.enabled || s.halted || !s.settings.think_24_7 || !s.settings.always_on || this.d.active?.() === false) return null;
+    const all = this.w.rules().list(), t = this.now(), st = s.settings;
+    return {
+      on: true, active: !!st.active_mode,
+      settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_token_pct: st.max_token_pct, max_strategies: st.max_strategies, pace: st.pace, daily_loss_pct: st.daily_loss_pct,
+        paper_days: st.paper_days, paper_trades: st.paper_trades, rethink_minutes: st.rethink_minutes, slippage_bps: st.slippage_bps,
+        tokens: st.tokens.filter((x) => x.chain === "solana").map((x) => ({ token: x.token })), sources_on: Object.entries(st.sources).filter(([, v]) => v).map(([k]) => k) },
+      strategies: s.strategies.filter((x) => x.stage !== "retired" && x.chain === "solana").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, name: x.name, template: x.template, token: x.token, params: x.params, stage: x.stage,
+        rule_ids: this.rulesOf(s, x, all).filter((r) => r.status === "active" || r.status === "paused").map((r) => r.id), result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, trades: sum?.trades_ok ?? 0, days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000) }; }),
+    };
+  }
+
+  /**
+   * Back from being away: what the server's Autopilot decided goes into the log (and its pause, resume and retire of
+   * strategies here are applied here too), and each strategy it started is taken over under the same rule ids: paper
+   * ones keep practising here, live ones keep running 24/7. Returns the ids taken over (the server then lets go).
+   */
+  async adoptServer(b: { strategies?: any[]; log?: any[] }): Promise<string[]> {
+    const seen = new Set(this.load().server_seen ?? []);
+    const fresh = (b.log ?? []).filter((e) => e && typeof e.id === "string" && !seen.has(e.id));
+    for (const e of fresh) {
+      const acts: AppliedAction[] = (e.actions ?? []).map((a: any) => ({ type: String(a.type), strategy_id: a.strategy_id, template: a.template, chain: a.chain, token: a.token, params: a.params, reason: String(a.reason ?? ""), sources: a.sources ?? [], applied: !!a.applied, outcome: String(a.outcome ?? "") }));
+      await this.log("server", `While you were away: ${String(e.assessment ?? "")}`, acts, { ts: e.ts, market_view: e.market_view ?? "neutral", confidence: e.confidence ?? 1, model: e.model ?? null, cost_usd: e.cost_usd ?? 0, snapshot_id: e.snapshot_id ?? null });
+      for (const a of acts) {
+        if (!a.applied || !a.strategy_id) continue;
+        const s = this.load(), st = s.strategies.find((x) => x.id === a.strategy_id && x.stage !== "retired");
+        if (!st) continue;
+        if (a.type === "retire") await this.retire(st, `Autopilot retired it while you were away: ${a.reason}`, this.w.rules().list());
+        else if (a.type === "pause" || a.type === "resume") for (const r of this.rulesOf(s, st, this.w.rules().list())) if (r.status === (a.type === "pause" ? "active" : "paused")) await this.w.rules().setStatus(r.id, a.type === "pause" ? "paused" : "active").catch(() => {});
+      }
+    }
+    if (fresh.length) await this.update((x) => { x.server_seen = [...seen, ...fresh.map((e) => e.id as string)].slice(-300); });
+    const out: string[] = [];
+    for (const sv of b.strategies ?? []) {
+      if (!sv || typeof sv.id !== "string") continue;
+      if (this.load().strategies.some((x) => x.id === sv.id)) { out.push(sv.id); continue; } // taken over before; tell the server again
+      const at = typeof sv.created_at === "string" ? sv.created_at : nowIso(this.now()), bot = randomUUID().slice(0, 8);
+      const stage: Stage = sv.stage === "live" ? "live" : sv.stage === "retired" ? "retired" : "paper";
+      const made = stage === "retired" ? [] : (sv.rules ?? []).filter((r: any) => r && !r.done).map((r: any) => ruleFromServer(r, sv, bot, at, stage === "paper"));
+      if (made.length) await this.w.rules().mutate((rs) => { for (const m of made) if (!rs.some((x) => x.id === m.id)) rs.push(m); });
+      await this.update((x) => {
+        x.strategies.push({ id: sv.id, name: String(sv.name ?? sv.template), template: String(sv.template), chain: "solana", token: String(sv.token), params: sv.params ?? {}, stage, bot: made.length ? bot : null, created_at: at,
+          stage_since: typeof sv.stage_since === "string" ? sv.stage_since : at, history: [...(Array.isArray(sv.history) ? sv.history : []), { ts: nowIso(this.now()), note: "Taken over from TOLLkit's server when this device came back." }].slice(-40),
+          ...(sv.ready ? { ready: sv.ready } : {}) });
+        if (stage === "paper") x.paper_rules.push(...made.map((r: Rule) => r.id));
+      });
+      if (stage === "live") for (const m of made) this.ao(m).set(m.id, true, this.load().settings.budget_usd);
+      out.push(sv.id);
+    }
+    if (out.length || fresh.length) this.d.onRulesChanged?.();
+    return out;
+  }
+
   // ─── log and reports ─────────────────────────────────────────────────────
   /** 0.9.9: for Run 24/7. While Autopilot is on and running here, the server only acts "while you're away". */
   awayInfo(): { last_decision: string; drop_pct: number; rise_pct: number } | null {
@@ -852,4 +931,21 @@ export class SuperBot {
     await this.update((x) => { x.stats.last_report = today; x.reports.push({ date: yday, text, live_result_usd: liveResult, trades, decisions: decisions.length }); if (x.reports.length > SUPERBOT.keepReports) x.reports.splice(0, x.reports.length - SUPERBOT.keepReports); });
     await this.d.notify?.(text).catch(() => {});
   }
+}
+
+/** 0.9.10: a rule TOLLkit's server ran for Autopilot (x402-starter src/always-sol.ts SRule), as this wallet keeps it. */
+export function ruleFromServer(r: any, sv: any, bot: string, at: string, paper: boolean): Rule {
+  const kind = String(r.kind);
+  const { grid, ...rest } = (r.bot && typeof r.bot === "object" ? r.bot : {}) as any;
+  const lv = Number(r.levels) || 0;
+  return {
+    id: String(r.id), chain: "solana", token: String(sv.token), kind: kind as any, bot, bot_name: `Autopilot · ${String(sv.name ?? sv.template)}`, template: String(sv.template),
+    ...(r.amount_usd !== undefined ? { amount_usd: r.amount_usd } : {}), ...(r.every ? { every: r.every } : {}), ...(r.times ? { times: r.times } : {}),
+    ...(r.lower_price !== undefined ? { lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels } : {}), ...(r.when ? { when: r.when } : {}),
+    reason: "Started by Autopilot on TOLLkit's server while you were away.", ...(paper ? { paper: true } : {}),
+    status: "active", created_by: "agent", by: "superbot", created_at: at, activated_at: at,
+    state: { runs: Number(r.runs) || 0, failures: 0, fills: [], ...(r.next_run ? { next_run: r.next_run } : {}), ...(r.ref_price ? { last_price: r.ref_price } : {}),
+      ...(kind === "grid" ? { grid: grid ?? { units: Array(Math.max(0, lv - 1)).fill(null), cost: Array(Math.max(0, lv - 1)).fill(null), atomic: Array(Math.max(0, lv - 1)).fill(null) } } : {}),
+      ...(Object.keys(rest).length ? { bot: rest } : {}), ...(kind.startsWith("signal_") && r.armed === false ? { alert_armed: false } : {}) },
+  } as Rule;
 }

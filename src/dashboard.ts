@@ -110,7 +110,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     // 0.9.9: other devices read what's set aside from the chain, so every device shows the same total.
     if (!runsHere()) { if (w.alwaysSol().anyOn()) await w.alwaysSol().refreshHeld().catch(() => {}); return; }
     if (w.always().anyOn()) try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
-    if (w.alwaysSol().anyOn()) try { await w.alwaysSol().sync(); } catch (e) { w.alwaysSol().noteError((e as Error).message); }
+    // 0.9.10: Think 24/7 syncs too, even before any strategy is live, so the server knows when this device goes quiet.
+    if (w.alwaysSol().anyOn() || superbot?.brainInfo()) try { await w.alwaysSol().sync(); } catch (e) { w.alwaysSol().noteError((e as Error).message); }
   };
   const alwaysTimer = o.watch === false ? null : setInterval(() => void alwaysSync(), 5 * 60_000);
   // 0.8.0: an AI tool added or changed rules; start them now rather than at the next tick.
@@ -159,12 +160,16 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     onRulesChanged: () => { void autopilot?.tick(); void paperPilot?.tick(); void alwaysSync(); },
     notify: tg ? (t) => notify(tg, t) : undefined,
     active: runsHere,
+    serverBrain: () => { const v = w.alwaysSol().view(); return { ...(v.brain ?? {}), topup_pending: v.topup_pending, config: v.config?.brain ?? null }; },
     ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });
   if (o.watch !== false) superbot.start();
   // 0.9.9: Run 24/7 knows when Autopilot is watching here, and what the server paused while it wasn't.
   w.alwaysSol().awayInfo = () => superbot?.awayInfo() ?? null;
   w.alwaysSol().onAway = (e) => superbot?.logAway(e);
+  // 0.9.10: Think 24/7: what the server needs, and what it hands back when this device is here again.
+  w.alwaysSol().brainInfo = () => superbot?.brainInfo() ?? null;
+  w.alwaysSol().onBrain = (b) => (superbot ? superbot.adoptServer(b) : []);
   // 0.9.7: sync each minute while it's on, and soon after anything changes here. Files that arrive from another
   // device take effect at once (the bots re-read their rules on the next tick).
   devs.onChanged = () => { void autopilot?.tick(); void paperPilot?.tick(); };
@@ -479,6 +484,13 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           if (action === "x_hide") return send(res, 200, { superbot: await superbot.xHide(b.address, true) });
           if (action === "x_unhide") return send(res, 200, { superbot: await superbot.xHide(null, false) });
           if (action === "cycle") { await superbot.cycle(true); return send(res, 200, { superbot: superbot.view() }); }
+          // 0.9.10: Think 24/7's AI balance: look it up, or top it up (sends USDC to TOLLkit, so it needs the password).
+          if (action === "credit") { await w.alwaysSol().config(); await w.alwaysSol().credit(); return send(res, 200, { superbot: superbot.view() }); }
+          if (action === "topup") {
+            if (typeof b.password !== "string" || b.password !== password) return send(res, 403, { error: "Wrong password." });
+            const t = await w.alwaysSol().topup(Number(b.usd));
+            return send(res, 200, { superbot: superbot.view(), topup: t });
+          }
           return send(res, 400, { error: "Unknown action." });
         } catch (e) { return send(res, 400, { error: (e as Error).message }); }
       }

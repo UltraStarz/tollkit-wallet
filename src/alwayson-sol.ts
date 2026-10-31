@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { Connection, PublicKey, SystemProgram, Transaction, type Keypair, type TransactionInstruction } from "@solana/web3.js";
-import { createApproveInstruction, createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction, createRevokeInstruction, createSyncNativeInstruction, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { createApproveInstruction, createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction, createRevokeInstruction, createSyncNativeInstruction, createTransferCheckedInstruction, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { createKeyPairFromBytes, getBase58Decoder, signBytes } from "@solana/kit";
 import { walletHome } from "./paths.js";
 import { sendAndConfirm } from "./solconfirm.js";
@@ -36,7 +36,12 @@ const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss", "si
 /** SOL kept unwrapped for network fees and account rent. */
 export const SOL_RESERVE = 20_000_000n; // 0.02 SOL
 
-export interface SolConfig { enabled: boolean; delegate: string | null; fee_bps?: number; reason?: string; kinds?: string[]; coins?: boolean; max_coins?: number }
+export interface SolConfig { enabled: boolean; delegate: string | null; fee_bps?: number; reason?: string; kinds?: string[]; coins?: boolean; max_coins?: number;
+  /** 0.9.10, Think 24/7: what a server decision costs, where top-ups go, and whether this wallet decides free. */
+  brain?: { decision_usd: number; credit_to: string | null; free: boolean; templates?: string[] } }
+/** 0.9.10: what the server's Autopilot did while no device was checking (x402-starter src/ap-brain.ts). */
+export interface ServerBrain { on: boolean; active: boolean; thinking: boolean; last_step: string | null; last_error: string | null; halted: { reason: string; at: string } | null;
+  strategies: any[]; log: any[]; credit: { balance_usd: number; free: boolean; decision_usd: number; credit_to: string | null; decisions: number; spent_usd: number } }
 export interface TokenAcct { exists: boolean; amount: bigint; delegate: string | null; delegated: bigint; decimals?: number }
 /** 0.9.9: what the token list says about a coin (src/tokenlist.ts solanaInfo). */
 export type CoinInfo = { symbol?: string; decimals?: number; trust?: string; jupiter?: { suspicious?: boolean } } | null;
@@ -53,6 +58,9 @@ interface Local {
   seen_fills?: string[]; held?: { usdc_allowed: string; wsol_allowed: string; wsol_balance: string; coins?: Record<string, { allowed: string; balance: string; decimals: number; symbol?: string }> };
   /** 0.9.9: coins this wallet has allowed Tollkit to sell (so turning them off revokes them), and away notes already seen. */
   coins_used?: string[]; seen_away?: string[];
+  /** 0.9.10, Think 24/7: server strategies taken over here (told to the server at the next sync), the server's last
+   *  report (without its strategies), and a top-up the server hasn't credited yet. */
+  adopted?: string[]; brain?: Omit<ServerBrain, "strategies"> | null; topup_pending?: { sig: string; usd: number; at: string } | null;
 }
 export interface SolAlwaysOpts {
   key: () => Keypair; address: string; dir?: string; rpc: string; fetch?: typeof fetch; proxy: string;
@@ -159,6 +167,7 @@ export class SolAlwaysOn {
     const l = this.load(), h = l.held;
     return { rules: Object.keys(l.rules), usd_cap: l.usd_cap, config: this.cfg, running: l.running ?? [], problems: l.problems ?? {}, last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, last_tx: l.last_tx ?? null,
       // What Tollkit may move right now, as the chain last reported it.
+      brain: l.brain ?? null, topup_pending: l.topup_pending ?? null,
       held: h ? { usdc_allowed: Number(h.usdc_allowed) / 1e6, wsol_allowed: Number(h.wsol_allowed) / 1e9, wsol_balance: Number(h.wsol_balance) / 1e9,
         coins: Object.fromEntries(Object.entries(h.coins ?? {}).map(([m, c]) => [m, { allowed: Number(c.allowed) / 10 ** c.decimals, balance: Number(c.balance) / 10 ** c.decimals, symbol: c.symbol }])) } : null };
   }
@@ -186,6 +195,59 @@ export class SolAlwaysOn {
   /** 0.9.9: set by the dashboard: Autopilot's last check-in here (null: Autopilot is off), and where its away notes go. */
   awayInfo?: () => AwayInfo | null;
   onAway?: (entries: AwayEntry[]) => Promise<void> | void;
+  /** 0.9.10, Think 24/7: Autopilot's settings and Solana strategies for the server (null: off), and where the server's
+   *  strategies and decisions go when this device is back (returns the strategy ids taken over). */
+  brainInfo?: () => unknown | null;
+  onBrain?: (b: ServerBrain) => Promise<string[]> | string[];
+
+  /** 0.9.10: the prepaid AI balance, as the server has it. */
+  async credit(): Promise<ServerBrain["credit"]> {
+    const c = await this.call("credit", {});
+    this.update((x) => { if (x.brain) x.brain.credit = c; else x.brain = { on: false, active: false, thinking: false, last_step: null, last_error: null, halted: null, log: [], credit: c }; });
+    return c;
+  }
+
+  /**
+   * 0.9.10: top up the AI balance: this wallet sends USDC on Solana to TOLLkit (the address its server names), then
+   * hands the server the transaction, which it reads from the chain before crediting. If the server hasn't seen it yet,
+   * the next sync tries again.
+   */
+  async topup(usd: number): Promise<{ sig: string; credited: boolean; credit?: ServerBrain["credit"] }> {
+    if (!(usd >= 1 && usd <= 100)) throw new Error("Top up between $1 and $100.");
+    if (this.load().topup_pending) await this.retryTopup();
+    if (this.load().topup_pending) throw new Error("The last top-up is still on its way to TOLLkit's server. Try again in a minute.");
+    const cfg = this.cfg ?? (await this.config());
+    const to = cfg?.brain?.credit_to;
+    if (!cfg?.enabled || !to) throw new Error("Top-ups aren't open for this wallet yet.");
+    if (cfg.brain?.free) throw new Error("Decisions are free on this wallet; nothing to top up.");
+    const amount = BigInt(Math.round(usd * 1e6)), mint = new PublicKey(USDC_MINT), src = this.ata(USDC_MINT), dest = getAssociatedTokenAddressSync(mint, new PublicKey(to), true);
+    const have = await this.chain.token(src.toBase58());
+    if (have.amount < amount) throw new Error(`You have $${(Number(have.amount) / 1e6).toFixed(2)} of USDC on Solana.`);
+    const sig = await this.chain.send([createAssociatedTokenAccountIdempotentInstruction(this.owner, dest, new PublicKey(to), mint), createTransferCheckedInstruction(src, mint, dest, this.owner, amount, 6)]);
+    this.update((x) => { x.topup_pending = { sig, usd, at: new Date(this.now()).toISOString() }; });
+    for (let i = 0; i < 5; i++) {
+      const c = await this.retryTopup();
+      if (c) return { sig, credited: true, credit: c };
+      await new Promise((r) => setTimeout(r, this.o.chain ? 0 : 2500));
+    }
+    return { sig, credited: false };
+  }
+  /** A sent top-up the server hasn't credited yet: ask again. Null: still not seen. */
+  private async retryTopup(): Promise<ServerBrain["credit"] | null> {
+    const p = this.load().topup_pending;
+    if (!p) return null;
+    try {
+      const c = await this.call("topup", { sig: p.sig });
+      this.update((x) => { x.topup_pending = null; if (x.brain) x.brain.credit = c; });
+      return c;
+    } catch (e) {
+      const st = (e as any).status;
+      if (st === 409) { this.update((x) => { x.topup_pending = null; }); return null; } // already credited
+      if (st === 404 || st === undefined || st >= 500) return null; // not on the chain yet, or the server is away
+      this.update((x) => { x.topup_pending = null; x.last_error = `Top-up: ${(e as Error).message}`.slice(0, 300); });
+      throw e;
+    }
+  }
   noteError(m: string) { this.update((l) => { l.last_error = m.slice(0, 300); }); }
 
   /** The owner flips the switch on a Solana rule. `usd_cap`: the most USDC Tollkit may spend on buys (refilled when the app opens). */
@@ -252,6 +314,14 @@ export class SolAlwaysOn {
     let state: any;
     try { state = await this.call("state", {}); }
     catch (e) { this.update((l) => { l.last_error = (e as Error).message.slice(0, 300); }); return { fills: [], running: l0.running ?? [], problems: l0.problems ?? {} }; }
+    // 0.9.10, Think 24/7: strategies the server's Autopilot started while no device was checking are taken over here
+    // first (same rule ids), so their fills below land on them; and its decisions go into Autopilot's log.
+    if (state.brain && this.onBrain) {
+      try { const ids = await Promise.resolve(this.onBrain(state.brain)); if (ids.length) this.update((x) => { x.adopted = [...new Set([...(x.adopted ?? []), ...ids])].slice(-50); }); }
+      catch (e) { this.update((x) => { x.last_error = `Autopilot hand-off: ${(e as Error).message}`.slice(0, 300); }); }
+    }
+    this.update((x) => { if (state.brain) { const { strategies: _s, ...rest } = state.brain; x.brain = rest; } else x.brain = null; });
+    if (this.load().topup_pending) await this.retryTopup().catch(() => {});
     const fresh: ServerFill[] = this.update((l) => { const seen = new Set(l.seen_fills ?? []); const n = (state.fills ?? []).filter((f: ServerFill) => f.id && !seen.has(f.id)); l.seen_fills = [...seen, ...n.map((f: ServerFill) => f.id!)].slice(-1000); return n; });
     if (fresh.length) await applyFills(store, fresh);
     // 0.9.3: a bot the server ran carries its own state (what it holds, its next step); the newer copy wins.
@@ -465,13 +535,15 @@ export class SolAlwaysOn {
     const tok = (r: Rule) => (isSolRule(r) ? { token: "SOL" } : { token: coinMint(r)!, symbol: info.get(coinMint(r)!)?.symbol });
     const apx = (r: Rule) => (isAutopilotRule(r) ? { ap: true, ref_price: r.state.last_price } : {});
     const sellAmt = (r: Rule) => (isSolRule(r) ? Number(amounts[r.id] ?? 0n) / 1e9 : Number(coinAmounts[r.id] ?? 0n) / 10 ** (coinDec[coinMint(r)!] ?? 0));
-    const body = { ...(away ? { away } : {}), rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
+    // 0.9.10: Think 24/7 (null: off), and the server strategies taken over here since the last sync.
+    const brain = this.brainInfo?.() ?? null, adopted = this.load().adopted ?? [];
+    const body = { ...(away ? { away } : {}), ...(brain || adopted.length ? { brain: { ...(brain ?? { on: false }), adopted } } : {}), rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
         profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs,
         bot: { ...(r.state.bot ?? {}), ...(r.kind === "grid" ? { grid: r.state.grid } : {}), ...(splitTotal[r.id] ? { sell_total: splitTotal[r.id], v: (r.state.bot?.v ?? 0) + 1 } : {}) } })
       : ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, sell_amount: !isBuy(r) ? sellAmt(r) : undefined, trigger_price: r.trigger_price,
       every: r.every, times: r.times, max_price: r.max_price, group: r.group, expires_at: r.expires_at, runs: r.state.runs, next_run: r.state.next_run, ...(r.when ? { when: r.when } : {}) })) };
     let running: string[] = l0.running ?? [];
-    try { const j = await this.call("sync", body); running = j.running ?? []; }
+    try { const j = await this.call("sync", body); running = j.running ?? []; if (adopted.length) this.update((x) => { x.adopted = (x.adopted ?? []).filter((id) => !adopted.includes(id)); }); }
     catch (e) { for (const r of send) problems[r.id] = (e as Error).message.slice(0, 200); }
     this.update((x) => {
       x.running = running; x.problems = problems; x.set_aside = set; x.last_sync = new Date(this.now()).toISOString(); x.dirty = false; x.last_error = null;
