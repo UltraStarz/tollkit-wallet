@@ -175,7 +175,8 @@ export async function feesOwed(conn: Pick<Connection, "getAccountInfo" | "simula
   tx.feePayer = owner; tx.recentBlockhash = (await conn.getLatestBlockhash("confirmed")).blockhash;
   const sim = await conn.simulateTransaction(tx, undefined, [new PublicKey(position)]);
   const acc = sim.value.accounts?.[0];
-  if (sim.value.err || !acc) return { sol: pos.feeOwedA, usdc: pos.feeOwedB };
-  const after = getPositionDecoder().decode(Buffer.from(acc.data[0], "base64"));
+  const raw = acc?.data?.[0];
+  if (sim.value.err || !acc || !raw) return { sol: pos.feeOwedA, usdc: pos.feeOwedB };
+  const after = getPositionDecoder().decode(Buffer.from(raw, "base64"));
   return { sol: after.feeOwedA, usdc: after.feeOwedB };
 }
