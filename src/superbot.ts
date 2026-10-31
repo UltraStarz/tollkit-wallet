@@ -101,6 +101,8 @@ export interface Strategy {
   past?: { stage: Stage; result_pct: number | null; trades: number }[];
   /** 0.9.7: when Active pace last tightened it for sitting idle. */
   tightened_at?: string;
+  /** 0.9.10: its bots from earlier in this stage. An AI tweak rebuilds the rules but keeps the clock and the results. */
+  prev_bots?: string[];
   /** 0.9.9: the owner stopped it (never rebuilt), paused its bot (Autopilot leaves it alone), or removed it from the list. */
   stopped_by_owner?: boolean; owner_paused?: boolean; removed?: boolean;
   /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
@@ -246,7 +248,12 @@ export class SuperBot {
   }
   private rulesOf(s: State, st: Strategy, all: Rule[]) { return st.bot ? all.filter((r) => r.bot === st.bot && !r.archived) : []; }
   private openRules(rules: Rule[]) { return rules.filter((r) => ["active", "paused", "proposed"].includes(r.status)); }
-  private summaryOf(st: Strategy, all: Rule[]): BotSummary | null { return st.bot ? summarize(all.filter((r) => r.bot === st.bot && !r.archived))[0] ?? null : null; }
+  /** 0.9.10: a strategy's results count the rules it had earlier in the same stage (before an AI tweak rebuilt it). */
+  private summaryOf(st: Strategy, all: Rule[]): BotSummary | null {
+    if (!st.bot) return null;
+    const ids = new Set([st.bot, ...(st.prev_bots ?? [])]);
+    return summarize(all.filter((r) => r.bot && ids.has(r.bot) && !r.archived).map((r) => (r.bot === st.bot ? r : { ...r, bot: st.bot! })))[0] ?? null;
+  }
 
   /** What the dashboard shows. */
   view() {
@@ -636,6 +643,8 @@ export class SuperBot {
     await this.update((x) => {
       const y = x.strategies.find((z) => z.id === st.id); if (!y) return;
       if (!keepClock) y.past = [...(y.past ?? []), { stage: y.stage, result_pct: sum?.result_pct ?? null, trades: sum?.trades_ok ?? 0 }].slice(-6);
+      // 0.9.10: same stage, clock kept: the old bot's results stay with the strategy; a new stage starts clean.
+      y.prev_bots = keepClock && y.stage === stage && y.bot ? [...(y.prev_bots ?? []), y.bot].slice(-20) : [];
       y.stage = stage; if (!keepClock) y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
       if (stage === "paper") x.paper_rules.push(...made.map((r) => r.id));
     });
@@ -769,7 +778,8 @@ export class SuperBot {
         if (params.note) return { applied: false, outcome: params.note };
         const clash = clashWithOwner(st.template, params.params, all, st.chain, st.token, await this.d.price(st.chain, st.token).catch(() => undefined));
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
-        return this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params);
+        // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
+        return this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params, true);
       }
       case "propose": {
         const running = s.strategies.filter((x) => x.stage !== "retired");
