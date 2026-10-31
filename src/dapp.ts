@@ -90,6 +90,9 @@ export function normalOrigin(o: string): string {
   if (u.protocol === "https:" || (u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1"))) return u.origin;
   throw new RpcError(4100, "Tollkit only connects to https sites.");
 }
+/** 0.9.10: buy/cash-out requests are signed by the wallet itself (rampauth.ts); a website never gets one. */
+export const rampReserved = (text: string) => /^[\s\u0000-\u001f\u200b-\u200f\ufeff]*Tollkit (onramp|offramp) request/i.test(text);
+const reservedErr = () => new RpcError(4200, "Tollkit doesn't sign its own buy or cash-out requests for websites.");
 const shown = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + `\n…(cut here: ${s.length - n} more characters not shown)` : s);
 function readable(bytes: Uint8Array): string {
   try { const t = toUtf8String(bytes); if (/^[\x09\x0a\x0d\x20-\x7e -￿]*$/.test(t)) return t; } catch { /* not text */ }
@@ -340,6 +343,7 @@ export class DappBridge {
         if (!isHexString(data) && typeof data !== "string") throw new RpcError(-32602, "Bad message.");
         if (addr && String(addr).toLowerCase() !== this.o.evm.toLowerCase()) throw unauthorized();
         const bytes = isHexString(data) ? getBytes(data) : new TextEncoder().encode(data);
+        if (rampReserved(new TextDecoder().decode(bytes)) || rampReserved(readable(bytes))) throw reservedErr();
         const pt = plainText(readable(bytes));
         await this.ask(origin, `${host} asks you to sign a message:\n\n${shown(pt.text)}${warned([...signInWarning(pt.text, host), ...pt.warnings])}`);
         return keys.evm.signMessage(bytes);
@@ -414,6 +418,7 @@ export class DappBridge {
         let text = "";
         try { text = new TextDecoder("utf-8", { fatal: true }).decode(msg); } catch { text = "\u0000"; }
         if (!msg.length || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw new RpcError(4200, "Tollkit only signs text messages on Solana.");
+        if (rampReserved(text)) throw reservedErr();
         const pt = plainText(text);
         await this.ask(origin, `${host} asks you to sign a message with your Solana key:\n\n${shown(pt.text, 2000)}${warned([...signInWarning(pt.text, host), ...pt.warnings])}`);
         const seed = Buffer.from(keys.solana.secretKey.slice(0, 32));

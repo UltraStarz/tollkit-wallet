@@ -115,6 +115,15 @@ const sm = await run(APP, "sol_signMessage", { message: Buffer.from("Sign in to 
 const pub = createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), me.toBuffer()]), format: "der", type: "spki" });
 check(edVerify(null, Buffer.from("Sign in to app.example.com"), pub, Buffer.from(sm.result.signature, "base64")), "Solana signMessage: valid ed25519 signature");
 check((await run(OTHER, "sol_signMessage", { message: "aGk=" })).error?.code === 4100, "Solana signing from an unconnected site: 4100");
+// 0.9.10: a website can't get Tollkit's own buy/cash-out signature (Coinbase review).
+{
+  const n0 = asked.length;
+  const msg = "Tollkit onramp request v2\nnetwork: base\naddress: " + w.addresses.evm + "\nasset: USDC\namount: 20.00\ntime: 1\nnonce: 00000000000000aa";
+  const e1 = await run(APP, "personal_sign", ["0x" + Buffer.from(msg).toString("hex"), w.addresses.evm]);
+  const e2 = await run(APP, "personal_sign", [" \u200bTollkit offramp request\nnetwork: base", w.addresses.evm]);
+  const e3 = await run(APP, "sol_signMessage", { message: Buffer.from("Tollkit offramp request v2\nnetwork: solana").toString("base64") });
+  check([e1, e2, e3].every((r) => r.error?.code === 4200 && /buy or cash-out/.test(r.error.message)) && asked.length === n0, "ramp-format messages from a site are refused before any prompt (EVM hex, EVM text, Solana)", [e1, e2, e3].map((r) => r.error));
+}
 
 check((await run(APP, "sol_signMessage", { message: Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64") })).error?.code === 4200, "Solana: raw bytes (a transaction in disguise) can't be signed as a message");
 check(normalOrigin("https://xn--80ak6aa92e.com") === "https://xn--80ak6aa92e.com" && (() => { try { normalOrigin("https://a'b.example.com"); return false; } catch { return true; } })(), "odd characters in a site name are refused");
