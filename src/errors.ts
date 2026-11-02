@@ -13,6 +13,8 @@ export function plainError(e: unknown, chain?: string): string {
   if (/insufficient lamports|no record of a prior credit|AccountNotFound/i.test(raw)) return "Not enough SOL to pay the network fee.";
   if (/nonce (too low|has already been used)|replacement (transaction )?underpriced|already known/i.test(raw)) return "The network was busy with another transaction from this wallet. Try again in a moment.";
   if (/timeout|timed out|ETIMEDOUT|ECONNRESET|fetch failed|network error/i.test(raw)) return "The network didn't answer in time. Try again in a moment.";
+  // 0.9.12: a swap service's own rate limit (Jupiter's gateway says "[API Gateway] Too many requests").
+  if (/\[API Gateway\]\s*Too many requests|\bHTTP 429\b/i.test(raw)) return `${chain === "solana" ? "Solana's swap" : "The swap"} service is busy right now. Try again in a moment.`;
   const rev = /reverted(?: with reason string)?:? "([^"]{1,120})"/i.exec(raw);
   if (rev) return `The transaction would fail: ${rev[1]}.`;
   if (/execution reverted|CALL_EXCEPTION/i.test(raw)) return "The network rejected this transaction.";

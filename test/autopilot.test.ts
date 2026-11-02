@@ -132,6 +132,16 @@ function market() {
   clock += 3600_000; await ap.tick();
   check(s.get(lb.id)!.status === "paused", "owner denies on Telegram/dashboard: rule pauses");
   m.state.refuse = null;
+  // 0.9.12: Jupiter busy: a plain message that says when it retries, and the last of 5 tries doesn't promise another.
+  { const jb = await s.add({ kind: "limit_buy", chain: "solana", token: "SOL", amount_usd: 10, trigger_price: 500 }, "owner", false);
+    m.state.refuse = { code: "quote_failed", reason: "[API Gateway] Too many requests" };
+    clock += 15_000; await ap.tick();
+    const j1 = s.get(jb.id)!;
+    check(j1.status === "active" && j1.state.last_error === "Solana's swap service is busy right now. It tries again in 5 minutes." && j1.state.fills.at(-1)?.reason === j1.state.last_error, "Jupiter busy: plain words and when it retries", j1.state);
+    for (let i = 0; i < 4; i++) { clock += 300_000; await ap.tick(); }
+    const j5 = s.get(jb.id)!;
+    check(j5.status === "error" && j5.state.failures === 5 && !/tries again/.test(j5.state.last_error ?? ""), "after 5 tries it stops, without promising another", j5.state);
+    m.state.refuse = null; await s.setStatus(jb.id, "cancelled").catch(() => {}); }
 
   // Expiry
   const ex = await s.add({ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 20, trigger_price: 1, expires_at: new Date(clock + 60_000).toISOString() }, "owner", false);

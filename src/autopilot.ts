@@ -526,11 +526,15 @@ export class Autopilot {
     const wait = code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
     const updated = await this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id)!;
-      x.state.failures += 1; x.state.last_error = reason; x.state.fail_count = (x.state.fail_count ?? 0) + 1;
-      x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: false, reason });
+      x.state.failures += 1; x.state.fail_count = (x.state.fail_count ?? 0) + 1;
+      const retries = code !== "denied" && (urgent || x.state.failures < 5);
+      // 0.9.12: a rule that retries on its own says when, instead of asking the owner to try again.
+      const said = retries ? reason.replace(/Try again in a moment\.$/, `It tries again in ${wait / 60_000} minute${wait === 60_000 ? "" : "s"}.`) : reason;
+      x.state.last_error = said;
+      x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: false, reason: said });
       x.state.fills = x.state.fills.slice(-50);
       if (code === "denied") { x.status = "paused"; x.state.last_error = "You denied this trade, so the rule is paused."; }
-      else if (!urgent && x.state.failures >= 5) x.status = "error";
+      else if (!retries) x.status = "error";
       else x.state.next_run = new Date(this.now() + wait).toISOString();
       return { ...x };
     });

@@ -14,5 +14,10 @@ check(plainError(ours, "solana") === ours, "the wallet's own plain refusals pass
 const odd = "Something odd (code=WEIRD, version=6.17.0)" + "x".repeat(300);
 check(plainError(new Error(odd)) === "Something odd", "unknown library errors keep just their first part", plainError(new Error(odd)));
 check(plainError(new Error("")) === "Something went wrong.", "an empty error still says something");
+// 0.9.12: Jupiter's rate limit reads as a busy service, and the wallet's own "too many waiting" message is left alone.
+check(plainError(new Error("[API Gateway] Too many requests"), "solana") === "Solana's swap service is busy right now. Try again in a moment.", "Jupiter's rate limit reads as a busy swap service");
+check(plainError("Quote failed: HTTP 429", "base") === "The swap service is busy right now. Try again in a moment.", "an HTTP 429 elsewhere reads the same");
+const waiting = "Too many requests are waiting in Tollkit. Answer those first.";
+check(plainError(waiting) === waiting, "the wallet's own queue message isn't mistaken for a rate limit");
 console.log(`\nerrors: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
