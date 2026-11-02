@@ -90,7 +90,8 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   const v = W.bot.view();
   const d = v.decisions[0];
   check(v.strategies.length === 1 && v.strategies[0].stage === "paper" && v.strategies[0].template === "grid", "one proposal becomes a paper strategy", v.strategies);
-  check(v.strategies[0].params.amount_usd === 20, "dollars per level capped at the per-trade limit", v.strategies[0].params);
+  // 0.9.11: the wallet sizes it: $100 budget / 4 strategies = $25, over a 6-level grid's 5 buys = $5 a level.
+  check(v.strategies[0].params.amount_usd === 5, "the wallet sizes it to an equal share of the budget ($25 over 5 grid buys)", v.strategies[0].params);
   check(d.actions[1].applied === false && /not on the allowed list/.test(d.actions[1].outcome), "a token off the list is refused", d.actions[1]);
   check(d.actions[2].applied === false && /no such/.test(d.actions[2].outcome), "pause of an unknown strategy is refused", d.actions[2]);
   const rules = W.store.list();
@@ -198,9 +199,11 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   W2.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
   W2.advance(8 * 86_400_000);
   await W2.bot.cycle(true);
+  // 0.9.11: proposals are sized inside the budget, so the owner lowering the budget afterwards is what overflows it.
+  await W2.bot.setSettings({ budget_usd: 10, per_trade_usd: 10 });
   let e2 = ""; try { await W2.bot.goLive(W2.bot.view().strategies[0].id); } catch (e) { e2 = (e as Error).message; }
   const v2 = W2.bot.view();
-  check(v2.strategies[0].stage === "paper" && /budget/.test(e2), "$200 committed does not fit a $100 budget: Go live is refused, it stays on paper", e2);
+  check(v2.strategies[0].stage === "paper" && /budget/.test(e2), "$25 committed does not fit a budget lowered to $10: Go live is refused, it stays on paper", e2);
 }
 
 // ─── 0.9.2: a live Solana SOL strategy goes to Solana 24/7, under the Autopilot budget ───
@@ -360,7 +363,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   await new Promise((r) => setTimeout(r, 30));
   const v = X.bot.view(), st = v.strategies[0] as any, acts = v.decisions[0].actions;
   check(v.strategies.length === 1 && st.paper_only === true && st.stage === "paper" && st.symbol === "BONK" && / · BONK$/.test(st.name), "X source on: a safe trending meme starts on paper, marked paper only, named by its ticker (BONK)", st);
-  check(st.params.amount_usd === 10, "and small: $10 at most per buy", st.params);
+  check((st.params.amount_usd as number) <= 10, "and small: $10 at most per buy", st.params);
   check(acts[1].applied === false && /dip, dca or grid/.test(acts[1].outcome) && acts[2].applied === false, "only dip, dca or grid; a coin that failed the token check is refused", acts);
   check(v.x?.trending?.length === 2 && v.x?.moods?.sol?.mood === "bullish", "the Autopilot screen gets the X moods and trending list", v.x);
   await X.bot.xHide("So1aNaRuG1111111111111111111111111111111111");

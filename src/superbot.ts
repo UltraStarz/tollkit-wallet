@@ -27,7 +27,7 @@
 import { clashWithOwner } from "./conflict.js";
 import { isAutopilotRule } from "./ownership.js";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { type Chain, CHAINS, isEvmChain, type EvmChain, chainName } from "./chains.js";
 import { walletHome } from "./paths.js";
@@ -140,9 +140,13 @@ export interface SuperBotDeps {
    * 0.9.5, the phone app: decide with the owner's own AI key instead of paying Tollkit's server per decision.
    * `label` names the model (null until a key is added); `run` makes one forced `decide` call (app/own-ai.ts).
    */
-  decide?: { label(): string | null; run(system: string, user: string, tool: typeof DECIDE_TOOL): Promise<{ input: unknown; model: string }> };
+  decide?: { label(): string | null; run(system: string, user: string, tool: typeof DECIDE_TOOL): Promise<{ input: unknown; model: string }>;
+    /** 0.9.11: the owner's key and Autopilot model, for Think 24/7 on TOLLkit's server (billed to the owner, not TOLLkit). */
+    serverKey?(): { provider: string; model: string; key: string } | null };
   /** 0.9.10: what TOLLkit's server reported about Think 24/7 at the last sync (its balance, whether it's thinking). */
   serverBrain?: () => unknown;
+  /** 0.9.11: dollar stablecoins (USDC, USDT) this wallet holds on a network, for sizing strategies. */
+  stableUsd?: (chain: Chain) => Promise<number | undefined>;
 }
 
 const nowIso = (ms: number) => new Date(ms).toISOString();
@@ -217,6 +221,35 @@ export function committedUsd(template: string, params: Record<string, unknown>):
     default: return 0;
   }
 }
+
+/**
+ * 0.9.11 (Joe: "it should be based on the size of the balance"): the wallet, not the AI, sets each strategy's dollar
+ * size. Every strategy gets an equal share: the smaller of the budget and the dollars held on that network, divided
+ * by the maximum number of strategies. The amount is then spread the way each template spends it (a grid over its
+ * levels, a steady buyer over its buys), so committedUsd() comes out at the share. Per-trade cap still applies after.
+ */
+export function shareUsd(budget: number, stable: number | undefined, maxStrategies: number): number {
+  const base = Math.min(budget, stable !== undefined && Number.isFinite(stable) && stable >= 0 ? stable : budget);
+  return Math.floor((base / Math.max(1, maxStrategies)) * 100) / 100;
+}
+export function sizeToShare(template: string, params: Record<string, unknown>, share: number): Record<string, unknown> {
+  if (!(share > 0) || params.amount_usd === undefined) return params;
+  const k = Number(params.scale) || 1, n = Math.max(0, Number(params.safety) || 0);
+  let per: number;
+  switch (template) {
+    case "grid": per = share / Math.max(1, (Number(params.levels) || 2) - 1); break;
+    case "dca": { const t = Number(params.times) || 0; per = share / (t > 0 ? t : 10); break; }
+    case "signal": if (params.side === "sell") return params; per = share / Math.max(1, Number(params.times) || 1); break;
+    case "smart_dca": { let t = 0; for (let i = 0; i <= n; i++) t += k ** i; per = share / t; break; }
+    case "infinity_grid": per = share / 1.5; break;
+    case "dip": case "rebalance": per = share; break;
+    default: return params;
+  }
+  return { ...params, amount_usd: Math.floor(per * 100) / 100 };
+}
+
+/** Same fingerprint as TOLLkit's server (x402-starter src/key-vault.ts keyFp). */
+export const brainKeyFp = (key: string) => createHash("sha256").update(`tollkit-brain-key:${key}`).digest("hex").slice(0, 16);
 
 export class SuperBot {
   readonly file: string;
@@ -776,6 +809,8 @@ export class SuperBot {
         if (st.owner_paused) return { applied: false, outcome: "the owner paused it; Autopilot leaves it alone" };
         const params = this.clampParams(s, st.template, { ...st.params, ...(a.params ?? {}) });
         if (params.note) return { applied: false, outcome: params.note };
+        // 0.9.11: on paper the wallet re-sizes it to the equal share; a live one keeps its amount (budget checked at go-live).
+        if (st.stage === "paper") params.params = await this.sized(s, st.chain, st.template, params.params);
         const clash = clashWithOwner(st.template, params.params, all, st.chain, st.token, await this.d.price(st.chain, st.token).catch(() => undefined));
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
@@ -800,6 +835,7 @@ export class SuperBot {
         if (running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
+        params.params = await this.sized(s, chain, a.template, params.params);
         if (meme && typeof params.params.amount_usd === "number") params.params.amount_usd = Math.min(10, params.params.amount_usd as number);
         const price = await this.d.price(chain, tok.token).catch(() => undefined);
         // 0.9.9: never against the owner's own rules on this coin (src/conflict.ts).
@@ -821,6 +857,17 @@ export class SuperBot {
       }
       default: return { applied: false, outcome: "unknown action" };
     }
+  }
+
+  /** Last share per network, for Think 24/7 (brainInfo is synchronous). */
+  private shares: Partial<Record<Chain, number>> = {};
+  /** This network's equal share (see shareUsd), sized into the template's fields and clamped again. */
+  private async sized(s: State, chain: Chain, template: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const stable = await this.d.stableUsd?.(chain).catch(() => undefined);
+    const share = shareUsd(s.settings.budget_usd, stable, s.settings.max_strategies);
+    this.shares[chain] = share;
+    const out = this.clampParams(s, template, sizeToShare(template, params, share));
+    return out.note ? params : out.params;
   }
 
   /** Template fields only, numbers inside each field's range, dollars capped at the per-trade limit. */
@@ -850,7 +897,15 @@ export class SuperBot {
     const all = this.w.rules().list(), t = this.now(), st = s.settings;
     return {
       on: true, active: !!st.active_mode,
+      ...(() => {
+        // 0.9.11: Think 24/7 runs on the owner's own key. The key goes only when the server's fingerprint differs.
+        const k = this.d.decide?.serverKey?.() ?? null;
+        if (!k) return {};
+        const fp = brainKeyFp(k.key), seen = (this.d.serverBrain?.() as any)?.ai?.fp;
+        return { ai: { provider: k.provider, model: k.model, fp, ...(seen === fp ? {} : { key: k.key }) } };
+      })(),
       settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_token_pct: st.max_token_pct, max_strategies: st.max_strategies, pace: st.pace, daily_loss_pct: st.daily_loss_pct,
+        share_usd: this.shares.solana ?? shareUsd(st.budget_usd, undefined, st.max_strategies),
         paper_days: st.paper_days, paper_trades: st.paper_trades, rethink_minutes: st.rethink_minutes, slippage_bps: st.slippage_bps,
         tokens: st.tokens.filter((x) => x.chain === "solana").map((x) => ({ token: x.token })), sources_on: Object.entries(st.sources).filter(([, v]) => v).map(([k]) => k) },
       strategies: s.strategies.filter((x) => x.stage !== "retired" && x.chain === "solana").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, name: x.name, template: x.template, token: x.token, params: x.params, stage: x.stage,

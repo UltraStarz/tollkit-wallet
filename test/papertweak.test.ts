@@ -24,7 +24,8 @@ now += 26 * 3600_000;
 decision = { assessment: "Tweak.", market_view: "neutral", confidence: 0.6, actions: [{ type: "adjust", strategy_id: st0.id, params: { amount_usd: 4 }, reason: "Smaller.", sources: [] }] };
 await bot.cycle(true);
 const st1 = bot.view().strategies.find((x: any) => x.id === st0.id)!;
-check(st1.bot !== st0.bot && st1.params.amount_usd === 4, "the AI's tweak rebuilt it with the new settings", st1.params);
+// 0.9.11: the AI's amount is only a hint on paper; the wallet re-sizes it to the equal share.
+check(st1.bot !== st0.bot && st1.params.amount_usd !== 4 && (st1.params.amount_usd as number) > 0, "the AI's tweak rebuilt it, sized by the wallet (not the AI's $4)", st1.params);
 check(st1.stage_since === st0.stage_since && st1.stage === "paper", "its paper clock kept running", [st0.stage_since, st1.stage_since]);
 check(st1.trades === 1 && st1.result_pct !== null && st1.result_pct > 0, "and its paper results so far count", [st1.trades, st1.result_pct]);
 decision = { assessment: "Flat.", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "-", sources: [] }] };

@@ -161,6 +161,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     notify: tg ? (t) => notify(tg, t) : undefined,
     active: runsHere,
     serverBrain: () => { const v = w.alwaysSol().view(); return { ...(v.brain ?? {}), topup_pending: v.topup_pending, config: v.config?.brain ?? null }; },
+    // 0.9.11: strategies are sized from the dollars on the network (USDC, USDT), not the AI's guess.
+    stableUsd: async (chain) => { const b = (await w.balances())[chain]; if (!Array.isArray(b)) return undefined; return b.filter((x) => /^(USDC|USDT|USDC\.e)$/i.test(x.token)).reduce((t, x) => t + (Number(x.amount) || 0), 0); },
     ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });
   if (o.watch !== false) superbot.start();

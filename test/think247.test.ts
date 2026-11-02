@@ -30,6 +30,26 @@ function world(price = 100) {
   return { bot, store, alwaysSol, advance: (ms: number) => { now += ms; }, setDecision: (d: any) => { decision = d; } };
 }
 
+// ─── 0.9.11: Think 24/7 on the owner's own key ─────────────────────────────
+{
+  const { brainKeyFp } = await import("../src/superbot.js");
+  check(brainKeyFp("sk-ant-test-0123456789") === "1b320a37bbb9f127", "the key fingerprint matches TOLLkit's server");
+  const dir = tmp(); let seenFp: string | undefined;
+  const store = new RuleStore(dir);
+  const alwaysSol = { on: new Map(), isOn: () => false, set: () => {}, config: async () => ({ enabled: true, delegate: "So1" }) };
+  const w: any = { dir, policy: { chains: ["solana"] }, rules: () => store, always: () => ({ isOn: () => false, set: () => {}, config: async () => ({ enabled: false }) }), alwaysSol: () => alwaysSol,
+    pay: async () => ({ paid: true, status: 200, response: new Response("{}") }) };
+  const bot = new SuperBot(w, { dir, proxy: "https://api.test/wallet", fetch: (async () => Response.json({ id: "s", at: new Date().toISOString(), changes: { moved: false } })) as any, price: async () => 100, knownToken: async () => true, active: () => true,
+    serverBrain: () => ({ ai: seenFp ? { fp: seenFp } : null }),
+    decide: { label: () => "Claude Sonnet on your Anthropic key", run: async () => ({ input: { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "-", sources: [] }] }, model: "m" }), serverKey: () => ({ provider: "anthropic", model: "claude-sonnet-5-5", key: "sk-ant-test-0123456789" }) } });
+  await bot.enable({ chains: ["solana"], tokens: [{ chain: "solana", token: "SOL" }], think_24_7: true, always_on: true });
+  let bi: any = bot.brainInfo();
+  check(bi?.ai?.provider === "anthropic" && bi.ai.model === "claude-sonnet-5-5" && bi.ai.key === "sk-ant-test-0123456789", "first sync: the key and Autopilot model go to the server", bi?.ai);
+  seenFp = "1b320a37bbb9f127";
+  bi = bot.brainInfo();
+  check(bi.ai.fp === seenFp && bi.ai.key === undefined, "once the server has it: only the fingerprint goes", bi.ai);
+}
+
 // ─── what goes to the server ──────────────────────────────────────────────
 {
   const x = world();
