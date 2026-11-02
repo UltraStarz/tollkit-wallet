@@ -22,6 +22,7 @@ import { checkToken, isCoreToken, loadExtraLists, searchEvm, searchSolana } from
 import { serverRunnable } from "./alwayson.js";
 import { isBotKind } from "./botlogic.js";
 import { buyLink } from "./buy.js";
+import { suggestedSizes } from "./superbot.js";
 import { budgetView } from "./appbudget.js";
 import { SETUP_KIND_NAMES, Setups, showSetup, type SetupKind } from "./setups.js";
 
@@ -108,8 +109,8 @@ const def = <S extends z.ZodTypeAny>(a: WalletAction<S>) => a;
 
 export const ACTIONS = [
   def({ name: "wallet_status", spends: false, schema: NoArgs,
-    description: "Wallet addresses, the owner's spending limits, what has been spent today, and whether approvals are on.",
-    run: async (w) => w.status() }),
+    description: "Wallet addresses, the owner's spending limits, what has been spent today, whether approvals are on, and suggested_size_usd: per network, the dollar size to use for a trade, rule or bot when the owner names no amount.",
+    run: async (w) => ({ ...(await w.status()), suggested_size_usd: await suggestedSizes(w).catch(() => ({})) }) }),
   def({ name: "wallet_balances", spends: false, schema: NoArgs,
     description: "Balances of the native coin and USDC/USDT on each enabled chain.",
     run: async (w) => w.balances() }),

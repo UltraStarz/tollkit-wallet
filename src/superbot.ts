@@ -119,6 +119,8 @@ interface State {
   marks: { day: string; day_start: number; week: string; week_start: number } | null;
   /** 0.9.8: Trending on X coins the owner hid (lowercased addresses): not shown, never paper-tested. */
   x_hidden?: string[];
+  /** 0.9.11: strategies made before balance sizing were resized (1 when done). */
+  sized?: number;
   /** 0.9.9: the owner tapped Not now on the Range bot idea; it stays hidden until then. */
   range_idea_until?: string;
   /** 0.9.10: the server's decisions already copied into the log. */
@@ -246,6 +248,22 @@ export function sizeToShare(template: string, params: Record<string, unknown>, s
     default: return params;
   }
   return { ...params, amount_usd: Math.floor(per * 100) / 100 };
+}
+
+/**
+ * 0.9.11: the size the AI tab uses when the owner names no amount: Autopilot's equal share per network (shareUsd with
+ * the owner's Autopilot budget and maximum strategies, or the defaults), capped at the per-trade limit.
+ */
+export async function suggestedSizes(w: { dir: string; balances(): Promise<Record<string, { token: string; amount: string }[] | { error: string }>> }): Promise<Record<string, number>> {
+  let st: SuperbotSettings = DEFAULT_SETTINGS;
+  try { const f = path.join(walletHome(w.dir), SUPERBOT.file); if (existsSync(f)) st = { ...DEFAULT_SETTINGS, ...(JSON.parse(readFileSync(f, "utf8")).settings ?? {}) }; } catch { /* defaults */ }
+  const out: Record<string, number> = {};
+  for (const [chain, rows] of Object.entries(await w.balances())) {
+    if (!Array.isArray(rows)) continue;
+    const stable = rows.filter((x) => /^(USDC|USDT|USDC\.e)$/i.test(x.token)).reduce((t, x) => t + (Number(x.amount) || 0), 0);
+    out[chain] = Math.min(st.per_trade_usd, shareUsd(st.budget_usd, stable, st.max_strategies));
+  }
+  return out;
 }
 
 /** Same fingerprint as TOLLkit's server (x402-starter src/key-vault.ts keyFp). */
@@ -430,6 +448,7 @@ export class SuperBot {
       const all = this.w.rules().list();
       await this.checkLosses(s, all);
       await this.promoteDemote(all);
+      await this.resizeToBalance(this.w.rules().list());
       await this.dailyReport(all);
       await this.endRangeIdeas();
       const after = this.load();
@@ -857,6 +876,29 @@ export class SuperBot {
       }
       default: return { applied: false, outcome: "unknown action" };
     }
+  }
+
+  /**
+   * 0.9.11 (Joe: "resize all, live too"): strategies made before balance sizing are rebuilt once at the equal share,
+   * keeping their clock and results. A live one that sells what it bought (grid, dip, smart DCA...) waits until it
+   * holds nothing, so no coins it bought are left without their sell; a live one must still fit the budget and the
+   * per-coin cap (restage checks), or it keeps its size.
+   */
+  private async resizeToBalance(all: Rule[]) {
+    const s = this.load();
+    if ((s.sized ?? 0) >= 1 || s.halted) return;
+    let waiting = false;
+    for (const st of s.strategies) {
+      if (st.stage === "retired" || st.owner_paused || st.params.amount_usd === undefined) continue;
+      let next = await this.sized(s, st.chain, st.template, st.params);
+      if (st.paper_only && typeof next.amount_usd === "number") next = { ...next, amount_usd: Math.min(10, next.amount_usd) };
+      const a0 = Number(st.params.amount_usd), a1 = Number(next.amount_usd);
+      if (!(a1 > 0) || Math.abs(a1 - a0) < Math.max(0.5, a0 * 0.1)) continue;
+      const neverSells = st.template === "dca" || (st.template === "signal" && st.params.side !== "sell");
+      if (st.stage === "live" && !neverSells && (this.summaryOf(st, all)?.units_held ?? 0) > 1e-9) { waiting = true; continue; }
+      await this.restage(st, st.stage, `Resized from your balance: $${r2(a0)} → $${r2(a1)}${st.template === "grid" ? " a level" : st.template === "dca" ? " a buy" : ""}.`, this.w.rules().list(), next, true);
+    }
+    if (!waiting) await this.update((x) => { x.sized = 1; });
   }
 
   /** Last share per network, for Think 24/7 (brainInfo is synchronous). */
