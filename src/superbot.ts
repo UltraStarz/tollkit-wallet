@@ -188,6 +188,8 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   if (b.max_strategies !== undefined) s.max_strategies = num(b.max_strategies, 4, 1, 10);
   if (b.always_on !== undefined) s.always_on = !!b.always_on;
   if (b.think_24_7 !== undefined) s.think_24_7 = !!b.think_24_7;
+  // 0.9.12: one Run 24/7 switch: turning it on or off turns deciding while away (Think 24/7) on or off with it.
+  else if (b.always_on !== undefined) s.think_24_7 = !!b.always_on;
   if (b.active_mode !== undefined) s.active_mode = !!b.active_mode;
   if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max" && b.pace !== "adaptive") throw new Error("Pace is steady, active, max or adaptive."); s.pace = b.pace; }
   if (s.per_trade_usd > s.budget_usd) throw new Error("The per-trade cap can't be more than the budget.");

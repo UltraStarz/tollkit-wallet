@@ -20,6 +20,9 @@ check(/network must be turned on/.test(err(() => parseSettings({ chains: ["base"
 check(parseSettings({ budget_usd: 5, per_trade_usd: 5 }).budget_usd === 10 && parseSettings({ daily_loss_pct: 99 }).daily_loss_pct === 50, "numbers are clamped");
 // 0.9.6: pace
 check(s0.pace === "steady" && parseSettings({ pace: "active" }).pace === "active", "pace is steady by default, active when chosen");
+// 0.9.12: one Run 24/7 switch
+check(parseSettings({ always_on: true }).think_24_7 === true && parseSettings({ always_on: false }, { ...DEFAULT_SETTINGS, think_24_7: true }).think_24_7 === false && parseSettings({ always_on: true, think_24_7: false }).think_24_7 === false,
+  "Run 24/7 turns deciding while away on and off with it, unless that's set on its own");
 check(/steady, active, max or adaptive/.test(err(() => parseSettings({ pace: "turbo" }))) && parseSettings({ pace: "max" }).pace === "max" && parseSettings({ pace: "adaptive" }).pace === "adaptive", "only steady, active, max or adaptive");
 { const { SUPERBOT_SYSTEM } = await import("../src/strategist.js");
   check(/limits\.pace/.test(SUPERBOT_SYSTEM) && /0\.25% on each buy and sell placed by grid/.test(SUPERBOT_SYSTEM), "the strategist is told what active pace means and the fees it must clear"); }
