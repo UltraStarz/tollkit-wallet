@@ -244,3 +244,21 @@ export function botProblem(p: BotParams): string | null {
   }
   return "Unknown bot.";
 }
+
+/**
+ * 0.9.12 Adaptive pace (Joe, Nov 3: "4% a day or 8% in 3 days"): what a coin's market is doing, from hourly closes
+ * (oldest first, at least 73). Rising or falling: 4% or more over 24 hours, or 8% or more over 3 days while the last
+ * day didn't move 2% the other way. Quiet: under 2% over 24 hours. Anything else is normal. Null: not enough history.
+ */
+export type MarketState = "quiet" | "normal" | "rising" | "falling";
+export const MARKET = { dayPct: 4, threeDayPct: 8, quietPct: 2 } as const;
+export function marketState(closes: number[]): { state: MarketState; d1: number; d3: number } | null {
+  const c = closes.filter((x) => x > 0);
+  if (c.length < 73) return null;
+  const last = c[c.length - 1]!, pctFrom = (h: number) => Math.round((last / c[c.length - 1 - h]! - 1) * 10_000) / 100;
+  const d1 = pctFrom(24), d3 = pctFrom(72);
+  const state: MarketState = d1 >= MARKET.dayPct || (d3 >= MARKET.threeDayPct && d1 > -MARKET.quietPct) ? "rising"
+    : d1 <= -MARKET.dayPct || (d3 <= -MARKET.threeDayPct && d1 < MARKET.quietPct) ? "falling"
+    : Math.abs(d1) < MARKET.quietPct ? "quiet" : "normal";
+  return { state, d1, d3 };
+}

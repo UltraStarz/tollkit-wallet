@@ -38,6 +38,7 @@ import { solRunnable } from "./alwayson-sol.js";
 import type { Rule, RuleStore } from "./rules.js";
 import type { TollkitWallet } from "./wallet.js";
 import { SUPERBOT_SYSTEM, DECIDE_TOOL, checkDecision, strategistUser } from "./strategist.js";
+import { marketState, type MarketState } from "./botlogic.js";
 
 export const SUPERBOT = {
   file: "superbot.json",
@@ -76,8 +77,10 @@ export interface SuperbotSettings {
   always_on: boolean;
   /** 0.9.1: the most of the wallet's daily trading limit Autopilot's live trades may use (%); the rest stays for your own rules. */
   daily_share_pct: number;
-  /** 0.9.6: "active" asks the strategist for more, smaller trades (still on paper first, inside every limit). */
-  pace: "steady" | "active" | "max";
+  /** 0.9.6: "active" asks the strategist for more, smaller trades (still on paper first, inside every limit).
+   *  0.9.12 "adaptive": each coin's market picks the pace (see MarketState): quiet → max, normal → active, rising →
+   *  wider targets and no tightening, falling → no new buys on that coin and its grid and dip buys wait. */
+  pace: "steady" | "active" | "max" | "adaptive";
   /** 0.9.10: Think 24/7: while no device is checking, Autopilot keeps deciding on TOLLkit's server (Solana, paid from the
    *  prepaid AI balance). Active mode: a strategy that passed its paper trial goes live by itself, inside the budget. */
   think_24_7: boolean; active_mode: boolean;
@@ -101,6 +104,8 @@ export interface Strategy {
   past?: { stage: Stage; result_pct: number | null; trades: number }[];
   /** 0.9.7: when Active pace last tightened it for sitting idle. */
   tightened_at?: string;
+  /** 0.9.12: the bot whose take-profit Adaptive pace already raised while its coin was rising. */
+  widened_bot?: string;
   /** 0.9.10: its bots from earlier in this stage. An AI tweak rebuilds the rules but keeps the clock and the results. */
   prev_bots?: string[];
   /** 0.9.9: the owner stopped it (never rebuilt), paused its bot (Autopilot leaves it alone), or removed it from the list. */
@@ -121,6 +126,8 @@ interface State {
   x_hidden?: string[];
   /** 0.9.11: strategies made before balance sizing were resized (1 when done). */
   sized?: number;
+  /** 0.9.12: Max pace moved to Adaptive once (Joe chose it for his wallet). */
+  adaptive_moved?: number;
   /** 0.9.9: the owner tapped Not now on the Range bot idea; it stays hidden until then. */
   range_idea_until?: string;
   /** 0.9.10: the server's decisions already copied into the log. */
@@ -149,6 +156,8 @@ export interface SuperBotDeps {
   serverBrain?: () => unknown;
   /** 0.9.11: dollar stablecoins (USDC, USDT) this wallet holds on a network, for sizing strategies. */
   stableUsd?: (chain: Chain) => Promise<number | undefined>;
+  /** 0.9.12: hourly closes for a token, oldest first (Adaptive pace reads each coin's market from them). */
+  closes?: (chain: Chain, token: string) => Promise<number[]>;
 }
 
 const nowIso = (ms: number) => new Date(ms).toISOString();
@@ -180,7 +189,7 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   if (b.always_on !== undefined) s.always_on = !!b.always_on;
   if (b.think_24_7 !== undefined) s.think_24_7 = !!b.think_24_7;
   if (b.active_mode !== undefined) s.active_mode = !!b.active_mode;
-  if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max") throw new Error("Pace is steady, active or max."); s.pace = b.pace; }
+  if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max" && b.pace !== "adaptive") throw new Error("Pace is steady, active, max or adaptive."); s.pace = b.pace; }
   if (s.per_trade_usd > s.budget_usd) throw new Error("The per-trade cap can't be more than the budget.");
   if (s.tokens.some((t) => !s.chains.includes(t.chain))) throw new Error("Every token's network must be turned on.");
   return s;
@@ -202,6 +211,21 @@ export function tightened(template: string, p: Record<string, unknown>): Record<
     default: return null;
   }
 }
+/**
+ * 0.9.12 Adaptive pace, coin rising: an idle strategy that holds nothing is rebuilt wider so it rides the move
+ * instead of selling a step up: a grid's range × 1.5, a dip or Smart DCA's profit target at least 4% (up to 8%).
+ * Null: nothing to widen.
+ */
+export function widened(template: string, p: Record<string, unknown>): Record<string, unknown> | null {
+  const n = (k: string) => Number(p[k]), up = (v: number) => +Math.min(8, Math.max(4, v * 1.6)).toFixed(2);
+  switch (template) {
+    case "grid": { const r = +Math.min(90, n("range_pct") * 1.5).toFixed(2); return r > n("range_pct") ? { ...p, range_pct: r } : null; }
+    case "dip": case "smart_dca": { const g = up(n("profit_pct")); return g > n("profit_pct") ? { ...p, profit_pct: g } : null; }
+    default: return null;
+  }
+}
+/** 0.9.12: a dip's take-profit price after Adaptive pace raises its target from `from`% to `to`% over cost. */
+export const raisedTarget = (trigger: number, from: number, to: number) => +(trigger * (1 + to / 100) / (1 + from / 100)).toFixed(6);
 function describeChange(a: Record<string, unknown>, b: Record<string, unknown>): string {
   const label: Record<string, string> = { drop_pct: "dip", profit_pct: "profit", range_pct: "range ±", step_pct: "step", band_pct: "band" };
   const parts = Object.keys(label).filter((k) => a[k] !== undefined && b[k] !== undefined && Number(a[k]) !== Number(b[k])).map((k) => `${label[k]} ${a[k]}% → ${b[k]}%`);
@@ -277,6 +301,32 @@ export class SuperBot {
     this.file = path.join(walletHome(d.dir), SUPERBOT.file);
   }
   private now() { return this.d.now?.() ?? Date.now(); }
+  /** 0.9.12: each allowed coin's market ("chain:token" → state), read at every cycle while the pace is Adaptive. */
+  private market: Record<string, { state: MarketState; d1: number; d3: number; at: string }> = {};
+  private adaptive(s: State = this.load()) { return s.settings.pace === "adaptive"; }
+  /** A coin's market under Adaptive pace; null when the pace isn't Adaptive or its history couldn't be read. */
+  marketOf(chain: Chain, token: string): MarketState | null {
+    if (!this.adaptive()) return null;
+    return this.market[`${chain}:${token.toLowerCase()}`]?.state ?? null;
+  }
+  private async readMarket(s: State) {
+    if (!this.d.closes) return;
+    for (const x of s.settings.tokens) {
+      const m = marketState(await this.d.closes(x.chain, x.token).catch(() => []));
+      const k = `${x.chain}:${x.token.toLowerCase()}`;
+      if (m) this.market[k] = { ...m, at: nowIso(this.now()) }; else delete this.market[k];
+    }
+  }
+  /**
+   * 0.9.12: why an Autopilot grid or dip buy waits right now (its coin is falling on Adaptive pace), or null. The
+   * rules engine asks before every buy; sells and the owner's own rules never wait.
+   */
+  holdBuy(r: Pick<Rule, "chain" | "token" | "template" | "by">): string | null {
+    if (r.by !== "superbot" || (r.template !== "grid" && r.template !== "dip")) return null;
+    if (this.marketOf(r.chain, r.token) !== "falling") return null;
+    const m = this.market[`${r.chain}:${r.token.toLowerCase()}`]!;
+    return `${r.token.length > 12 ? "This coin" : r.token} is falling (${m.d1}% in 24 hours, ${m.d3}% in 3 days): Adaptive pace holds grid and dip buys until it steadies.`;
+  }
 
   // ─── state ───────────────────────────────────────────────────────────────
   load(): State {
@@ -313,6 +363,8 @@ export class SuperBot {
     const live = strategies.filter((x) => x.stage === "live");
     return {
       enabled: s.enabled, since: s.since, settings: s.settings, halted: s.halted, stats: s.stats,
+      // 0.9.12: each coin's market while the pace is Adaptive (the Autopilot screen shows it).
+      market: this.adaptive(s) ? s.settings.tokens.map((x) => { const m = this.market[`${x.chain}:${x.token.toLowerCase()}`]; return { chain: x.chain, token: x.token, state: m?.state ?? null, d1: m?.d1 ?? null, d3: m?.d3 ?? null, at: m?.at ?? null }; }) : null,
       strategies, decisions: s.decisions.slice().sort((x, y) => x.ts.localeCompare(y.ts)).slice(-40).reverse(), reports: s.reports.slice(-7).reverse(),
       totals: { live: live.length, paper: strategies.filter((x) => x.stage === "paper").length, retired: strategies.filter((x) => x.stage === "retired").length,
         live_result_usd: r2(live.reduce((a, x) => a + (x.result_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
@@ -388,7 +440,7 @@ export class SuperBot {
     const s = this.load();
     const settings = parseSettings(body, s.settings);
     for (const t of settings.tokens) if (!(await this.d.knownToken(t.chain, t.token))) throw new Error(`Add ${t.token} on ${chainName(t.chain)} on Home first (Add a token runs Tollkit's scam check).`);
-    await this.update((st) => { st.settings = settings; st.enabled = true; st.since = st.since ?? nowIso(this.now()); st.halted = null; });
+    await this.update((st) => { st.settings = settings; st.enabled = true; st.since = st.since ?? nowIso(this.now()); st.halted = null; if (body.pace !== undefined) st.adaptive_moved = 1; });
     await this.log("rule", "Autopilot turned on.", [{ type: "keep", reason: "The owner turned Autopilot on.", sources: [], applied: true, outcome: "on" }]);
     await this.cycle(true);
     return this.view();
@@ -397,7 +449,9 @@ export class SuperBot {
     const s = this.load();
     const settings = parseSettings(body, s.settings);
     for (const t of settings.tokens) if (!(await this.d.knownToken(t.chain, t.token))) throw new Error(`Add ${t.token} on ${chainName(t.chain)} on Home first (Add a token runs Tollkit's scam check).`);
-    await this.update((st) => { st.settings = settings; });
+    // 0.9.12: picking a pace by hand (or Max again) keeps it: the one-time move to Adaptive is done.
+    await this.update((st) => { st.settings = settings; if (body.pace !== undefined) st.adaptive_moved = 1; });
+    if (settings.pace === "adaptive") await this.readMarket(this.load()).catch(() => {});
     // 0.9.2: the 24/7 switch applies to strategies already live, both ways, right away.
     if (settings.always_on !== s.settings.always_on && s.enabled) {
       const all = this.w.rules().list(), live = s.strategies.filter((x) => x.stage === "live").flatMap((x) => this.rulesOf(s, x, all)).filter((r) => r.status === "active");
@@ -445,6 +499,12 @@ export class SuperBot {
       if (!s.enabled) return;
       const t = this.now();
       await this.update((x) => { x.stats.cycles++; x.stats.last_cycle = nowIso(t); x.stats.last_error = null; });
+      // 0.9.12 (Joe chose it): Max pace becomes Adaptive once. Adaptive is Max whenever a coin is quiet.
+      if (s.settings.pace === "max" && !s.adaptive_moved) {
+        await this.update((x) => { x.settings.pace = "adaptive"; x.adaptive_moved = 1; });
+        await this.log("rule", "Pace changed from Max to Adaptive: Max when a coin is quiet, wider targets when it's rising, and no new buys on a coin that's falling.", [{ type: "keep", reason: "Adaptive pace", sources: ["0.9.12 update"], applied: true, outcome: "pace: adaptive" }]);
+      }
+      if (this.adaptive()) await this.readMarket(this.load());
       const all = this.w.rules().list();
       await this.checkLosses(s, all);
       await this.promoteDemote(all);
@@ -467,9 +527,10 @@ export class SuperBot {
       const moved = !!snap.changes?.moved && snap.id !== after.stats.last_snapshot;
       const stale = !after.stats.last_step || t - Date.parse(after.stats.last_step) >= SUPERBOT.forceStepMinutes * 60_000;
       // 0.9.7: Active pace tightens idle strategies, and decides at every rethink, not only when the market moved.
-      const active = (after.settings.pace ?? "steady") !== "steady"; // "active" or "max"
+      const active = (after.settings.pace ?? "steady") !== "steady"; // "active", "max" or "adaptive"
       await this.noticeOwnerStops(this.w.rules().list());
       if (active) await this.tightenIdle(this.w.rules().list());
+      if (this.adaptive(after)) await this.rideRising(this.w.rules().list());
       if (force || moved || stale || active) { await this.step(snap); await this.endRangeIdeas(); }
     } catch (e) {
       await this.update((x) => { x.stats.last_error = (e as Error).message.slice(0, 300); });
@@ -581,6 +642,9 @@ export class SuperBot {
   private async tightenIdle(all: Rule[]) {
     const s = this.load(), t = this.now();
     for (const st of s.strategies.filter((x) => x.stage !== "retired" && !x.owner_paused)) {
+      // 0.9.12 Adaptive: a rising or falling coin's strategies aren't tightened (quiet, normal or unknown ones are).
+      const mk = this.marketOf(st.chain, st.token);
+      if (mk === "rising" || mk === "falling") continue;
       const sum = this.summaryOf(st, all);
       const since = Math.max(Date.parse(st.stage_since), sum?.last_trade ? Date.parse(sum.last_trade) : 0, st.tightened_at ? Date.parse(st.tightened_at) : 0);
       if (t - since < SUPERBOT.idleHours * 3_600_000) continue;
@@ -588,10 +652,47 @@ export class SuperBot {
       if (!next) continue;
       const params = this.clampParams(s, st.template, next);
       if (params.note) continue;
-      const why = `No trade in ${SUPERBOT.idleHours} hours on ${s.settings.pace === "max" ? "Max" : "Active"} pace: tightened ${describeChange(st.params, params.params)} and re-centred on today's price.`;
+      const why = `No trade in ${SUPERBOT.idleHours} hours on ${s.settings.pace === "max" ? "Max" : s.settings.pace === "adaptive" ? `Adaptive (${st.token.length > 12 ? "the coin" : st.token} ${mk ?? "steady"})` : "Active"} pace: tightened ${describeChange(st.params, params.params)} and re-centred on today's price.`;
       const res = await this.restage(st, st.stage === "live" ? "live" : "paper", why, all, params.params, true);
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
+    }
+  }
+
+  /**
+   * 0.9.12 Adaptive pace, coin rising: let winners run. A dip holding coins gets its take-profit raised once (to at
+   * least 4% over cost, up to 8%); an idle strategy holding nothing is rebuilt wider (see widened()), at most once a
+   * day. Grids holding coins keep their levels: rebuilding one would leave its coins without their sells.
+   */
+  private async rideRising(all: Rule[]) {
+    const s = this.load(), t = this.now();
+    for (const st of s.strategies.filter((x) => x.stage !== "retired" && !x.owner_paused)) {
+      if (this.marketOf(st.chain, st.token) !== "rising") continue;
+      const m = this.market[`${st.chain}:${st.token.toLowerCase()}`]!, coin = st.token.length > 12 ? "the coin" : st.token;
+      const sum = this.summaryOf(st, all), holds = (sum?.units_held ?? 0) > 1e-9;
+      if (st.template === "dip" && holds && st.bot && st.widened_bot !== st.bot) {
+        const from = Number(st.params.profit_pct), to = widened("dip", st.params)?.profit_pct as number | undefined;
+        const tp = this.rulesOf(s, st, all).find((r) => r.kind === "take_profit" && r.status === "active" && r.trigger_price);
+        if (!tp || !to || !(from > 0)) continue;
+        const price = raisedTarget(tp.trigger_price!, from, to);
+        await this.w.rules().mutate((rules) => { const x = rules.find((y) => y.id === tp.id); if (x) { x.trigger_price = price; x.state.note = `Adaptive pace: ${coin} is rising, so it sells at +${to}% instead of +${from}%.`; } return x ? { ...x } : null; });
+        const why = `${coin} is rising (${m.d1}% in 24 hours, ${m.d3}% in 3 days): ${st.name} now sells at $${price} (+${to}% over cost instead of +${from}%).`;
+        await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.widened_bot = st.bot!; y.history.push({ ts: nowIso(t), note: why }); } });
+        await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, reason: why, sources: ["pace: adaptive", `${coin} rising`], applied: true, outcome: "take-profit raised" }]);
+        if (this.ao(tp).isOn(tp.id)) this.d.onRulesChanged?.();
+        continue;
+      }
+      if (holds) continue;
+      const since = Math.max(Date.parse(st.stage_since), sum?.last_trade ? Date.parse(sum.last_trade) : 0, st.tightened_at ? Date.parse(st.tightened_at) : 0);
+      if (t - since < SUPERBOT.idleHours * 3_600_000) continue;
+      const next = widened(st.template, st.params);
+      if (!next) continue;
+      const params = this.clampParams(s, st.template, next);
+      if (params.note) continue;
+      const why = `${coin} is rising (${m.d1}% in 24 hours, ${m.d3}% in 3 days) and ${st.name} hasn't traded in ${SUPERBOT.idleHours} hours: widened ${describeChange(st.params, params.params)} on Adaptive pace and re-centred on today's price.`;
+      const res = await this.restage(st, st.stage === "live" ? "live" : "paper", why, all, params.params, true);
+      await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
+      await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: adaptive", `${coin} rising`], applied: res.applied, outcome: res.outcome }]);
     }
   }
 
@@ -744,6 +845,8 @@ export class SuperBot {
     const t = this.now();
     return {
       limits: { budget_usd: s.settings.budget_usd, per_trade_usd: s.settings.per_trade_usd, max_token_pct: s.settings.max_token_pct, max_strategies: s.settings.max_strategies, slippage_bps: s.settings.slippage_bps, paper_period: `${s.settings.paper_days} days or ${s.settings.paper_trades} trades`, pace: s.settings.pace ?? "steady" },
+      // 0.9.12 Adaptive pace: each coin's market, measured by the wallet (the strategist follows it per coin).
+      ...(this.adaptive(s) ? { market_states: Object.fromEntries(s.settings.tokens.map((x) => { const m = this.market[`${x.chain}:${x.token.toLowerCase()}`]; return [`${x.chain}:${x.token}`, m ? { state: m.state, chg_24h_pct: m.d1, chg_3d_pct: m.d3 } : { state: "unknown" }]; })) } : {}),
       allowed: { chains: s.settings.chains, tokens: s.settings.tokens.map((x) => ({ ...x, price_usd: prices[`${x.chain}:${x.token}`] ?? null })) },
       templates: TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap" && x.id !== "range").map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
       strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
@@ -793,13 +896,19 @@ export class SuperBot {
     let user = strategistUser(snap, context);
     if (JSON.stringify(context).length > SUPERBOT.maxContextChars) { context.recent_decisions = []; context.retired_recently = []; user = strategistUser(snap, context); }
     let got: { input: unknown; model: string }, decision: ReturnType<typeof checkDecision>;
-    try { got = await this.d.decide!.run(SUPERBOT_SYSTEM, user, DECIDE_TOOL); decision = checkDecision(got.input, this.load().settings.pace === "max" ? 2 : 1); }
+    try { got = await this.d.decide!.run(SUPERBOT_SYSTEM, user, DECIDE_TOOL); decision = checkDecision(got.input, this.maxProposals()); }
     catch (e) { return void await fail((e as Error).message); }
     await this.update((x) => { x.stats.steps++; x.stats.last_step = nowIso(this.now()); x.stats.last_snapshot = snap.id; x.stats.last_error = null; });
     const applied: AppliedAction[] = [];
     for (const a of decision.actions as any[]) applied.push({ ...a, ...(await this.apply(a).catch((e) => ({ applied: false, outcome: (e as Error).message }))) });
     await this.log("strategist", decision.assessment, applied, { snapshot_id: snap.id, market_view: decision.market_view, confidence: decision.confidence, model: got.model, cost_usd: 0 });
     if (applied.some((a) => a.applied && a.type !== "keep")) this.d.onRulesChanged?.();
+  }
+
+  /** New strategies one decision may start: two on Max, and on Adaptive while any allowed coin is quiet. */
+  private maxProposals(s: State = this.load()) {
+    if (s.settings.pace === "max") return 2;
+    return this.adaptive(s) && s.settings.tokens.some((x) => this.marketOf(x.chain, x.token) === "quiet") ? 2 : 1;
   }
 
   /** One action from the strategist, checked against the owner's limits before anything is created or stopped. */
@@ -854,6 +963,8 @@ export class SuperBot {
         if (running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
+        // 0.9.12 Adaptive pace: nothing new that buys a coin while it's falling.
+        if (this.marketOf(chain, tok.token) === "falling" && committedUsd(a.template, params.params) > 0) return { applied: false, outcome: `not started: ${tok.token.length > 12 ? "the coin" : tok.token} is falling, and Adaptive pace starts no new buys on it` };
         params.params = await this.sized(s, chain, a.template, params.params);
         if (meme && typeof params.params.amount_usd === "number") params.params.amount_usd = Math.min(10, params.params.amount_usd as number);
         const price = await this.d.price(chain, tok.token).catch(() => undefined);

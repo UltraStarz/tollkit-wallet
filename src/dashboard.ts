@@ -12,6 +12,7 @@ import { TollkitWallet } from "./wallet.js";
 import { decide, heartbeat, pending } from "./approvals.js";
 import { PolicySchema } from "./policy.js";
 import { resolveToken, toAtomic } from "./tokens.js";
+import { hourlyCloses } from "./indicators.js";
 import { formatUnits } from "ethers";
 import { PAGE } from "./ui.js";
 import { qrSvg } from "./qr.js";
@@ -89,11 +90,11 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   let superbot: SuperBot | null = null;
   // 0.9.7: Sync my devices (src/devsync.ts). Another device runs the bots: this one shows them but doesn't trade.
   const devs = w.sync(), runsHere = () => devs.runsHere();
-  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, skip: (id) => !devs.mayTrade() || w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().handedOff(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
+  const autopilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("live"), prices, { dir: w.dir, holdBuy: (r) => superbot?.holdBuy(r) ?? null, skip: (id) => !devs.mayTrade() || w.always().serverRuns(id) || w.alwaysSol().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().handedOff(id) || !!superbot?.isPaperRule(id), onPrice: (r, p) => tape.add(r.chain, r.token, p), autopilotDailyCap: () => superbot?.dailyCapUsd(w.policy.daily_trades_usd) ?? null,
     // 0.9.1: alerts reach Telegram when it's linked (the screen shows them on the rule card and as a toast).
     onEvent: (e) => { if (e.type !== "alert") return; const t = loadTelegram(w.dir); if (t) void notify(t, `TOLLkit alert: ${e.detail}`).catch(() => {}); } }) : null;
   autopilot?.start();
-  const paperPilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("paper"), prices, { dir: w.dir, skip: (id) => !runsHere() || !superbot?.isPaperRule(id), noLease: true, onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
+  const paperPilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("paper"), prices, { dir: w.dir, holdBuy: (r) => superbot?.holdBuy(r) ?? null, skip: (id) => !runsHere() || !superbot?.isPaperRule(id), noLease: true, onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
   paperPilot?.start();
   // The Bots screen: each bot's summary plus its next move and latest trades (0.8.5).
   const botsView = () => {
@@ -162,6 +163,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     active: runsHere,
     serverBrain: () => { const v = w.alwaysSol().view(); return { ...(v.brain ?? {}), topup_pending: v.topup_pending, config: v.config?.brain ?? null }; },
     // 0.9.11: strategies are sized from the dollars on the network (USDC, USDT), not the AI's guess.
+    // 0.9.12: hourly closes for Adaptive pace (the same Coinbase and DefiLlama history alerts and signals use).
+    closes: async (chain, token) => hourlyCloses(chain, await resolveToken(chain, token), wf),
     stableUsd: async (chain) => { const b = (await w.balances())[chain]; if (!Array.isArray(b)) return undefined; return b.filter((x) => /^(USDC|USDT|USDC\.e)$/i.test(x.token)).reduce((t, x) => t + (Number(x.amount) || 0), 0); },
     ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });
@@ -171,6 +174,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   w.alwaysSol().onAway = (e) => superbot?.logAway(e);
   // 0.9.10: Think 24/7: what the server needs, and what it hands back when this device is here again.
   w.alwaysSol().brainInfo = () => superbot?.brainInfo() ?? null;
+  w.alwaysSol().paceInfo = () => superbot?.load().settings.pace ?? null;
   w.alwaysSol().onBrain = (b) => (superbot ? superbot.adoptServer(b) : []);
   // 0.9.7: sync each minute while it's on, and soon after anything changes here. Files that arrive from another
   // device take effect at once (the bots re-read their rules on the next tick).

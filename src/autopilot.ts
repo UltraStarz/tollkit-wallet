@@ -56,6 +56,8 @@ const QUOTE_PRICE_TTL = 60_000;
 export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () => number; leaseId?: string; resolve?: typeof resolveToken; onEvent?: (e: AutopilotEvent) => void;
   /** Rules Tollkit's server is running while the app is closed (src/alwayson.ts): the device leaves them alone. */
   skip?: (id: string) => boolean;
+  /** 0.9.12: why an Autopilot buy waits right now (Adaptive pace, its coin falling), or null. Sells never wait. */
+  holdBuy?: (r: Rule) => string | null;
   /** 0.8.5: a replay (src/botviz.ts) runs alone in memory and takes no lease. */
   noLease?: boolean;
   /** 0.8.5: every price a rule was checked against (the Bots screen's price tape). */
@@ -235,6 +237,8 @@ export class Autopilot {
       }
       return;
     }
+    // 0.9.12: Adaptive pace holds an Autopilot dip's buy while its coin is falling; it fires once the coin steadies.
+    if (r.kind === "limit_buy" && this.o.holdBuy?.(r)) return;
     // 0.9.9: a plain sell waits for the others that fired in this check, so they can share the coins (fireSells).
     if (this.pending && !BUY_KINDS.includes(r.kind) && !r.sell_from) { this.pending.push({ r, t, p }); return; }
     await this.fire(r, t, p);
@@ -316,6 +320,7 @@ export class Autopilot {
       avail = sellableFor(r, bal, this.store.list(), t, this.exec.mode === "paper");
     }
     const a = decide(r as any, st, p, now, { decimals: t.decimals, avail });
+    if (a?.side === "buy" && this.o.holdBuy?.(r)) return;
     if (!a) {
       if (r.kind === "twap" && r.side === "sell" && avail !== undefined && avail <= 0n) await this.hold(r, now + 5 * 60_000, nothingToSell(r, t.symbol, 0n));
       return;

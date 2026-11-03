@@ -198,6 +198,8 @@ export class SolAlwaysOn {
   /** 0.9.10, Think 24/7: Autopilot's settings and Solana strategies for the server (null: off), and where the server's
    *  strategies and decisions go when this device is back (returns the strategy ids taken over). */
   brainInfo?: () => unknown | null;
+  /** 0.9.12: Autopilot's pace, so the server holds its grid and dip buys while a coin falls on Adaptive pace. */
+  paceInfo?: () => string | null;
   onBrain?: (b: ServerBrain) => Promise<string[]> | string[];
 
   /** 0.9.10: the prepaid AI balance, as the server has it. */
@@ -537,7 +539,7 @@ export class SolAlwaysOn {
     const sellAmt = (r: Rule) => (isSolRule(r) ? Number(amounts[r.id] ?? 0n) / 1e9 : Number(coinAmounts[r.id] ?? 0n) / 10 ** (coinDec[coinMint(r)!] ?? 0));
     // 0.9.10: Think 24/7 (null: off), and the server strategies taken over here since the last sync.
     const brain = this.brainInfo?.() ?? null, adopted = this.load().adopted ?? [];
-    const body = { ...(away ? { away } : {}), ...(brain || adopted.length ? { brain: { ...(brain ?? { on: false }), adopted } } : {}), rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
+    const body = { ...(this.paceInfo?.() === "adaptive" ? { ap_pace: "adaptive" } : {}), ...(away ? { away } : {}), ...(brain || adopted.length ? { brain: { ...(brain ?? { on: false }), adopted } } : {}), rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
         profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs,
         bot: { ...(r.state.bot ?? {}), ...(r.kind === "grid" ? { grid: r.state.grid } : {}), ...(splitTotal[r.id] ? { sell_total: splitTotal[r.id], v: (r.state.bot?.v ?? 0) + 1 } : {}) } })
       : ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, sell_amount: !isBuy(r) ? sellAmt(r) : undefined, trigger_price: r.trigger_price,

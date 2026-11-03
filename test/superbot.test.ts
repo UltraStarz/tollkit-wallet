@@ -3,7 +3,8 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RuleStore } from "../src/rules.js";
-import { committedUsd, DEFAULT_SETTINGS, parseSettings, SUPERBOT, SuperBot, tightened } from "../src/superbot.js";
+import { committedUsd, DEFAULT_SETTINGS, parseSettings, raisedTarget, SUPERBOT, SuperBot, tightened, widened } from "../src/superbot.js";
+import { marketState } from "../src/botlogic.js";
 
 let pass = 0, fail = 0;
 const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
@@ -19,7 +20,7 @@ check(/network must be turned on/.test(err(() => parseSettings({ chains: ["base"
 check(parseSettings({ budget_usd: 5, per_trade_usd: 5 }).budget_usd === 10 && parseSettings({ daily_loss_pct: 99 }).daily_loss_pct === 50, "numbers are clamped");
 // 0.9.6: pace
 check(s0.pace === "steady" && parseSettings({ pace: "active" }).pace === "active", "pace is steady by default, active when chosen");
-check(/steady, active or max/.test(err(() => parseSettings({ pace: "turbo" }))) && parseSettings({ pace: "max" }).pace === "max", "only steady, active or max");
+check(/steady, active, max or adaptive/.test(err(() => parseSettings({ pace: "turbo" }))) && parseSettings({ pace: "max" }).pace === "max" && parseSettings({ pace: "adaptive" }).pace === "adaptive", "only steady, active, max or adaptive");
 { const { SUPERBOT_SYSTEM } = await import("../src/strategist.js");
   check(/limits\.pace/.test(SUPERBOT_SYSTEM) && /0\.25% on each buy and sell placed by grid/.test(SUPERBOT_SYSTEM), "the strategist is told what active pace means and the fees it must clear"); }
 { const { TEMPLATES } = await import("../src/bots.js");
@@ -28,7 +29,7 @@ check(/steady, active or max/.test(err(() => parseSettings({ pace: "turbo" }))) 
 check(committedUsd("dca", { amount_usd: 10, times: 5 }) === 50 && committedUsd("dca", { amount_usd: 10 }) === 100 && committedUsd("grid", { amount_usd: 20, levels: 6 }) === 100 && committedUsd("protect", { sell_percent: 50 }) === 0, "dollars a strategy commits");
 
 // ─── a fake wallet, server and clock ────────────────────────────────────────
-function world(o: { decision?: () => any; signals?: () => any; price?: number } = {}) {
+function world(o: { decision?: () => any; signals?: () => any; price?: number; closes?: (chain: string, token: string) => Promise<number[]> } = {}) {
   const dir = tmp();
   let now = Date.parse("2026-10-20T08:00:00Z");
   const store = new RuleStore(dir);
@@ -52,7 +53,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
     },
   };
   const fetch = (async (url: string) => Response.json(signals())) as any;
-  const bot = new SuperBot(w, { dir, proxy: "https://api.test/wallet", fetch, now: () => now, price: async () => o.price ?? 2500, knownToken: async (_c, t) => ["ETH", "SOL", "USDC"].includes(t.toUpperCase()), notify: async (t) => { notes.push(t); } });
+  const bot = new SuperBot(w, { dir, ...(o.closes ? { closes: o.closes as any } : {}), proxy: "https://api.test/wallet", fetch, now: () => now, price: async () => o.price ?? 2500, knownToken: async (_c, t) => ["ETH", "SOL", "USDC"].includes(t.toUpperCase()), notify: async (t) => { notes.push(t); } });
   return { dir, store, bot, calls, notes, always, alwaysSol, setNow: (iso: string) => { now = Date.parse(iso); }, advance: (ms: number) => { now += ms; }, setDecision: (f: () => any) => { decision = f; }, setSignals: (f: () => any) => { signals = f; } };
 }
 
@@ -481,6 +482,55 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number } 
   await cycles(C, 1);
   check(C.store.get(c1)!.status === "active", "down 2.1% after fees: keeps going");
   check(C.store.get(c2)!.status === "cancelled" && /down \$3\.30 \(3\.3%\)/.test(C.store.get(c2)!.state.note ?? ""), "down 3.3% after fees: ended", C.store.get(c2)!.state.note);
+}
+
+// ─── 0.9.12: Adaptive pace ──────────────────────────────────────────────────
+{
+  // 80 hourly closes: flat at 100 until 72 hours ago, then a straight line to `d3` % now, with the last day at `d1` %.
+  const hist = (d3: number, d1: number) => { const c: number[] = Array(8).fill(100); const at24 = 100 * (1 + d3 / 100) / (1 + d1 / 100);
+    for (let h = 71; h >= 0; h--) c.push(h >= 24 ? 100 + (at24 - 100) * (72 - h) / 48 : at24 + (at24 * (1 + d1 / 100) - at24) * (24 - h) / 24); return c; };
+  check(marketState(hist(0.5, 0.3))?.state === "quiet" && marketState(hist(3, 2.5))?.state === "normal", "under 2% a day is quiet; between is normal");
+  check(marketState(hist(4.5, 4.2))?.state === "rising" && marketState(hist(-5, -4.1))?.state === "falling", "4% in a day: rising or falling");
+  check(marketState(hist(-8.5, -1))?.state === "falling" && marketState(hist(9, 1))?.state === "rising", "8% over 3 days counts while the last day goes the same way or stays flat");
+  check(marketState(hist(-9, 3))?.state === "normal", "a 3-day fall with a 3% bounce today isn't 'falling'");
+  check(marketState(Array(50).fill(100)) === null, "too little history: no state");
+  const m = marketState(hist(-8.5, -1))!; check(m.d1 === -1 && m.d3 === -8.5, "it reports the 24-hour and 3-day moves", m);
+  check(widened("grid", { range_pct: 6, levels: 9 })!.range_pct === 9 && widened("dip", { drop_pct: 2, profit_pct: 2 })!.profit_pct === 4 && widened("dip", { profit_pct: 8 }) === null && widened("dca", {}) === null,
+    "rising: a grid's range × 1.5, a dip sells at 4% to 8%; nothing else is widened");
+  check(raisedTarget(102, 2, 5) === 105, "a take-profit set 2% over cost moves to 5% over cost");
+  { const { SUPERBOT_SYSTEM } = await import("../src/strategist.js"); check(/"adaptive" means each coin's market/.test(SUPERBOT_SYSTEM) && /"falling".*propose nothing that buys/.test(SUPERBOT_SYSTEM), "the strategist is told what Adaptive means per coin"); }
+
+  let state = hist(-6, -4.5);
+  let n = 0;
+  const W = world({ closes: async () => state, decision: () => (n++ === 0
+    ? { assessment: "SOL keeps sliding.", market_view: "risk_off", confidence: 0.5, actions: [{ type: "propose", template: "grid", chain: "solana", token: "SOL", params: { amount_usd: 10, range_pct: 4, levels: 9 }, reason: "Range.", sources: ["SOL -4.5%"] }] }
+    : { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "keep", reason: "q", sources: [] }] }) });
+  await W.bot.enable({ chains: ["base", "solana"], tokens: [{ chain: "solana", token: "SOL" }], pace: "adaptive" });
+  await new Promise((r) => setTimeout(r, 30));
+  const v = W.bot.view() as any;
+  check(v.market?.[0]?.state === "falling" && v.market[0].d1 === -4.5, "the view shows each coin's market", v.market);
+  check(v.strategies.length === 0 && /SOL is falling, and Adaptive pace starts no new buys/.test(v.decisions[0].actions[0].outcome), "falling: a new grid on SOL is refused", v.decisions[0]?.actions?.[0]?.outcome);
+  const ctx = JSON.parse(W.calls.at(-1)!.body.context ? JSON.stringify(W.calls.at(-1)!.body.context) : "{}");
+  check(ctx.limits?.pace === "adaptive" && ctx.market_states?.["solana:SOL"]?.state === "falling", "the strategist gets each coin's state", ctx.market_states);
+  const ap = (template: string) => ({ chain: "solana", token: "SOL", template, by: "superbot" }) as any;
+  check(/SOL is falling \(-4.5% in 24 hours/.test(W.bot.holdBuy(ap("grid")) ?? "") && !!W.bot.holdBuy(ap("dip")), "falling: Autopilot's grid and dip buys wait");
+  check(W.bot.holdBuy(ap("dca")) === null && W.bot.holdBuy({ ...ap("grid"), by: undefined }) === null, "Steady buyer and the owner's own bots never wait");
+  state = hist(0.4, 0.2); W.advance(31 * 60_000); await W.bot.tick();
+  check(W.bot.holdBuy(ap("grid")) === null && (W.bot.view() as any).market[0].state === "quiet", "once SOL steadies, buys go again");
+  await W.bot.setSettings({ pace: "steady" });
+  state = hist(-6, -4.5); W.advance(31 * 60_000); await W.bot.tick();
+  check(W.bot.holdBuy(ap("grid")) === null && (W.bot.view() as any).market === null, "other paces never hold buys");
+}
+// Max moves to Adaptive once; choosing a pace by hand afterwards sticks.
+{
+  const W = world({ closes: async () => Array(80).fill(100) });
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
+  await (W.bot as any).update((x: any) => { x.settings.pace = "max"; delete x.adaptive_moved; });
+  W.advance(31 * 60_000); await W.bot.tick();
+  const v = W.bot.view() as any;
+  check(v.settings.pace === "adaptive" && v.decisions.some((d: any) => /Pace changed from Max to Adaptive/.test(d.assessment)), "an existing Max pace becomes Adaptive, and the log says so");
+  await W.bot.setSettings({ pace: "max" }); W.advance(31 * 60_000); await W.bot.tick();
+  check((W.bot.view() as any).settings.pace === "max", "picking Max again afterwards keeps it");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

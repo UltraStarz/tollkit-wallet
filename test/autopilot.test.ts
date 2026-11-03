@@ -185,5 +185,20 @@ function market() {
   check(sum.fills === 1 && sum.fees_usd === 0.2 && sum.balances.some((b) => b.token === "ETH"), "paper summary: fills, fees, balances", sum);
 }
 
+// 0.9.12 Adaptive pace: a held buy waits (and fires once the hold lifts); sells never wait.
+{
+  const dir = tmp(), m = market(), s = new RuleStore(dir);
+  let clock = Date.now(), hold = true;
+  const ap = new Autopilot(s, m.exec, m.prices, { dir, now: () => clock, holdBuy: (r) => (hold && r.by === "superbot" ? "ETH is falling" : null) });
+  const [buy] = await s.addBot([{ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 20, trigger_price: 3000, template: "dip" } as any], "agent", true, "superbot");
+  const [grid] = await s.addBot([{ kind: "grid", chain: "base", token: "ETH", amount_usd: 20, lower_price: 2000, upper_price: 3000, levels: 5, template: "grid" } as any], "agent", true, "superbot");
+  const own = await s.add({ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 20, trigger_price: 3000 }, "owner", true);
+  const n0 = m.state.swaps.length;
+  clock += 15_000; await ap.tick();
+  check(m.state.swaps.length === n0 + 1 && s.get(own.id)!.status === "done" && s.get(buy!.id)!.status === "active" && !s.get(grid!.id)!.state.grid?.atomic.some((x) => x), "held: Autopilot's dip and grid buys wait; the owner's own buy goes", m.state.swaps.length - n0);
+  hold = false; clock += 15_000; await ap.tick(); clock += 15_000; await ap.tick();
+  check(s.get(buy!.id)!.status === "done" && !!s.get(grid!.id)!.state.grid?.atomic.some((x) => x), "hold lifted: both buy at the next checks");
+}
+
 console.log(`\nautopilot: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
