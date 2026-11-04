@@ -438,10 +438,16 @@ export class SuperBot {
   }
 
   // ─── owner actions ───────────────────────────────────────────────────────
+  /** 0.9.12: a network the wallet's own limits turn off says so (it used to read as a failed scam check). */
+  private async checkPicks(settings: { chains: Chain[]; tokens: { chain: Chain; token: string }[] }) {
+    const on = this.w.policy?.chains;
+    for (const c of settings.chains) if (on && !on.includes(c)) throw new Error(`${chainName(c)} is off for this wallet. Turn it on in Settings under Networks, then add it here.`);
+    for (const t of settings.tokens) if (!(await this.d.knownToken(t.chain, t.token))) throw new Error(`Add ${t.token} on ${chainName(t.chain)} on Home first (Add a token runs Tollkit's scam check).`);
+  }
   async enable(body: Record<string, unknown> = {}) {
     const s = this.load();
     const settings = parseSettings(body, s.settings);
-    for (const t of settings.tokens) if (!(await this.d.knownToken(t.chain, t.token))) throw new Error(`Add ${t.token} on ${chainName(t.chain)} on Home first (Add a token runs Tollkit's scam check).`);
+    await this.checkPicks(settings);
     await this.update((st) => { st.settings = settings; st.enabled = true; st.since = st.since ?? nowIso(this.now()); st.halted = null; if (body.pace !== undefined) st.adaptive_moved = 1; });
     await this.log("rule", "Autopilot turned on.", [{ type: "keep", reason: "The owner turned Autopilot on.", sources: [], applied: true, outcome: "on" }]);
     await this.cycle(true);
@@ -450,7 +456,7 @@ export class SuperBot {
   async setSettings(body: Record<string, unknown>) {
     const s = this.load();
     const settings = parseSettings(body, s.settings);
-    for (const t of settings.tokens) if (!(await this.d.knownToken(t.chain, t.token))) throw new Error(`Add ${t.token} on ${chainName(t.chain)} on Home first (Add a token runs Tollkit's scam check).`);
+    await this.checkPicks(settings);
     // 0.9.12: picking a pace by hand (or Max again) keeps it: the one-time move to Adaptive is done.
     await this.update((st) => { st.settings = settings; if (body.pace !== undefined) st.adaptive_moved = 1; });
     if (settings.pace === "adaptive") await this.readMarket(this.load()).catch(() => {});
