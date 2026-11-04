@@ -95,5 +95,21 @@ async function fresh(over: any = {}) {
   check(m2 === "wrong password", "wrong password can't open the wallet");
 }
 
+
+// 0.9.12: a Solana swap the network dropped is tried once more right away, with a fresh quote.
+{
+  let n = 0;
+  const { w } = await fresh({ execute: async () => { if (n++ === 0) throw new Error("The Solana network dropped this swap (abc…wxyz), so nothing changed in your wallet. It's safe to try again."); return "SIGOK"; } });
+  const r = await w.swap({ chain: "solana", sell_token: SOL_USDC, buy_token: WSOL, sell_amount: "5000000", slippage_bps: 50 });
+  check(r.ok && r.tx === "SIGOK" && n === 2, "dropped once: retried with a fresh quote and it went through", { ok: r.ok, n, why: r.refused?.reason });
+  let m = 0;
+  const { w: w2 } = await fresh({ execute: async () => { m++; throw new Error("The Solana network dropped this swap (abc…wxyz), so nothing changed in your wallet. It's safe to try again."); } });
+  const r2 = await w2.swap({ chain: "solana", sell_token: SOL_USDC, buy_token: WSOL, sell_amount: "5000000", slippage_bps: 50 });
+  check(!r2.ok && m === 2 && /dropped/.test(r2.refused?.reason ?? ""), "dropped twice: stops after one retry and says so", { m, why: r2.refused?.reason });
+  let k = 0;
+  const { w: w3 } = await fresh({ execute: async () => { k++; throw new Error("reverted"); } });
+  await w3.swap({ chain: "solana", sell_token: SOL_USDC, buy_token: WSOL, sell_amount: "5000000", slippage_bps: 50 });
+  check(k === 1, "any other failure isn't retried");
+}
 console.log(`\nwallet: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

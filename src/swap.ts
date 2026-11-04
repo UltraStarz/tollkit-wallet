@@ -335,8 +335,12 @@ async function executeBuilt(q: SwapQuote, keys: { solana: Keypair }, deps: ExecD
   const { tx, lastValidBlockHeight, feeLamports, tipLamports } = await assembleBuilt(q, keys.solana.publicKey, conn);
   await verifySwapTx(q, { evm: "", solana: keys.solana.publicKey }, { ...deps, ...deps.verify, vtx: tx, extraLamports: feeLamports + tipLamports });
   tx.sign([keys.solana]);
-  const sig = await conn.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed", maxRetries: 3 });
-  return pollSolana(conn, sig, lastValidBlockHeight, "swap", { pollMs: deps.pollMs });
+  const raw = tx.serialize(), wire = Buffer.from(raw).toString("base64");
+  const sig = await conn.sendRawTransaction(raw, { preflightCommitment: "confirmed", maxRetries: 3 });
+  // 0.9.12: resend until it lands; after JITO_ALONE_MS the resends carry tollkit_direct, so Tollkit's Solana route also
+  // sends it the normal way instead of only through Jito (x402-starter src/solana-rpc-proxy.ts).
+  const resend = (direct: boolean) => (conn as any)._rpcRequest("sendTransaction", [wire, { encoding: "base64", skipPreflight: true, maxRetries: 0, ...(direct ? { tollkit_direct: true } : {}) }]);
+  return pollSolana(conn, sig, lastValidBlockHeight, "swap", { pollMs: deps.pollMs, resend });
 }
 
 /** Sign and send. Returns the transaction hash / signature. */

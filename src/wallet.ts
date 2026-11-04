@@ -349,7 +349,17 @@ export class TollkitWallet {
     try { id = await reserve(p, "trade", usd, { chain: q.chain, seller: q.venue, tool: "swap", fee_usd: q.fee_usd ?? undefined, detail: `${describeAmount(q.chain, q.sell_token, q.sell_amount)} -> at least ${describeAmount(q.chain, q.buy_token, q.min_buy_amount)}`, ...(o.by ? { by: o.by } : {}) }, this.o.dir); }
     catch (e) { if (e instanceof LimitError) return { ok: false, quote: strip(q), refused: { code: e.code, reason: e.message } }; throw e; }
     try {
-      const tx = await (this.o.execute ?? ((qq, k) => executeSwap(qq, k, { fetch: this.f, proxy: this.o.proxy, rpc: this.o.rpc })))(q, this.keys);
+      const run = (qq: SwapQuote) => (this.o.execute ?? ((x, k) => executeSwap(x, k, { fetch: this.f, proxy: this.o.proxy, rpc: this.o.rpc })))(qq, this.keys);
+      let tx: string;
+      try { tx = await run(q); }
+      catch (e) {
+        // 0.9.12: the network dropped it (its blockhash expired, nothing happened): one more try right away with a fresh
+        // quote and blockhash, when the price is still within 2% and no separate SOL fee rides along.
+        if (q.chain !== "solana" || fee || q.fee_inline || !/network dropped this swap/.test((e as Error).message)) throw e;
+        const again = await this.priced(req);
+        if (!("q" in again) || again.q.usd_value! > usd * 1.02 || again.q.fee_inline || again.q.fee_separate) throw e;
+        tx = await run(again.q);
+      }
       let feeNote: { fee_tx?: string; reason?: string } = {};
       if (fee) {
         try { feeNote = { fee_tx: await this.sendSolFee(fee) }; }

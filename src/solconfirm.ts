@@ -13,16 +13,23 @@ export async function sendAndConfirm(conn: Connection, tx: Transaction, signers:
   tx.recentBlockhash = blockhash;
   if (!tx.feePayer) tx.feePayer = signers[0]!.publicKey;
   tx.sign(...signers);
-  const sig = await conn.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed", maxRetries: 3 });
-  return pollSolana(conn, sig, lastValidBlockHeight, "transaction", o);
+  const raw = tx.serialize();
+  const sig = await conn.sendRawTransaction(raw, { preflightCommitment: "confirmed", maxRetries: 3 });
+  return pollSolana(conn, sig, lastValidBlockHeight, "transaction", { ...o, resend: () => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }) });
 }
+
+/** How long a swap goes only through Jito before its resends also go the normal way (see pollSolana's `resend`). */
+export const JITO_ALONE_MS = 10_000;
 
 /**
  * Wait for a sent Solana transaction. 0.9.3: when the network drops it, wait until its blockhash has expired and
  * check once more, so the wallet can say for certain that nothing happened instead of "check an explorer".
  */
-export async function pollSolana(conn: Connection, sig: string, lastValidBlockHeight: number, what: string, o: { pollMs?: number; maxMs?: number } = {}): Promise<string> {
-  const until = Date.now() + (o.maxMs ?? 150_000), short = `${sig.slice(0, 6)}…${sig.slice(-4)}`;
+export async function pollSolana(conn: Connection, sig: string, lastValidBlockHeight: number, what: string,
+  o: { pollMs?: number; maxMs?: number; resend?: (direct: boolean) => Promise<unknown> } = {}): Promise<string> {
+  // 0.9.12: `resend` sends the same signed transaction again at every check until it lands or its blockhash expires
+  // (a single send was dropped about 1 in 3 times on Nov 3); `direct` turns true once JITO_ALONE_MS has passed.
+  const t0 = Date.now(), until = t0 + (o.maxMs ?? 150_000), short = `${sig.slice(0, 6)}…${sig.slice(-4)}`;
   const done = (st: any) => st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized");
   for (;;) {
     const st = (await conn.getSignatureStatuses([sig])).value[0];
@@ -36,6 +43,7 @@ export async function pollSolana(conn: Connection, sig: string, lastValidBlockHe
       throw new Error(`The Solana network dropped this ${what} (${short}), so nothing changed in your wallet. It's safe to try again.`);
     }
     if (Date.now() > until) throw new Error(`Solana ${what} ${sig} is still waiting for the network. Check it on an explorer before trying again.`);
+    if (o.resend && !st) try { await o.resend(Date.now() - t0 >= JITO_ALONE_MS); } catch { /* the next check tries again */ }
     await new Promise((r) => setTimeout(r, o.pollMs ?? 1500));
   }
 }
