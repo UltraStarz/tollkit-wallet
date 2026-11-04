@@ -166,5 +166,27 @@ s2.set(dca.id, true, 10);
 out = await s2.sync();
 check(out.running.length === 0 && /Not turned on/.test(out.problems[dca.id] ?? ""), "when the server isn't on, nothing runs there and the card says why", out);
 
+
+// 0.9.12: one 24/7 cap for the wallet. Unset, it starts at what the dashboard says (Autopilot's budget); a switch never
+// lowers it; Settings changes it; and it's re-signed while under two buys of room, not only when a buy no longer fits.
+{
+  const dir3 = mkdtempSync(path.join(os.tmpdir(), "aos-")), store3 = new RuleStore(dir3);
+  const s3 = new SolAlwaysOn({ key: () => kp, address: OWN, dir: dir3, rpc: "x", proxy: "https://api.tollkit.dev/wallet", rules: () => store3, chain, fetch: fakeFetch });
+  s3.defaultCap = () => 60;
+  Object.assign(accts[usdcA]!, { amount: 200_000_000n, delegate: null, delegated: 0n });
+  const d3 = await store3.add({ kind: "dca", chain: "solana", token: "SOL", amount_usd: 10, every: "day" }, "owner", true);
+  s3.set(d3.id, true);
+  await s3.sync();
+  check(s3.view().usd_cap === 60 && accts[usdcA]!.delegated === 60_000_000n && s3.view().per_buy_usd === 10, "no amount picked: the cap starts at Autopilot's budget and is signed", { cap: s3.view().usd_cap, allowed: accts[usdcA]!.delegated });
+  const d4 = await store3.add({ kind: "dca", chain: "solana", token: "SOL", amount_usd: 5, every: "day" }, "owner", true);
+  s3.set(d4.id, true, 20); await s3.sync();
+  check(s3.view().usd_cap === 60, "a second switch never changes the cap");
+  accts[usdcA]!.delegated = 15_000_000n; const n0 = sent.length; await s3.sync();
+  check(sent.length === n0 + 1 && accts[usdcA]!.delegated === 60_000_000n, "under two buys of room: re-signed back to the cap", accts[usdcA]!.delegated);
+  accts[usdcA]!.delegated = 25_000_000n; const n1 = sent.length; await s3.sync();
+  check(sent.length === n1, "two or more buys of room: left alone");
+  s3.setCap(80); await s3.sync();
+  check(s3.view().usd_cap === 80 && accts[usdcA]!.delegated === 80_000_000n, "Settings raises the cap, and it's signed at the next sync");
+}
 console.log(`\nalwayson-sol: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

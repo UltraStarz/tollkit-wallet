@@ -55,6 +55,8 @@ interface Local {
   /** Lamports set aside per sell rule, fixed when it was turned on (a share of the balance then), and what it was fixed for. */
   set_aside?: Record<string, { key: string; lamports: string }>;
   running?: string[]; problems?: Record<string, string>; last_sync?: string; last_error?: string | null; last_tx?: string;
+  /** 0.9.12: the largest buy on 24/7 at the last sync, so the app can say how many buys of room the cap has left. */
+  per_buy_usd?: number;
   seen_fills?: string[]; held?: { usdc_allowed: string; wsol_allowed: string; wsol_balance: string; coins?: Record<string, { allowed: string; balance: string; decimals: number; symbol?: string }> };
   /** 0.9.9: coins this wallet has allowed Tollkit to sell (so turning them off revokes them), and away notes already seen. */
   coins_used?: string[]; seen_away?: string[];
@@ -165,7 +167,7 @@ export class SolAlwaysOn {
 
   view() {
     const l = this.load(), h = l.held;
-    return { rules: Object.keys(l.rules), usd_cap: l.usd_cap, config: this.cfg, running: l.running ?? [], problems: l.problems ?? {}, last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, last_tx: l.last_tx ?? null,
+    return { rules: Object.keys(l.rules), usd_cap: l.usd_cap, per_buy_usd: l.per_buy_usd ?? 0, config: this.cfg, running: l.running ?? [], problems: l.problems ?? {}, last_sync: l.last_sync ?? null, last_error: l.last_error ?? null, last_tx: l.last_tx ?? null,
       // What Tollkit may move right now, as the chain last reported it.
       brain: l.brain ?? null, topup_pending: l.topup_pending ?? null,
       held: h ? { usdc_allowed: Number(h.usdc_allowed) / 1e6, wsol_allowed: Number(h.wsol_allowed) / 1e9, wsol_balance: Number(h.wsol_balance) / 1e9,
@@ -252,15 +254,25 @@ export class SolAlwaysOn {
   }
   noteError(m: string) { this.update((l) => { l.last_error = m.slice(0, 300); }); }
 
-  /** The owner flips the switch on a Solana rule. `usd_cap`: the most USDC Tollkit may spend on buys (refilled when the app opens). */
+  /**
+   * The owner flips the switch on a Solana rule. `usd_cap`: the most USDC Tollkit may spend on buys (refilled when the
+   * app opens). 0.9.12: one cap for the wallet, set in Settings (setCap); a switch only fills it in while it's unset.
+   */
   set(id: string, on: boolean, usd_cap?: number) {
     if (usd_cap !== undefined && !(usd_cap > 0 && usd_cap <= 100_000)) throw new Error("Pick an amount between $1 and $100,000.");
     this.update((l) => {
       if (on) l.rules[id] = true; else { delete l.rules[id]; if (l.set_aside) delete l.set_aside[id]; }
-      if (usd_cap !== undefined) l.usd_cap = usd_cap;
+      if (usd_cap !== undefined && !l.usd_cap) l.usd_cap = usd_cap;
       l.dirty = true;
     });
   }
+  /** 0.9.12: the wallet's 24/7 spending cap for buys on Solana, from Settings. Re-signed at the next sync. */
+  setCap(usd: number) {
+    if (!(usd > 0 && usd <= 100_000)) throw new Error("Pick an amount between $1 and $100,000.");
+    this.update((l) => { l.usd_cap = usd; l.dirty = true; });
+  }
+  /** 0.9.12: what the cap starts at when nothing set it (the dashboard passes Autopilot's budget, else $100). */
+  defaultCap?: () => number;
 
   /** Signed request: this wallet's Solana key over the route, the time and this exact body. */
   private async call(route: string, body: unknown): Promise<any> {
@@ -325,7 +337,7 @@ export class SolAlwaysOn {
     this.update((x) => { if (state.brain) { const { strategies: _s, ...rest } = state.brain; x.brain = rest; } else x.brain = null; });
     if (this.load().topup_pending) await this.retryTopup().catch(() => {});
     const fresh: ServerFill[] = this.update((l) => { const seen = new Set(l.seen_fills ?? []); const n = (state.fills ?? []).filter((f: ServerFill) => f.id && !seen.has(f.id)); l.seen_fills = [...seen, ...n.map((f: ServerFill) => f.id!)].slice(-1000); return n; });
-    if (fresh.length) await applyFills(store, fresh);
+    if (fresh.length) await applyFills(store, fresh, this.o.dir);
     // 0.9.3: a bot the server ran carries its own state (what it holds, its next step); the newer copy wins.
     const sb = Object.entries(state.rules ?? {}).filter(([, v]: any) => v && v.bot);
     if (sb.length) await store.mutate((rs) => {
@@ -386,12 +398,18 @@ export class SolAlwaysOn {
     const solBuys = buys.filter(isSolRule);
     // A bot's next buy: its first one (a rebalancer's set-up, a split buy's part). Later buys draw on the same cap.
     const oneBuy = (r: Rule) => usdcAtomic(!isBot(r) ? r.amount_usd! : r.kind === "rebalance" ? (r.amount_usd! * (r.target_pct ?? 50)) / 100 : r.kind === "twap" ? r.amount_usd! / (r.pieces ?? 1) : r.amount_usd!);
+    const perTrade = buys.reduce((m, r) => (oneBuy(r) > m ? oneBuy(r) : m), 0n);
+    this.update((x) => { x.per_buy_usd = Number(perTrade) / 1e6; });
     if (buys.length) {
-      const cap = usdcAtomic(l.usd_cap || 0), perTrade = buys.reduce((m, r) => (oneBuy(r) > m ? oneBuy(r) : m), 0n);
+      // 0.9.12: the cap no longer has to be picked per order: unset, it starts at Autopilot's budget (else $100).
+      if (!l.usd_cap) { l.usd_cap = Math.max(1, Math.min(100_000, this.defaultCap?.() || 100)); const c = l.usd_cap; this.update((x) => { x.usd_cap = c; }); }
+      const cap = usdcAtomic(l.usd_cap);
+      // Re-sign while fewer than two buys of room are left, so the cap is as full as it can be whenever the app closes.
+      const low = cap < 2n * perTrade ? cap : 2n * perTrade;
       if (cap === 0n) for (const r of buys) problems[r.id] = "Set how much it can spend first.";
       // A bot that holds SOL can keep going on sells alone; everything else needs USDC for its next buy.
       else if (!usdc.exists || usdc.amount < perTrade) for (const r of buys) { if (isBot(r) && botHeld(r) > 0n) continue; problems[r.id] = `Run 24/7 needs at least $${(Number(perTrade) / 1e6).toFixed(2)} of USDC on Solana for one buy. You have $${(Number(usdc.amount) / 1e6).toFixed(2)}.`; }
-      else if (usdcAllowed < perTrade || (l.dirty && usdcAllowed !== cap)) { ixs.push(createApproveInstruction(usdcA, delegate, this.owner, cap)); usdcAllowed = cap; usdcRefilled = true; }
+      else if (usdcAllowed < low || (l.dirty && usdcAllowed !== cap)) { ixs.push(createApproveInstruction(usdcA, delegate, this.owner, cap)); usdcAllowed = cap; usdcRefilled = true; }
       // The bought SOL lands in the wrapped-SOL account: make it now, at the owner's cost, so the server never pays its rent.
       if (!wsolMade && solBuys.length && !solBuys.every((r) => problems[r.id])) { ixs.push(createAssociatedTokenAccountIdempotentInstruction(this.owner, wsolA, this.owner, new PublicKey(WSOL_MINT))); wsolMade = true; }
     } else if (usdcAllowed > 0n) { ixs.push(createRevokeInstruction(usdcA, this.owner)); usdcAllowed = 0n; }

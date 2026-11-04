@@ -6,6 +6,7 @@ import { Wallet, verifyTypedData } from "ethers";
 import { C, DF, ROOT_AUTHORITY, encodeDelegations, signDelegation, execution } from "../src/delegation.js";
 import { serverRunnable, applyFills } from "../src/alwayson.js";
 import { RuleStore } from "../src/rules.js";
+import { entries } from "../src/ledger.js";
 
 let pass = 0, fail = 0;
 const check = (c: boolean, l: string, d?: unknown) => { if (c) { pass++; console.log("  ok  ", l); } else { fail++; console.log("  FAIL", l, d ?? ""); } };
@@ -51,10 +52,19 @@ const tp = await store.add({ kind: "take_profit", chain: "base", token: "ETH", s
 const sl = await store.add({ kind: "stop_loss", chain: "base", token: "ETH", sell_percent: 50, trigger_price: 1000, group: "g1" }, "owner", true);
 const ts = "2026-10-18T12:00:00.000Z";
 const fills = [{ rule_id: dca.id, ts, ok: true, tx: "0xaa", usd: 10, units: 0.004, side: "buy" as const }, { rule_id: sl.id, ts, ok: true, tx: "0xbb", usd: 3, units: 0.001, side: "sell" as const }];
-await applyFills(store, fills); await applyFills(store, fills);
+await applyFills(store, fills, dir); await applyFills(store, fills, dir);
+// 0.9.12: each real server fill is also a receipt, once, so Activity and the CSV show what ran 24/7.
+{ const rc = entries(dir).filter((e) => e.kind === "trade");
+  const buy = rc.find((e) => e.tx === "0xaa"), sell = rc.find((e) => e.tx === "0xbb");
+  check(rc.length === 2 && buy?.by === "24/7" && buy.usd === 10 && buy.fee_usd === 0.05 && buy.detail === "10.00 USDC -> 0.004 ETH" && buy.chain === "base" && sell?.detail === "0.001 ETH -> 3.00 USDC", "server fills become receipts, once, with Tollkit's fee and who ran them", rc); }
 const a = store.get(dca.id)!, b = store.get(sl.id)!, c = store.get(tp.id)!;
 check(a.state.runs === 1 && a.state.next_run === "2026-10-19T12:00:00.000Z" && a.state.spent_usd === 10, "a server buy is recorded once, and the next one is tomorrow", a.state);
 check(b.status === "done" && c.status === "cancelled", "a filled stop-loss cancels its take-profit partner", [b.status, c.status]);
 
+
+// 0.9.12: pretend and failed server fills never become receipts.
+{ const before = entries(dir).filter((e) => e.kind === "trade").length;
+  await applyFills(store, [{ rule_id: dca.id, ts: "2026-10-19T12:00:00.000Z", ok: true, tx: "0xpaper", usd: 5, units: 0.002, side: "buy", paper: true }, { rule_id: dca.id, ts: "2026-10-19T12:00:00.000Z", ok: false, side: "buy", reason: "no" }], dir);
+  check(entries(dir).filter((e) => e.kind === "trade").length === before, "pretend and failed fills never become receipts"); }
 console.log(`\nalwayson: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

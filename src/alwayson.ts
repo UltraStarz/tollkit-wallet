@@ -17,7 +17,8 @@
  * doubling sizes from $1 up; the server sends the pieces that make up a trade in one transaction. Other rules keep
  * running on the device while the app is open.
  */
-import { nothingToSell, sellableFor } from "./ownership.js";
+import { isAutopilotRule, nothingToSell, sellableFor } from "./ownership.js";
+import { entries, record } from "./ledger.js";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -115,7 +116,10 @@ export class AlwaysOn {
 
   view() {
     const l = this.load();
-    return { rules: Object.keys(l.rules), budget_usd: l.budget_usd, config: this.cfg, running: l.running ?? [], problems: l.problems ?? {}, last_sync: l.last_sync ?? null, last_error: l.last_error ?? null };
+    // 0.9.12: when the earliest signed permission runs out (seconds); the app renews them only while it's open.
+    const untils = Object.values(l.signed ?? {}).map((s) => s.until).filter((u) => typeof u === "number" && u > 0);
+    return { rules: Object.keys(l.rules), budget_usd: l.budget_usd, config: this.cfg, running: l.running ?? [], problems: l.problems ?? {}, last_sync: l.last_sync ?? null, last_error: l.last_error ?? null,
+      signed_until: untils.length ? Math.min(...untils) : null };
   }
   isOn(id: string) { return !!this.load().rules[id]; }
   /** The server confirmed it runs this rule (and hasn't confirmed it stopped): the device leaves it alone. */
@@ -127,13 +131,20 @@ export class AlwaysOn {
   handedOff(id: string) { const l = this.load(); return !!l.rules[id] && !(l.problems ?? {})[id]; }
   anyOn() { const l = this.load(); return Object.keys(l.rules).length > 0 || (l.running ?? []).length > 0; }
   noteError(m: string) { this.update((l) => { l.last_error = m.slice(0, 300); }); }
+  /** 0.9.12: what the budget starts at when nothing set it (the dashboard passes Autopilot's budget, else $100). */
+  defaultBudget?: () => number;
+  /** 0.9.12: the wallet's 24/7 budget for buys on Base, from Settings. Re-signed at the next sync. */
+  setBudget(usd: number) {
+    if (!(usd > 0 && usd <= 100_000)) throw new Error("Pick an amount between $1 and $100,000.");
+    this.update((l) => { l.budget_usd = usd; l.dirty = true; });
+  }
 
   /** The owner flips the switch on a rule. `budget_usd`: the USDC 0x may be approved to spend (a total, refilled when the app opens). */
   set(id: string, on: boolean, budget_usd?: number) {
     if (budget_usd !== undefined && !(budget_usd > 0 && budget_usd <= 100_000)) throw new Error("Pick an amount between $1 and $100,000.");
     this.update((l) => {
       if (on) l.rules[id] = true; else delete l.rules[id];
-      if (budget_usd !== undefined) l.budget_usd = budget_usd;
+      if (budget_usd !== undefined && !l.budget_usd) l.budget_usd = budget_usd; // 0.9.12: one budget, set in Settings (setBudget)
       l.dirty = true; // re-sign everything on the next sync, retiring what was signed before
     });
   }
@@ -210,7 +221,7 @@ export class AlwaysOn {
     try { state = await this.call("state", {}); }
     catch (e) { this.update((l) => { l.last_error = (e as Error).message.slice(0, 300); }); return { fills: [], running: l0.running ?? [], problems: l0.problems ?? {} }; }
     const fresh = this.update((l) => { const seen = new Set(l.seen_fills ?? []); const n = state.fills.filter((f) => f.id && !seen.has(f.id)); l.seen_fills = [...seen, ...n.map((f) => f.id!)].slice(-1000); return n; });
-    if (fresh.length) await applyFills(store, fresh);
+    if (fresh.length) await applyFills(store, fresh, this.o.dir);
     // 0.9.7: a bot the server ran carries its own state (what it holds, its next step); the newer copy wins.
     const sb = Object.entries(state.rules ?? {}).filter(([, v]) => v && v.bot && typeof v.bot === "object");
     if (sb.length) await store.mutate((rs) => {
@@ -315,6 +326,7 @@ export class AlwaysOn {
     // The spending approval for 0x, checked every sync (swaps made on the device use the same allowance).
     const buys = rules.filter((r) => (r.kind === "dca" || r.kind === "limit_buy" || (isBotKind(r.kind) && botBuys(r as any))) && !problems[r.id]);
     if (buys.length) {
+      if (!l.budget_usd) { l.budget_usd = Math.max(1, Math.min(100_000, this.defaultBudget?.() || 100)); const b = l.budget_usd; this.update((x) => { x.budget_usd = b; }); }
       const cap = parseUnits(String(l.budget_usd || 0), usdc.decimals);
       if (cap === 0n) for (const r of buys) problems[r.id] ??= "Set how much Autopilot can use first.";
       else {
@@ -438,7 +450,27 @@ export class AlwaysOn {
 }
 
 /** Records what the server traded on the device's copy of the rules, so the app shows it and doesn't repeat it. */
-export async function applyFills(store: RuleStore, fills: ServerFill[]) {
+/** Tollkit's fee on a server trade, as the server charges it (0.25% for the busy bots, 0.5% for the rest). */
+const serverFeeUsd = (kind: string, usd: number) => Math.round(usd * (["grid", "infinity_grid", "smart_dca"].includes(kind) ? 25 : 50)) / 10_000;
+/**
+ * 0.9.12 (Joe: "trades the server makes never appear in Activity"): each real server fill also becomes a receipt, so
+ * Activity, the CSV export and the fee totals show what ran 24/7. Pretend fills never do; a tx seen before is skipped.
+ */
+function receiptsFor(rules: Rule[], fills: ServerFill[], dir?: string) {
+  const have = new Set(entries(dir).map((e) => e.tx).filter(Boolean));
+  for (const f of fills) {
+    const r = rules.find((x) => x.id === f.rule_id);
+    if (!r || f.paper || !f.ok || !f.tx || have.has(f.tx)) continue;
+    have.add(f.tx);
+    const sym = r.token.length > 12 ? `${r.token.slice(0, 4)}…` : r.token, usd = f.usd ?? 0, units = f.units ?? 0;
+    const fmt = (n: number) => (n >= 1 ? n.toFixed(4) : n.toPrecision(4)).replace(/\.?0+$/, "");
+    record({ id: f.id ?? `srv-${f.tx.slice(0, 16)}`, ts: f.ts, kind: "trade", status: "done", usd, fee_usd: serverFeeUsd(r.kind, usd), chain: r.chain, seller: r.chain === "solana" ? "jupiter" : "0x", tool: "swap",
+      detail: f.side === "buy" ? `${usd.toFixed(2)} USDC -> ${fmt(units)} ${sym}` : `${fmt(units)} ${sym} -> ${usd.toFixed(2)} USDC`, tx: f.tx, by: isAutopilotRule(r) ? "Autopilot (24/7)" : "24/7" }, dir);
+  }
+}
+
+export async function applyFills(store: RuleStore, fills: ServerFill[], dir?: string) {
+  receiptsFor(store.list(), fills, dir);
   await store.mutate((rules) => {
     for (const f of fills) {
       const r = rules.find((x) => x.id === f.rule_id);

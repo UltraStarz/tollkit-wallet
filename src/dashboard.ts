@@ -23,7 +23,8 @@ import { Autopilot } from "./autopilot.js";
 import { RuleInput, describeRule, ruleProblem } from "./rules.js";
 import { parseStrategy } from "./parse.js";
 import { CHAINS as ALL_CHAINS, chainName, type Chain } from "./chains.js";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { passwordFile } from "./paths.js";
 import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLink, type AppId } from "./connect.js";
 import { AiAssistant, setAiTier, IMAGE_TYPES, MAX_IMAGES, type ChatImage } from "./ai.js";
@@ -45,7 +46,9 @@ import { notify } from "./telegram.js";
 
 const CHAINS: string[] = ALL_CHAINS;
 
-export interface DashboardHandle { url: string; port: number; close(): Promise<void> }
+export interface DashboardHandle { url: string; port: number; close(): Promise<void>;
+  /** 0.9.12: one Run 24/7 sync now (the app calls it before locking, so the allowances are as full as they can be). */
+  sync(): Promise<void> }
 
 function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<any> {
   return new Promise((res, rej) => {
@@ -105,7 +108,12 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     });
   };
   // "Keep running when closed": hand the switched-on rules to Tollkit's server and bring back what it traded.
+  // 0.9.12: one nudge per thing, kept across restarts (Telegram, when it's set up).
+  const warnedFile = path.join(w.dir, "always-warned.json");
+  const warnOnce = (key: string) => { let m: Record<string, string> = {}; try { m = JSON.parse(readFileSync(warnedFile, "utf8")); } catch { /* none yet */ } if (m[key]) return false; m[key] = new Date().toISOString(); try { writeFileSync(warnedFile, JSON.stringify(m), { mode: 0o600 }); } catch { /* best effort */ } return true; };
+  let lastAlways = 0;
   const alwaysSync = async () => {
+    lastAlways = Date.now();
     // 0.9.7: a trade the device is placing right now finishes (and is recorded) before the server gets the rule's state.
     await autopilot?.idle();
     // 0.9.9: other devices read what's set aside from the chain, so every device shows the same total.
@@ -113,8 +121,13 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     if (w.always().anyOn()) try { await w.always().sync(); } catch (e) { w.always().noteError((e as Error).message); } // syncs run one at a time
     // 0.9.10: Think 24/7 syncs too, even before any strategy is live, so the server knows when this device goes quiet.
     if (w.alwaysSol().anyOn() || superbot?.brainInfo()) try { await w.alwaysSol().sync(); } catch (e) { w.alwaysSol().noteError((e as Error).message); }
+    // 0.9.12: Base permissions are renewed only while the app is open: say so two days before they run out.
+    const until = w.always().view().signed_until, tgNow = loadTelegram(w.dir);
+    if (tgNow && until && until * 1000 - Date.now() < 2 * 86_400_000 && warnOnce(`base-until:${until}`))
+      void notify(tgNow, `Run 24/7 on Base runs out ${new Date(until * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} unless you open TOLLkit before then (opening it renews the permissions for 7 days).`).catch(() => {});
   };
-  const alwaysTimer = o.watch === false ? null : setInterval(() => void alwaysSync(), 5 * 60_000);
+  // 0.9.12: every 2 minutes while anything runs 24/7 (fills and pauses show up sooner), else every 5.
+  const alwaysTimer = o.watch === false ? null : setInterval(() => { const every = w.always().anyOn() || w.alwaysSol().anyOn() || superbot?.brainInfo() ? 2 : 5; if (Date.now() - lastAlways >= every * 60_000 - 5_000) void alwaysSync(); }, 60_000);
   // 0.8.0: an AI tool added or changed rules; start them now rather than at the next tick.
   w.hooks.rulesChanged = () => { void autopilot?.tick(); void paperPilot?.tick(); void alwaysSync(); };
   const setups = new Setups(w.dir);
@@ -175,6 +188,10 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // 0.9.10: Think 24/7: what the server needs, and what it hands back when this device is here again.
   w.alwaysSol().brainInfo = () => superbot?.brainInfo() ?? null;
   w.alwaysSol().paceInfo = () => superbot?.load().settings.pace ?? null;
+  // 0.9.12: the 24/7 spending cap starts at Autopilot's budget when nothing set it (else $100); Settings changes it.
+  const defaultCap = () => { const s = superbot?.load(); return s?.enabled ? s.settings.budget_usd : 100; };
+  w.alwaysSol().defaultCap = defaultCap;
+  w.always().defaultBudget = defaultCap;
   w.alwaysSol().onBrain = (b) => (superbot ? superbot.adoptServer(b) : []);
   // 0.9.7: sync each minute while it's on, and soon after anything changes here. Files that arrive from another
   // device take effect at once (the bots re-read their rules on the next tick).
@@ -513,6 +530,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           if (a === "off") return send(res, 200, { devices: devs.turnOff() });
           if (a === "run_here") { const v = await devs.runHere(); void autopilot?.tick(); void alwaysSync(); return send(res, 200, { devices: v }); }
           if (a === "now") { await devs.sync(); return send(res, 200, { devices: devs.view() }); }
+          if (a === "ack_takeover") return send(res, 200, { devices: devs.ackTakeover() });
           // 0.9.8: take another device off the list.
           if (a === "remove") { const v = await devs.remove(String(b.id ?? "")); void autopilot?.tick(); void alwaysSync(); return send(res, 200, { devices: v }); }
           return send(res, 400, { error: "Unknown action." });
@@ -520,6 +538,14 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       }
       if (p === "/api/always") {
         try {
+          // 0.9.12: a sync now (the page asks when it comes back to the front), and the 24/7 caps from Settings.
+          if (b.action === "sync") { await alwaysSync(); return send(res, 200, { always: w.always().view(), always_sol: w.alwaysSol().view() }); }
+          if (b.action === "cap") {
+            if (b.solana_usd !== undefined) w.alwaysSol().setCap(Number(b.solana_usd));
+            if (b.base_usd !== undefined) w.always().setBudget(Number(b.base_usd));
+            await alwaysSync();
+            return send(res, 200, { always: w.always().view(), always_sol: w.alwaysSol().view() });
+          }
           if (b.action === "off") {
             // Each network on its own: one failing doesn't keep the other on.
             const errs: string[] = [];
@@ -709,7 +735,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const beat = setInterval(() => { try { heartbeat(w.dir); } catch { /* ignore */ } }, 5_000);
   const url = `http://127.0.0.1:${port}/?t=${token}`;
   return {
-    url, port,
+    url, port, sync: alwaysSync,
     close: () => new Promise<void>((r) => { clearInterval(beat); if (toolsTimer) clearInterval(toolsTimer); if (aiTimer) clearInterval(aiTimer); if (alwaysTimer) clearInterval(alwaysTimer); if (syncTimer) clearInterval(syncTimer); if (syncSoon) clearTimeout(syncSoon); if (botsTimer) clearInterval(botsTimer); holdings?.stop(); watcher?.stop(); prices?.stop(); autopilot?.stop(); paperPilot?.stop(); superbot?.stop(); tape.flush(); server.close(() => r()); server.closeAllConnections?.(); }),
   };
 }

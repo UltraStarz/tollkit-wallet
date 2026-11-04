@@ -139,5 +139,26 @@ check(get(C.dir, "rules.json") === null && C.s.runsHere(), "another wallet never
   check(nv.on && !nv.removed_at && nv.here.id !== macId && P.s.view().devices.some((d) => d.id === nv.here.id) && !M.s.runsHere(), "turning sync on again joins as a new device, without the bots", nv);
 }
 
+
+// 0.9.12: a runner that goes quiet hands the bots to a device that is open and syncing.
+{
+  const k2 = Wallet.createRandom();
+  let now = Date.parse("2026-11-04T10:00:00Z");
+  const mk = (name: string) => { const dir = mkdtempSync(path.join(os.tmpdir(), `sync-q-${name}-`)); return { dir, s: new DeviceSync({ dir, address: k2.address, key: () => k2, proxy: "https://x/wallet", fetch: server, deviceName: name, now: () => now }) }; };
+  const C = mk("Chrome"), P = mk("iPhone");
+  await C.s.turnOn(); await P.s.turnOn();
+  check(C.s.runsHere() && !P.s.runsHere(), "Chrome runs the bots; the phone watches");
+  now += 5 * 60_000; await P.s.sync();
+  check(!P.s.runsHere() && !P.s.view().took_over, "5 quiet minutes: nothing changes");
+  now += 6 * 60_000; await P.s.sync();
+  const v = P.s.view();
+  check(P.s.runsHere() && v.took_over?.from === "Chrome", "11 quiet minutes: the open phone takes the bots and says who went quiet", v.took_over);
+  check(!P.s.mayTrade(), "and waits out the lease before trading");
+  now += 4 * 60_000; await P.s.sync();
+  check(P.s.mayTrade(), "after the lease it trades");
+  await C.s.sync();
+  check(!C.s.runsHere() && !C.s.mayTrade(), "Chrome comes back and sees the phone runs them now");
+  check(P.s.ackTakeover().took_over === null, "OK clears the note");
+}
 console.log(`\ndevsync: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
