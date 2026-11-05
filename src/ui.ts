@@ -2129,10 +2129,15 @@ var P={limits:["Limits & safety","swap",usd(p.per_trade_usd)+" a swap · "+usd(p
 run247:["Run 24/7","net",run247().text,function(){return aoCapGroup()+aos}],
 devices:["Devices","dev",nd?nd+" device"+(nd===1?"":"s")+" synced":"This device only",function(){return devRows()}],
 ai:["AI","ai",on?on+" app"+(on===1?"":"s")+" connected":"No AI apps connected",function(){return (S.ai&&S.ai.fuel?fuelRow():'')+ai+tkTools()+appBudgets()}],
-sites:["Websites & extension","ext","Connected sites and the browser extension",function(){return exr}],
+sites:["Websites & extension","ext","Connected sites and the browser extension",function(){return window.TK_EXT&&TK_EXT.sitesHtml?TK_EXT.sitesHtml(ex):exr}],
 approvals:["Approvals on Telegram","tg",tgOn?"Linked":"Not set up",function(){return tg}],
 recovery:["Recovery","bk",bk?"Backed up":"Not backed up",function(){return bkr}],
+lock:["Lock & security","bk","Auto-lock, lock now, remove this wallet",function(){return window.TK_EXT&&TK_EXT.browserHtml?TK_EXT.browserHtml():""}],
 dev:["For developers","tools","Python bots",function(){return pyRow()+'<div class="sm mut" style="margin-top:8px">Charts: TradingView Lightweight Charts™, Copyright (c) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">tradingview.com</a> · Apache License 2.0</div>'}]};
+// Inside the phone app there's no browser to pair; the Chrome extension shows its own list of connected sites.
+if(window.TK_EXT&&!(TK_EXT.sitesHtml&&TK_EXT.sitesHtml(ex)))delete P.sites;
+// The phone app and the Chrome extension add their own lock settings; the desktop dashboard has none to show.
+if(!(window.TK_EXT&&TK_EXT.browserHtml))delete P.lock;
 if(SETP&&P[SETP])return '<h2 class="setp-h">'+esc(P[SETP][0])+'</h2>'+P[SETP][3]();
 SETP=null;
 return keyb+'<div class="setl">'+Object.keys(P).map(function(k){var x=P[k],warn=k==="recovery"&&!bk;return '<button class="setr" onclick="setOpen(\''+k+'\')">'+sIco(x[1])+'<span class="setr-t"><b>'+esc(x[0])+'</b><small class="'+(warn?"warn":"")+'">'+esc(x[2])+'</small></span><span class="setr-c" aria-hidden="true">›</span></button>'}).join("")+'</div>'}
