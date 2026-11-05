@@ -485,6 +485,8 @@ nav button .emo{display:block;margin:0 auto 3px;width:20px;height:20px;font-size
 .pay-in::placeholder{color:#fff;opacity:.4}
 .aidlg.pay .pay-in,.aidlg.pay .pay-in:focus{outline:none;border:0;box-shadow:none;background:none}
 .pay-sub{margin-top:10px;font-size:14px;color:var(--mut);text-align:center}
+.pay-tk{position:absolute;left:100%;top:50%;transform:translateY(-40%);font-size:26px;font-weight:800;color:var(--mut);margin-left:8px;white-space:nowrap}
+.pay-unit{margin-top:8px;background:none;border:0;color:#fff;opacity:.85;font:inherit;font-size:13px;font-weight:700;text-decoration:underline;text-underline-offset:4px;cursor:pointer;padding:4px 8px}
 .pay-quick{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:22px}
 .pay-q{min-width:68px;padding:10px 14px;border-radius:999px;border:0;background:rgba(255,255,255,.14);color:#fff;font:inherit;font-size:15px;font-weight:700;cursor:pointer}
 .pay-q.on{background:#fff;color:#0b0d12}
@@ -914,14 +916,16 @@ document.addEventListener("keydown",function(e){if(SL.o&&e.key==="Escape")closeS
 function slPoll(){clearTimeout(SL.t);if(!SL.ref||!SL.o)return;api("/sell/status?ref="+SL.ref).then(function(r){SL.sale=r.sale;SL.tx=r.transaction;slRender();var st=SL.sale&&SL.sale.state;if(st==="open"||st==="sent")SL.t=setTimeout(slPoll,st==="sent"?10000:4000)}).catch(function(e){SL.err=e.message;slRender();SL.t=setTimeout(slPoll,10000)})}
 function slLeft(t){var at=Date.parse(t.updated_at||t.created_at||"");if(!isFinite(at))return "";var m=Math.max(0,Math.round((at+1800000-Date.now())/60000));return m+" min left to send"}
 function slRender(){if(!SL.o)return;var ch=rampChains(),h='<h2>Cash out</h2>';var sale=SL.sale,t=SL.tx;
-if(!SL.ref){var have=mvHave(SL.chain,SL.asset),sv=SL.amt||"",sn=Number(sv),dp=SL.asset==="USDC"||SL.asset==="USDT"?2:6;
+if(!SL.ref){var have=mvHave(SL.chain,SL.asset),usdm=SL.unit==="usd"&&SL.asset!=="USDC",px=payPx(SL.asset),dp=SL.asset==="USDC"||SL.asset==="USDT"?2:6,sv=usdm?(SL.uv||""):(SL.amt||""),sn=Number(sv),
+cn=usdm?(px&&sn>0?Math.floor(sn/px*Math.pow(10,dp))/Math.pow(10,dp):0):sn;
 h='<h2>Cash out</h2>'+payNet(ch,SL.chain)+
 '<div class="bseg" role="group" aria-label="Coin">'+BUYA[SL.chain].map(function(a){return '<button data-sa="'+a+'" class="bsb'+(SL.asset===a?" on":"")+'" aria-pressed="'+(SL.asset===a)+'">'+tokIcon(a)+esc(a)+'</button>'}).join("")+'</div>'+
-'<div class="pay-mid"><label class="pay-amt" for="slamt"><input id="slamt" class="pay-in" inputmode="decimal" autocomplete="off" placeholder="0" aria-label="'+esc(SL.asset)+' to sell" value="'+esc(sv)+'" '+payFit(sv||"0")+' oninput="SL.amt=this.value.replace(/[^0-9.]/g,\'\');slRender()"></label>'+
-'<div class="pay-sub">'+esc(SL.asset)+' on '+esc(CHAIN_NAMES[SL.chain]||SL.chain)+(have!==null?' · '+have.toLocaleString(undefined,{maximumFractionDigits:dp})+' available':'')+'</div>'+
-(have?'<div class="pay-quick">'+[["25%",.25],["50%",.5],["75%",.75],["Max",1]].map(function(q){var x=String(Math.floor(have*q[1]*Math.pow(10,dp))/Math.pow(10,dp));return '<button data-sq="'+x+'" class="pay-q'+(sv===x?" on":"")+'">'+q[0]+'</button>'}).join("")+'</div>':'')+'</div>'+
+'<div class="pay-mid"><label class="pay-amt" for="slamt">'+(usdm?'<span class="pay-cur">$</span>':'')+'<input id="slamt" class="pay-in" inputmode="decimal" autocomplete="off" placeholder="0" aria-label="'+(usdm?'Dollars of '+esc(SL.asset)+' to sell':esc(SL.asset)+' to sell')+'" value="'+esc(sv)+'" '+payFit(sv||"0")+' oninput="var x=this.value.replace(/[^0-9.]/g,\'\');if(SL.unit===\'usd\'&&SL.asset!==\'USDC\')SL.uv=x;else SL.amt=x;slRender()">'+(usdm||SL.asset==="USDC"?'':'<span class="pay-tk">'+esc(SL.asset)+'</span>')+'</label>'+
+'<div class="pay-sub">'+(usdm?(cn>0?'about '+payNum(cn,Math.min(dp,4))+' '+esc(SL.asset)+' at today\'s price':esc(SL.asset)+' on '+esc(CHAIN_NAMES[SL.chain]||SL.chain)):(sn>0&&px&&SL.asset!=="USDC"?'about '+fmtUsd(sn*px)+' at today\'s price':esc(SL.asset)+' on '+esc(CHAIN_NAMES[SL.chain]||SL.chain)))+(have!==null?' · '+payNum(have,Math.min(dp,4))+' '+esc(SL.asset)+' available':'')+'</div>'+
+(SL.asset!=="USDC"&&px?payUnitBtn(usdm?"usd":"coin",SL.asset).replace('data-unit="usd"','data-sunit="usd"').replace('data-unit="coin"','data-sunit="coin"').replace(/Enter in (dollars|[A-Z]+)/,usdm?"Enter in "+esc(SL.asset):"Enter in dollars"):'')+
+(have?'<div class="pay-quick">'+[["25%",.25],["50%",.5],["75%",.75],["Max",1]].map(function(q){var c=Math.floor(have*q[1]*Math.pow(10,dp))/Math.pow(10,dp),x=usdm?String(Math.floor(c*px*100)/100):String(c);return '<button data-sq="'+x+'" class="pay-q'+(sv===x?" on":"")+'">'+q[0]+'</button>'}).join("")+'</div>':'')+'</div>'+
 '<div class="pay-foot"><div class="sm mut">Sells to your bank or PayPal through Coinbase (you\'ll need a Coinbase account). Coinbase shows its fee and the payout before you confirm.</div>'+
-(SL.err?'<div class="msg err">'+esc(SL.err)+'</div>':'')+'<button class="b aigoap pay-go" data-sgo2'+(SL.busy?" disabled":"")+'>'+(SL.busy?"Opening Coinbase…":sn>0?"Cash out "+esc(sv)+" "+esc(SL.asset):"Continue to Coinbase")+'</button></div>'}
+(SL.err?'<div class="msg err">'+esc(SL.err)+'</div>':'')+'<button class="b aigoap pay-go" data-sgo2'+(SL.busy?" disabled":"")+'>'+(SL.busy?"Opening Coinbase…":cn>0?"Cash out "+(usdm?fmtUsd(sn)+" ("+esc(payNum(cn,dp))+" "+esc(SL.asset)+")":esc(payNum(cn,dp))+" "+esc(SL.asset)):"Continue to Coinbase")+'</button></div>'}
 else{var st=sale&&sale.state;
 if(st==="sent"||st==="sending"||st==="done"){h+='<p class="ailead">'+(st==="done"?"Done. Coinbase has paid out"+(sale.payout?" "+esc(sale.payout):"")+".":"Sent to Coinbase. It pays out once the transfer confirms, usually within a few minutes.")+'</p>'+(sale.tx&&EXP[sale.chain]?'<div class="sm"><a target="_blank" rel="noopener" href="'+EXP[sale.chain]+esc(sale.tx)+'">View the transfer</a></div>':'')+'<button class="b g aigoap" data-snew>Start another cash out</button>'}
 else if(st==="failed"||st==="expired"){h+='<p class="ailead">This cash out '+(st==="failed"?"failed on Coinbase.":"expired.")+' Nothing was sent from this wallet unless Activity shows it.</p><button class="b aigoap" data-snew>Start again</button>'}
@@ -933,10 +937,11 @@ else{h+='<p class="ailead">Finish on Coinbase: sign in, choose where the money g
 SL.dir=0;var fid=document.activeElement&&document.activeElement.id;SL.o.querySelector(".aibody").innerHTML=h;payTint(SL.o,SL.chain);if(fid==="slamt"||fid==="slpw"){var i=document.getElementById(fid);i.focus();i.setSelectionRange(i.value.length,i.value.length)}}
 function slClick(e){var t=e.target.closest("button");if(!t)return;if(t.classList.contains("aix"))return closeSell();
 if(t.hasAttribute("data-sc")){SL.dir=t.classList.contains("pay-np")?-1:1;SL.chain=t.getAttribute("data-sc");if(BUYA[SL.chain].indexOf(SL.asset)<0)SL.asset="USDC";SL.amt="";slRender()}
-else if(t.hasAttribute("data-sa")){SL.asset=t.getAttribute("data-sa");SL.amt="";slRender()}
-else if(t.hasAttribute("data-sq")){SL.amt=t.getAttribute("data-sq");SL.err=null;slRender()}
+else if(t.hasAttribute("data-sa")){SL.asset=t.getAttribute("data-sa");SL.amt="";SL.uv="";slRender()}
+else if(t.hasAttribute("data-sq")){if(SL.unit==="usd"&&SL.asset!=="USDC")SL.uv=t.getAttribute("data-sq");else SL.amt=t.getAttribute("data-sq");SL.err=null;slRender()}
+else if(t.hasAttribute("data-sunit")){SL.unit=t.getAttribute("data-sunit");SL.err=null;slRender()}
 else if(t.hasAttribute("data-snew")){clearTimeout(SL.t);SL.ref=null;SL.sale=null;SL.tx=null;SL.err=null;SL.pw="";slRender()}
-else if(t.hasAttribute("data-sgo2")){var amt=SL.amt.trim();if(!(Number(amt)>0)){SL.err="Enter how much to cash out.";slRender();return}var win=window.open("about:blank","_blank");SL.busy=true;SL.err=null;slRender();
+else if(t.hasAttribute("data-sgo2")){var amt=SL.amt.trim();if(SL.unit==="usd"&&SL.asset!=="USDC"){var spx=payPx(SL.asset),sdp=6;amt=spx&&Number(SL.uv)>0?String(Math.floor(Number(SL.uv)/spx*Math.pow(10,sdp))/Math.pow(10,sdp)):""}if(!(Number(amt)>0)){SL.err="Enter how much to cash out.";slRender();return}var win=window.open("about:blank","_blank");SL.busy=true;SL.err=null;slRender();
 api("/sell",{chain:SL.chain,asset:SL.asset,amount:amt}).then(function(r){SL.busy=false;SL.ref=r.ref;SL.sale={ref:r.ref,state:"open",chain:SL.chain,asset:SL.asset};if(win){win.opener=null;win.location.href=r.url}else window.open(r.url,"_blank","noopener");slRender();slPoll()}).catch(function(e){if(win)win.close();SL.busy=false;SL.err=e.message;slRender()})}
 else if(t.hasAttribute("data-ssend")){if(!SL.pw){SL.err="Enter your password.";slRender();return}SL.busy=true;SL.err=null;slRender();
 api("/sell/send",{password:SL.pw,ref:SL.ref}).then(function(){SL.busy=false;SL.pw="";slPoll();refresh();loadBal()}).catch(function(e){SL.busy=false;SL.err=e.message;slRender()})}}
@@ -981,27 +986,36 @@ o.addEventListener("touchcancel",function(){if(y0===null)return;y0=null;if(live)
 o.addEventListener("wheel",function(e){if(!e.target.closest(".pay-net")||ctl.locked())return;e.preventDefault();var now=Date.now();if(now-wt<420||Math.abs(e.deltaY)<6)return;wt=now;go(e.deltaY>0?1:-1)},{passive:false});
 o.addEventListener("keydown",function(e){if(!e.target.closest(".pay-net"))return;if(e.key==="ArrowDown"||e.key==="ArrowRight"){e.preventDefault();go(1)}else if(e.key==="ArrowUp"||e.key==="ArrowLeft"){e.preventDefault();go(-1)}else if(e.key==="Enter"||e.key===" "){e.preventDefault();go(1)}});
 o.addEventListener("click",function(e){if(e.target.closest(".pay-net")&&!ctl.locked())go(e.target.closest(".np")?-1:1)})}
-function buyStep(d){var l=rampChains(),n=l.length;if(n<2)return;BUY.chain=l[(l.indexOf(BUY.chain)+d+n)%n];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.dir=0;BUY.err=null;buyRender()}
-function slStep(d){if(SL.ref)return;var l=rampChains(),n=l.length;if(n<2)return;SL.chain=l[(l.indexOf(SL.chain)+d+n)%n];if(BUYA[SL.chain].indexOf(SL.asset)<0)SL.asset="USDC";SL.amt="";SL.dir=0;SL.err=null;slRender()}
+function buyStep(d){var l=rampChains(),n=l.length;if(n<2)return;BUY.chain=l[(l.indexOf(BUY.chain)+d+n)%n];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.cv="";BUY.dir=0;BUY.err=null;buyRender()}
+function slStep(d){if(SL.ref)return;var l=rampChains(),n=l.length;if(n<2)return;SL.chain=l[(l.indexOf(SL.chain)+d+n)%n];if(BUYA[SL.chain].indexOf(SL.asset)<0)SL.asset="USDC";SL.amt="";SL.uv="";SL.dir=0;SL.err=null;slRender()}
+// 0.9.13: Buy and Cash out take dollars or the coin itself; the other one shows underneath at today's price.
+var PAYQ={SOL:["0.25","0.5","1","2"],ETH:["0.01","0.025","0.05","0.1"]};
+function payPx(a){a=String(a||"").toUpperCase();if(a==="USDC"||a==="USDT")return 1;var p=S.prices&&S.prices.prices&&S.prices.prices[a];return p&&p.usd>0?p.usd:null}
+function payNum(n,dp){return Number(n).toLocaleString(undefined,{maximumFractionDigits:dp})}
+function payUnitBtn(unit,asset){return '<button class="pay-unit" data-unit="'+(unit==="coin"?"usd":"coin")+'">Enter in '+(unit==="coin"?"dollars":esc(asset))+'</button>'}
 function payFit(v){v=String(v||"");var n=Math.max(1,v.length),d=(v.match(/[.,]/g)||[]).length;return 'style="width:'+Math.max(1,n-d*0.55).toFixed(2)+'ch'+(n>6?';font-size:'+Math.round(76*6/n)+'px':'')+'"'}
-function buyRender(){if(!BUY.o)return;var ch=rampChains(),addr=BUY.chain==="solana"?S.addresses.solana:S.addresses.evm,v=BUY.custom||BUY.amt||"",n=Number(v);
+function buyRender(){if(!BUY.o)return;var ch=rampChains(),addr=BUY.chain==="solana"?S.addresses.solana:S.addresses.evm,coin=BUY.unit==="coin",px=payPx(BUY.asset),
+v=coin?(BUY.cv||""):(BUY.custom||BUY.amt||""),n=Number(v),usd=coin?(px?n*px:null):n,dp=BUY.asset==="USDC"?2:6,qs=coin?(PAYQ[BUY.asset]||["25","50","100","250"]):["25","50","100","250"];
 var h='<h2>Buy</h2>'+payNet(ch,BUY.chain)+
 '<div class="bseg" role="group" aria-label="Coin">'+BUYA[BUY.chain].map(function(a){return '<button data-ba="'+a+'" class="bsb'+(BUY.asset===a?" on":"")+'" aria-pressed="'+(BUY.asset===a)+'">'+tokIcon(a)+esc(a)+'</button>'}).join("")+'</div>'+
-'<div class="pay-mid"><label class="pay-amt" for="bcust"><span class="pay-cur">$</span><input id="bcust" class="pay-in" inputmode="decimal" autocomplete="off" placeholder="0" aria-label="Dollars to spend" value="'+esc(v)+'" '+payFit(v||"0")+' oninput="BUY.custom=BUY.amt=this.value.replace(/[^0-9.]/g,\'\');buyRender()"></label>'+
-'<div class="pay-sub">of '+esc(BUY.asset)+' on '+esc(CHAIN_NAMES[BUY.chain]||BUY.chain)+'</div>'+
-'<div class="pay-quick">'+["25","50","100","250"].map(function(q){return '<button data-bm="'+q+'" class="pay-q'+(v===q?" on":"")+'">$'+q+'</button>'}).join("")+'</div></div>'+
+'<div class="pay-mid"><label class="pay-amt" for="bcust">'+(coin?'':'<span class="pay-cur">$</span>')+'<input id="bcust" class="pay-in" inputmode="decimal" autocomplete="off" placeholder="0" aria-label="'+(coin?esc(BUY.asset)+' to buy':'Dollars to spend')+'" value="'+esc(v)+'" '+payFit(v||"0")+' oninput="var x=this.value.replace(/[^0-9.]/g,\'\');if(BUY.unit===\'coin\')BUY.cv=x;else BUY.custom=BUY.amt=x;buyRender()">'+(coin?'<span class="pay-tk">'+esc(BUY.asset)+'</span>':'')+'</label>'+
+'<div class="pay-sub">'+(coin?(n>0&&usd!==null?'about '+fmtUsd(usd)+' at today\'s price, plus Coinbase\'s fee':'of '+esc(BUY.asset)+' on '+esc(CHAIN_NAMES[BUY.chain]||BUY.chain)):(n>0&&px&&BUY.asset!=="USDC"?'about '+payNum(n/px,Math.min(dp,4))+' '+esc(BUY.asset)+' on '+esc(CHAIN_NAMES[BUY.chain]||BUY.chain)+', before Coinbase\'s fee':'of '+esc(BUY.asset)+' on '+esc(CHAIN_NAMES[BUY.chain]||BUY.chain)))+'</div>'+payUnitBtn(BUY.unit,BUY.asset)+
+'<div class="pay-quick">'+qs.map(function(q){return '<button data-bm="'+q+'" class="pay-q'+(v===q?" on":"")+'">'+(coin?q+' '+esc(BUY.asset):'$'+q)+'</button>'}).join("")+'</div></div>'+
 '<div class="pay-foot"><div class="sm mut">Sends to <span class="addr">'+esc(short(addr))+'</span>. Pay by card or bank with Coinbase; it may ask you to sign in or confirm your ID. Tollkit never sees your payment details.</div>'+
 (BUY.err?'<div class="msg err">'+esc(BUY.err)+'</div>':'')+(BUY.done?'<div class="msg okk">'+esc(BUY.done)+'</div>':'')+
-'<button class="b aigoap pay-go" data-bgo'+(BUY.busy?" disabled":"")+'>'+(BUY.busy?"Opening Coinbase…":n>0?"Buy "+fmtUsd(n)+" of "+esc(BUY.asset):"Continue to Coinbase")+'</button></div>';
+'<button class="b aigoap pay-go" data-bgo'+(BUY.busy?" disabled":"")+'>'+(BUY.busy?"Opening Coinbase…":n>0?(coin?"Buy "+esc(payNum(n,8))+" "+esc(BUY.asset):"Buy "+fmtUsd(n)+" of "+esc(BUY.asset)):"Continue to Coinbase")+'</button></div>';
 BUY.dir=0;var f=document.activeElement&&document.activeElement.id==="bcust";BUY.o.querySelector(".aibody").innerHTML=h;payTint(BUY.o,BUY.chain);if(f){var i=document.getElementById("bcust");i.focus();i.setSelectionRange(i.value.length,i.value.length)}}
 function buyClick(e){var t=e.target.closest("button");if(!t)return;if(t.classList.contains("aix"))return closeBuy();
 if(t.hasAttribute("data-bc")){BUY.dir=t.classList.contains("pay-np")?-1:1;BUY.chain=t.getAttribute("data-bc");if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";buyRender()}
-else if(t.hasAttribute("data-ba")){BUY.asset=t.getAttribute("data-ba");buyRender()}
-else if(t.hasAttribute("data-bm")){BUY.amt=t.getAttribute("data-bm");BUY.custom="";BUY.err=null;buyRender()}
+else if(t.hasAttribute("data-ba")){BUY.asset=t.getAttribute("data-ba");BUY.cv="";buyRender()}
+else if(t.hasAttribute("data-unit")){BUY.unit=t.getAttribute("data-unit");BUY.err=null;buyRender()}
+else if(t.hasAttribute("data-bm")){if(BUY.unit==="coin")BUY.cv=t.getAttribute("data-bm");else{BUY.amt=t.getAttribute("data-bm");BUY.custom=""}BUY.err=null;buyRender()}
 else if(t.hasAttribute("data-bgo"))buyGo()}
-function buyGo(){var amt=BUY.custom?Number(BUY.custom):Number(BUY.amt);if(!(amt>=5&&amt<=10000)){BUY.err="Pick an amount from $5 to $10,000.";buyRender();return}
+function buyGo(){var coin=BUY.unit==="coin",amt=coin?Number(BUY.cv):(BUY.custom?Number(BUY.custom):Number(BUY.amt)),px=payPx(BUY.asset),usd=coin?(px?amt*px:null):amt;
+if(coin&&!(amt>0)){BUY.err="Enter how much "+BUY.asset+" to buy.";buyRender();return}
+if(usd!==null&&!(usd>=5&&usd<=10000)){BUY.err=coin?"That's about "+fmtUsd(usd)+". Coinbase takes $5 to $10,000.":"Pick an amount from $5 to $10,000.";buyRender();return}
 var win=window.open("about:blank","_blank");BUY.busy=true;BUY.err=null;BUY.done=null;buyRender();
-api("/buy",{chain:BUY.chain,asset:BUY.asset,amount_usd:amt,sandbox:BUY.test}).then(function(r){BUY.busy=false;if(win){win.opener=null;win.location.href=r.url}else window.open(r.url,"_blank","noopener");BUY.done="Coinbase opened in a new tab"+(r.sandbox?" (test mode)":"")+". Your balance updates here once the crypto arrives.";buyRender()}).catch(function(e){if(win)win.close();BUY.busy=false;BUY.err=e.message;buyRender()})}
+api("/buy",coin?{chain:BUY.chain,asset:BUY.asset,amount_crypto:BUY.cv,sandbox:BUY.test}:{chain:BUY.chain,asset:BUY.asset,amount_usd:amt,sandbox:BUY.test}).then(function(r){BUY.busy=false;if(win){win.opener=null;win.location.href=r.url}else window.open(r.url,"_blank","noopener");BUY.done="Coinbase opened in a new tab"+(r.sandbox?" (test mode)":"")+". Your balance updates here once the crypto arrives.";buyRender()}).catch(function(e){if(win)win.close();BUY.busy=false;BUY.err=e.message;buyRender()})}
 var CK="candles";try{CK=localStorage.getItem("tk_ck")||"candles"}catch(e){}
 function setCK(k){CK=k==="line"?"line":"candles";try{localStorage.setItem("tk_ck",CK)}catch(e){}}
 var CHT={o:null,coin:"",sym:"",chain:"",name:"",range:"1D",data:null,loading:false,err:null,table:false,hover:null};
