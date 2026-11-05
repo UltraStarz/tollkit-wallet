@@ -454,40 +454,48 @@ nav button .emo{display:block;margin:0 auto 3px;width:20px;height:20px;font-size
 .bseg .bsb:not(:has(.ic)){padding:7px 14px}
 .bsb.on{border-color:var(--acc);background:var(--surf2)}
 .bcust{width:90px;background:var(--surf);color:var(--tx);border-radius:12px;padding:7px 10px;font:inherit;font-size:13.5px}
-/* 0.9.13: Buy and Cash out: a big amount in the middle, quick picks under it, the button at the bottom, on see-through black. */
-.aio.payo{background:rgba(0,0,0,.42);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
-@property --net{syntax:"<color>";inherits:true;initial-value:#4a8eff}
-@property --net2{syntax:"<color>";inherits:true;initial-value:#4a8eff}
-.aidlg.pay{--net:#4a8eff;--net2:#4a8eff;transition:--net .55s ease,--net2 .55s ease;background:radial-gradient(140% 62% at 50% -6%,color-mix(in srgb,var(--net) 52%,transparent),transparent 72%),radial-gradient(100% 45% at 50% 106%,color-mix(in srgb,var(--net2) 30%,transparent),transparent 70%),rgba(0,0,0,.55);border:1px solid color-mix(in srgb,var(--net) 22%,rgba(255,255,255,.06));box-shadow:none;display:flex;flex-direction:column;min-height:min(660px,86vh)}
-.pay-net{display:flex;flex-direction:column;align-items:center;gap:3px;margin:0 0 12px;touch-action:none;-webkit-user-select:none;user-select:none}
-.pay-nr{display:flex;align-items:center;gap:6px;background:none;border:0;color:var(--mut);opacity:.55;font:inherit;font-size:13px;font-weight:600;padding:3px 12px;cursor:pointer;transform:scale(.92)}
-.pay-nr .ic,.pay-nr .ic svg,.pay-nr .ic img{width:18px;height:18px;min-width:18px}
-.pay-nc{display:flex;align-items:center;gap:10px;padding:9px 20px 9px 10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid color-mix(in srgb,var(--net) 70%,transparent);font-size:18px;font-weight:800;box-shadow:0 8px 30px -10px var(--net)}
-.pay-nc .ic,.pay-nc .ic svg,.pay-nc .ic img{width:30px;height:30px;min-width:30px}
-.pay-net.up .pay-nc{animation:paynu .34s var(--ease)}.pay-net.dn .pay-nc{animation:paynd .34s var(--ease)}
-@keyframes paynu{from{transform:translateY(22px) scale(.9);opacity:0}to{transform:none;opacity:1}}
-@keyframes paynd{from{transform:translateY(-22px) scale(.9);opacity:0}to{transform:none;opacity:1}}
-.pay-dots{display:flex;align-items:center;gap:5px;margin-top:6px}.pay-dots i{width:5px;height:5px;border-radius:3px;background:var(--mut);opacity:.35;transition:all .3s ease}.pay-dots i.on{opacity:1;background:var(--net);width:16px}
-.pay-hint{font-size:11px;color:var(--mut);margin-top:4px}
-@media (prefers-reduced-motion:reduce){.aidlg.pay{transition:none}.pay-net.up .pay-nc,.pay-net.dn .pay-nc{animation:none}}
-.aidlg.pay .aibody{display:flex;flex-direction:column;flex:1}
-.pay h2{margin:0 0 14px;font-size:20px}
+.aio.payo{background:rgba(0,0,0,.35);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);padding:0;align-items:stretch}
+/* 0.9.13: Buy and Cash out fill the screen in the network's own color. Swiping up or down drags the next network's color in
+   from the edge, under your finger, and the network's symbol, name and dots move with it. */
+.aidlg.pay{--netbg:#0052FF;--tx:#fff;--mut:rgba(255,255,255,.74);background:transparent;color:#fff;border:0;border-radius:0;box-shadow:none;display:flex;flex-direction:column;max-width:none;width:100%;max-height:none;height:100%;min-height:100%;overflow:hidden;padding:0;touch-action:none}
+.aidlg.pay .aibody{position:relative;z-index:1;display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;width:100%;max-width:520px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 18px) 20px calc(env(safe-area-inset-bottom) + 20px);box-sizing:border-box}
+.aidlg.pay .aix{z-index:2;top:calc(env(safe-area-inset-top) + 12px);right:14px;color:#fff}
+.pay-base{position:absolute;inset:0;z-index:0;background:var(--netbg);pointer-events:none}
+.pay-sweep{position:absolute;left:0;top:0;width:100%;height:100%;z-index:0;visibility:hidden;pointer-events:none;will-change:transform;color:#fff}
+.pay-sweep .pay-net{position:absolute;left:0;right:0;margin:0}
+.pay h2{margin:0 0 14px;font-size:20px;color:#fff}
+.pay-net{display:flex;flex-direction:column;align-items:center;margin:0 0 14px;-webkit-user-select:none;user-select:none;cursor:pointer;outline:none}
+.pay-nw{height:120px;overflow:hidden;width:100%;-webkit-mask-image:linear-gradient(transparent,#000 22%,#000 78%,transparent);mask-image:linear-gradient(transparent,#000 22%,#000 78%,transparent)}
+.pay-nc{display:flex;flex-direction:column;align-items:center;will-change:transform}
+.pay-row{display:flex;align-items:center;justify-content:center;gap:8px;height:40px;font-size:14px;font-weight:600;opacity:.45;transform-origin:center;background:none;border:0}
+.pay-row .ic,.pay-row .ic svg,.pay-row .ic img{width:18px;height:18px;min-width:18px}
+.pay-row.cu{font-size:22px;font-weight:800;opacity:1;letter-spacing:-.01em}
+.pay-row.cu .ic,.pay-row.cu .ic svg,.pay-row.cu .ic img{width:30px;height:30px;min-width:30px}
+.pay-row.gap{visibility:hidden}
+.pay-dots{display:flex;align-items:center;gap:5px;margin-top:4px}.pay-dots i{width:6px;height:6px;border-radius:3px;background:#fff;opacity:.35}.pay-dots i.on{opacity:1;width:18px;background:var(--net,#fff)}
+.pay-hint{font-size:11px;color:var(--mut);margin-top:6px}
+.pay-net:focus-visible .pay-row.cu span{text-decoration:underline;text-underline-offset:6px}
 .pay .bseg{justify-content:center;margin:0 0 8px}
-.pay .bsb{background:rgba(255,255,255,.06)}
+.pay .bsb{background:rgba(255,255,255,.14);border-color:transparent;color:#fff}
+.pay .bsb.on{background:rgba(255,255,255,.32);border-color:transparent}
 .pay-mid{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:18px 0 10px;min-height:220px}
 .pay-amt{position:relative;display:flex;align-items:baseline;justify-content:center;max-width:100%;font-weight:800;letter-spacing:-.02em;line-height:1}
 .pay-cur{position:absolute;right:100%;top:50%;transform:translateY(-46%);font-size:44px;color:var(--mut);margin-right:4px}
-.pay-in{font:inherit;font-size:76px;font-weight:800;letter-spacing:-.02em;color:var(--tx);background:none;border:0;outline:none;padding:0;text-align:center;font-variant-numeric:tabular-nums;min-width:1ch;max-width:100%;caret-color:var(--acc)}
-.pay-in::placeholder{color:var(--mut);opacity:.45}
+.pay-in{font:inherit;font-size:76px;font-weight:800;letter-spacing:-.02em;color:#fff;background:none;border:0;outline:none;padding:0;text-align:center;font-variant-numeric:tabular-nums;min-width:1ch;max-width:100%;caret-color:#fff}
+.pay-in::placeholder{color:#fff;opacity:.4}
 .aidlg.pay .pay-in,.aidlg.pay .pay-in:focus{outline:none;border:0;box-shadow:none;background:none}
 .pay-sub{margin-top:10px;font-size:14px;color:var(--mut);text-align:center}
 .pay-quick{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:22px}
-.pay-q{min-width:68px;padding:10px 14px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--tx);font:inherit;font-size:15px;font-weight:700;cursor:pointer}
-.pay-q.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 18%,transparent)}
+.pay-q{min-width:68px;padding:10px 14px;border-radius:999px;border:0;background:rgba(255,255,255,.14);color:#fff;font:inherit;font-size:15px;font-weight:700;cursor:pointer}
+.pay-q.on{background:#fff;color:#0b0d12}
 .pay-foot{margin-top:auto}
-.pay-foot .sm{text-align:center;line-height:1.45}
-.pay-go{min-height:56px;font-size:17px;border-radius:16px;margin-top:14px}
+.pay-foot .sm{text-align:center;line-height:1.45;color:var(--mut)}
+.pay-foot .addr{color:#fff}
+.aidlg.pay button.b.pay-go{min-height:56px;font-size:17px;border-radius:16px;margin-top:14px;background:#fff!important;color:#0b0d12!important;box-shadow:none!important}
+.aidlg.pay button.b.pay-go:hover{background:#f2f4f8!important}
+.aidlg.pay button.b.pay-go::after{display:none}
 @media (max-width:420px){.pay-in{font-size:64px}.pay-cur{font-size:38px}}
+@media (prefers-reduced-motion:reduce){.pay-net.up .pay-nc,.pay-net.dn .pay-nc{animation:none}}
 
 header{position:relative;z-index:5}header .pill{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .hb{flex:none;position:relative;width:34px;height:34px;border-radius:10px;border:0;background:var(--surf);color:var(--tx);display:grid;place-items:center;cursor:pointer;padding:0}
@@ -817,7 +825,7 @@ h+='<div class="rcv-qr">'+(qr||'<div class="empty sm">'+(RCV.err?esc(RCV.err):"M
 h+='<div class="rcv-addr" id="rcvaddr">'+esc(a)+'</div><div style="display:flex;justify-content:center;margin-top:10px">'+cpBtn(a).replace('class="cp"','class="cp" style="margin:0"')+'</div>';
 h+='<div class="stnote">'+(sol?"This address is for Solana only. In the app you\'re sending from, pick Solana as the network.":"This one address works on "+EVMNAMES+". In the app you\'re sending from, pick "+nm+" as the network.")+'</div>';
 return h}
-function openBuy(){var ch=rampChains();BUY.chain=BUY.chain&&ch.indexOf(BUY.chain)>=0?BUY.chain:ch[0];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.err=null;BUY.done=null;BUY.busy=false;if(!BUY.o){BUY.o=document.createElement("div");BUY.o.className="aio payo";BUY.o.innerHTML='<div class="aidlg pay" role="dialog" aria-modal="true" aria-label="Buy crypto"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';BUY.o.addEventListener("mousedown",function(e){if(e.target===BUY.o)closeBuy()});BUY.o.addEventListener("click",buyClick);paySwipe(BUY.o,buyStep);document.body.appendChild(BUY.o)}buyRender()}
+function openBuy(){var ch=rampChains();BUY.chain=BUY.chain&&ch.indexOf(BUY.chain)>=0?BUY.chain:ch[0];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.err=null;BUY.done=null;BUY.busy=false;if(!BUY.o){BUY.o=document.createElement("div");BUY.o.className="aio payo";BUY.o.innerHTML='<div class="aidlg pay" role="dialog" aria-modal="true" aria-label="Buy crypto"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';BUY.o.addEventListener("mousedown",function(e){if(e.target===BUY.o)closeBuy()});BUY.o.addEventListener("click",buyClick);paySwipe(BUY.o,{list:rampChains,cur:function(){return BUY.chain},step:buyStep,locked:function(){return BUY.busy}});document.body.appendChild(BUY.o)}buyRender()}
 // 0.9.1: Swap. One coin for another on one network, through the same checks as any trade (limits, token check, fee).
 var SWCORE={base:["ETH","USDC"],ethereum:["ETH","USDC","USDT"],arbitrum:["ETH","USDC"],polygon:["POL","USDC"],solana:["SOL","USDC","USDT"]};
 var SW={o:null,chain:null,from:null,to:null,amt:"",q:null,qerr:null,qbusy:false,err:null,ok:null,busy:false,t:null,seq:0};
@@ -899,7 +907,7 @@ api("/move",{password:MV.pw,asset:MV.asset,from:MV.from,to:MV.to,amount:MV.amt,r
 setInterval(function(){if(MV.o&&MV.moves&&MV.moves.some(function(m){return m.state==="sent"}))mvMoves()},10000);
 var SL={o:null,chain:null,asset:"USDC",amt:"",err:null,busy:false,ref:null,sale:null,tx:null,pw:"",ok:null,t:null};
 function openSell(){var ch=rampChains();if(ch.indexOf(SL.chain)<0)SL.chain=ch[0];if(BUYA[SL.chain].indexOf(SL.asset)<0)SL.asset="USDC";SL.err=null;SL.ok=null;SL.busy=false;
-if(!SL.o){SL.o=document.createElement("div");SL.o.className="aio payo";SL.o.innerHTML='<div class="aidlg pay" role="dialog" aria-modal="true" aria-label="Cash out"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';SL.o.addEventListener("mousedown",function(e){if(e.target===SL.o)closeSell()});SL.o.addEventListener("click",slClick);paySwipe(SL.o,slStep);document.body.appendChild(SL.o)}
+if(!SL.o){SL.o=document.createElement("div");SL.o.className="aio payo";SL.o.innerHTML='<div class="aidlg pay" role="dialog" aria-modal="true" aria-label="Cash out"><button class="aix" aria-label="Close">×</button><div class="aibody"></div></div>';SL.o.addEventListener("mousedown",function(e){if(e.target===SL.o)closeSell()});SL.o.addEventListener("click",slClick);paySwipe(SL.o,{list:rampChains,cur:function(){return SL.chain},step:slStep,locked:function(){return !!SL.ref||SL.busy}});document.body.appendChild(SL.o)}
 if(!SL.ref)api("/sells").then(function(r){var open=(r.sales||[]).filter(function(x){return (x.state==="open"||x.state==="sent")&&Date.now()-Date.parse(x.ts)<3600000})[0];if(open&&!SL.ref){SL.ref=open.ref;SL.sale=open;slPoll()}else slRender()}).catch(function(){});slRender();if(SL.ref)slPoll()}
 function closeSell(){if(SL.o){SL.o.remove();SL.o=null}clearTimeout(SL.t)}
 document.addEventListener("keydown",function(e){if(SL.o&&e.key==="Escape")closeSell()});
@@ -907,7 +915,7 @@ function slPoll(){clearTimeout(SL.t);if(!SL.ref||!SL.o)return;api("/sell/status?
 function slLeft(t){var at=Date.parse(t.updated_at||t.created_at||"");if(!isFinite(at))return "";var m=Math.max(0,Math.round((at+1800000-Date.now())/60000));return m+" min left to send"}
 function slRender(){if(!SL.o)return;var ch=rampChains(),h='<h2>Cash out</h2>';var sale=SL.sale,t=SL.tx;
 if(!SL.ref){var have=mvHave(SL.chain,SL.asset),sv=SL.amt||"",sn=Number(sv),dp=SL.asset==="USDC"||SL.asset==="USDT"?2:6;
-h='<h2>Cash out</h2>'+payNet(ch,SL.chain,"data-sc",SL.dir||0)+
+h='<h2>Cash out</h2>'+payNet(ch,SL.chain)+
 '<div class="bseg" role="group" aria-label="Coin">'+BUYA[SL.chain].map(function(a){return '<button data-sa="'+a+'" class="bsb'+(SL.asset===a?" on":"")+'" aria-pressed="'+(SL.asset===a)+'">'+tokIcon(a)+esc(a)+'</button>'}).join("")+'</div>'+
 '<div class="pay-mid"><label class="pay-amt" for="slamt"><input id="slamt" class="pay-in" inputmode="decimal" autocomplete="off" placeholder="0" aria-label="'+esc(SL.asset)+' to sell" value="'+esc(sv)+'" '+payFit(sv||"0")+' oninput="SL.amt=this.value.replace(/[^0-9.]/g,\'\');slRender()"></label>'+
 '<div class="pay-sub">'+esc(SL.asset)+' on '+esc(CHAIN_NAMES[SL.chain]||SL.chain)+(have!==null?' · '+have.toLocaleString(undefined,{maximumFractionDigits:dp})+' available':'')+'</div>'+
@@ -934,22 +942,50 @@ else if(t.hasAttribute("data-ssend")){if(!SL.pw){SL.err="Enter your password.";s
 api("/sell/send",{password:SL.pw,ref:SL.ref}).then(function(){SL.busy=false;SL.pw="";slPoll();refresh();loadBal()}).catch(function(e){SL.busy=false;SL.err=e.message;slRender()})}}
 function closeBuy(){if(BUY.o){BUY.o.remove();BUY.o=null}}
 document.addEventListener("keydown",function(e){if(BUY.o&&e.key==="Escape")closeBuy()});
-// 0.9.13: the network wheel on Buy and Cash out: swipe up or down (or scroll, or tap the one above or below); the sheet takes the network's color.
-var NETC={base:["#0052FF","#3c7bff"],solana:["#9945FF","#14F195"],ethereum:["#627EEA","#8fa3f2"],arbitrum:["#28A0F0","#1b4add"],polygon:["#8247E5","#a77bf3"],optimism:["#FF0420","#ff5a6b"]};
-function payNet(list,cur,attr,dir){var n=list.length,i=Math.max(0,list.indexOf(cur)),nm=function(c){return esc(CHAIN_NAMES[c]||c)},row=function(c,k){return '<button class="pay-nr '+k+'" '+attr+'="'+c+'" aria-label="Switch to '+nm(c)+'">'+chainIcon(c)+nm(c)+'</button>'};
-return '<div class="pay-net'+(dir>0?" up":dir<0?" dn":"")+'" role="group" aria-label="Network">'+(n>2?row(list[(i-1+n)%n],"pay-np"):'')+'<div class="pay-nc" aria-live="polite">'+chainIcon(cur)+'<span>'+nm(cur)+'</span></div>'+(n>1?row(list[(i+1)%n],"pay-nn"):'')+
+// 0.9.13: the network on Buy and Cash out: swipe up for the next one, down for the one before (or scroll, tap, arrow keys).
+// The next network's color follows your finger in from the edge; let go past a third of the way (or flick) and it fills.
+var NETC={base:"#0052FF",solana:"#14F195",ethereum:"#627EEA",arbitrum:"#28A0F0",polygon:"#8247E5",optimism:"#FF0420"};
+function netC(c){return NETC[c]||"#4a8eff"}
+// The sheet is see-through: a faint, dark version of the brand color (about an eighth of it over black) at 78%, over the blurred app.
+function netBg(c){var h=netC(c).slice(1),k=0.13,f=function(i){return Math.round(parseInt(h.substr(i,2),16)*k)};return "rgba("+f(0)+","+f(2)+","+f(4)+",.78)"}
+function payNet(list,cur){var n=list.length,i=Math.max(0,list.indexOf(cur)),nm=function(c){return esc(CHAIN_NAMES[c]||c)},row=function(c,k){return '<div class="pay-row '+k+'">'+chainIcon(c)+'<span>'+nm(c)+'</span></div>'};
+var prev=n>2?list[(i-1+n)%n]:null,next=n>1?list[(i+1)%n]:null;
+return '<div class="pay-net" tabindex="0" role="group" aria-label="Network: '+nm(cur)+(n>1?'. Swipe up or down to change.':'')+'"><div class="pay-nw"><div class="pay-nc">'+(prev?row(prev,"np"):'<div class="pay-row gap"></div>')+row(cur,"cu")+(next?row(next,"nn"):'<div class="pay-row gap"></div>')+'</div></div>'+
 (n>1?'<div class="pay-dots" aria-hidden="true">'+list.map(function(c){return '<i class="'+(c===cur?"on":"")+'"></i>'}).join("")+'</div><div class="pay-hint">Swipe up or down to change network</div>':'')+'</div>'}
-function payTint(o,chain){var d=o&&o.querySelector(".aidlg"),c=NETC[chain]||["#4a8eff","#4a8eff"];if(!d)return;d.style.setProperty("--net",c[0]);d.style.setProperty("--net2",c[1])}
-function paySwipe(o,step){var y0=null,x0=0,t0=0;
-o.addEventListener("touchstart",function(e){if(e.target.closest("input,.pay-foot,.pay-quick,.bseg"))return y0=null;y0=e.touches[0].clientY;x0=e.touches[0].clientX},{passive:true});
-o.addEventListener("touchend",function(e){if(y0===null)return;var t=e.changedTouches[0],dy=t.clientY-y0,dx=t.clientX-x0;y0=null;if(Math.abs(dy)>36&&Math.abs(dy)>Math.abs(dx)*1.3){step(dy<0?1:-1);try{navigator.vibrate&&navigator.vibrate(8)}catch(_){}}},{passive:true});
-o.addEventListener("wheel",function(e){if(!e.target.closest(".pay-net"))return;e.preventDefault();var now=Date.now();if(now-t0<380||Math.abs(e.deltaY)<6)return;t0=now;step(e.deltaY>0?1:-1)},{passive:false});
-o.addEventListener("keydown",function(e){if(!e.target.closest(".pay-net"))return;if(e.key==="ArrowDown"){e.preventDefault();step(1)}else if(e.key==="ArrowUp"){e.preventDefault();step(-1)}})}
-function buyStep(d){var l=rampChains(),n=l.length;if(n<2)return;BUY.chain=l[(l.indexOf(BUY.chain)+d+n)%n];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.dir=d;BUY.err=null;buyRender()}
-function slStep(d){if(SL.ref)return;var l=rampChains(),n=l.length;if(n<2)return;SL.chain=l[(l.indexOf(SL.chain)+d+n)%n];if(BUYA[SL.chain].indexOf(SL.asset)<0)SL.asset="USDC";SL.amt="";SL.dir=d;SL.err=null;slRender()}
+function payTint(o,chain){var d=o&&o.querySelector(".aidlg");if(d){if(!d.querySelector(".pay-base")){var b=document.createElement("div");b.className="pay-base";d.insertBefore(b,d.firstChild)}d.style.setProperty("--netbg",netBg(chain));d.style.setProperty("--net",netC(chain))}}
+function paySwipe(o,ctl){var y0=null,x0=0,t0=0,dy=0,live=false,busy=false,wt=0,EASE="cubic-bezier(.2,.8,.2,1)",MS=300;
+var dlg=function(){return o.querySelector(".aidlg")},H=function(){return dlg().clientHeight||600},lab=function(){return o.querySelector(".aibody .pay-nc")};
+var nb=function(d){var l=ctl.list(),n=l.length,i=l.indexOf(ctl.cur());return n>1?l[(i+d+n)%n]:null};
+var base=function(){var D=dlg(),B=D.querySelector(".pay-base");if(!B){B=document.createElement("div");B.className="pay-base";D.insertBefore(B,D.firstChild)}return B};
+var layer=function(){var D=dlg(),L=D.querySelector(".pay-sweep");if(!L){base();L=document.createElement("div");L.className="pay-sweep";D.insertBefore(L,D.querySelector(".aibody"))}return L};
+var clip=function(d,edge,h){return d>0?"inset(0 0 "+Math.max(0,h-edge)+"px 0)":"inset("+Math.max(0,edge)+"px 0 0 0)"};
+var reduce=function(){try{return matchMedia("(prefers-reduced-motion: reduce)").matches}catch(_){return false}};
+function fill(L,c){L._c=c}
+var ROW=40;function wheel(shift,anim){var N=lab();if(!N)return;var p=Math.min(1,Math.abs(shift)/ROW),cu=N.querySelector(".cu"),inc=N.querySelector(shift<0?".nn":".np"),tr=anim?"transform "+MS+"ms "+EASE+",opacity "+MS+"ms ease":"none";
+N.style.transition=tr;N.style.transform="translateY("+shift+"px)";[].forEach.call(N.children,function(r){r.style.transition=tr;r.style.transform="";r.style.opacity=""});
+if(cu){cu.style.transform="scale("+(1-0.36*p)+")";cu.style.opacity=String(1-0.55*p)}if(inc){inc.style.transform="scale("+(1+0.57*p)+")";inc.style.opacity=String(0.45+0.55*p)}}
+function show(dist){var d=dist<0?1:-1,c=nb(d);if(!c)return;var L=layer(),h=H(),N=lab();L.style.transition="none";L.style.visibility="visible";L.style.background=netBg(c);fill(L,c);L.style.transform="translateY("+((d>0?h:-h)+dist)+"px)";var B=base();B.style.transition="none";B.style.clipPath=B.style.webkitClipPath=clip(d,d>0?h+dist:dist,h);
+wheel(Math.max(-ROW,Math.min(ROW,dist*0.35)),false)}
+function go(d,dragged){if(busy||!nb(d||1))return;if(reduce()&&d){ctl.step(d);return}busy=true;var L=layer(),h=H(),N=lab(),tr="transform "+MS+"ms "+EASE;
+var B=base(),ctr="clip-path "+MS+"ms "+EASE+",-webkit-clip-path "+MS+"ms "+EASE;
+if(!d){L.style.transition=tr;L.style.transform="translateY("+(dy<0?h:-h)+"px)";B.style.transition=ctr;B.style.clipPath=B.style.webkitClipPath=clip(dy<0?1:-1,dy<0?h:0,h);wheel(0,true);setTimeout(function(){B.style.transition="none";B.style.clipPath=B.style.webkitClipPath="";L.style.visibility="hidden";L._c=null;busy=false},MS);return}
+L.style.background=netBg(nb(d));fill(L,nb(d));if(!dragged){L.style.transition="none";L.style.visibility="visible";L.style.transform="translateY("+(d>0?h:-h)+"px)";void L.offsetHeight}
+if(!dragged){B.style.transition="none";B.style.clipPath=B.style.webkitClipPath=clip(d,d>0?h:0,h);void B.offsetHeight}
+L.style.transition=tr;L.style.transform="translateY(0)";B.style.transition=ctr;B.style.clipPath=B.style.webkitClipPath=clip(d,d>0?0:h,h);wheel(d>0?-ROW:ROW,true);
+setTimeout(function(){ctl.step(d);B.style.transition="none";B.style.clipPath=B.style.webkitClipPath="";L.style.transition="none";L.style.visibility="hidden";L._c=null;busy=false;try{navigator.vibrate&&navigator.vibrate(8)}catch(_){}},MS)}
+o._payGo=go;
+o.addEventListener("touchstart",function(e){if(busy||ctl.locked()||e.touches.length>1||e.target.closest("input,button,a,.pay-foot,.pay-quick,.bseg")){y0=null;return}y0=e.touches[0].clientY;x0=e.touches[0].clientX;t0=Date.now();dy=0;live=false},{passive:true});
+o.addEventListener("touchmove",function(e){if(y0===null)return;var t=e.touches[0],mv=t.clientY-y0,mx=t.clientX-x0;if(!live){if(Math.abs(mv)<8&&Math.abs(mx)<8)return;if(Math.abs(mx)>Math.abs(mv)){y0=null;return}live=true}e.preventDefault();dy=mv;show(dy)},{passive:false});
+o.addEventListener("touchend",function(){if(y0===null)return;y0=null;if(!live)return;live=false;var v=Math.abs(dy)/Math.max(1,Date.now()-t0);go(Math.abs(dy)>H()*0.25||(Math.abs(dy)>40&&v>0.5)?(dy<0?1:-1):0,true)},{passive:true});
+o.addEventListener("touchcancel",function(){if(y0===null)return;y0=null;if(live){live=false;go(0,true)}},{passive:true});
+o.addEventListener("wheel",function(e){if(!e.target.closest(".pay-net")||ctl.locked())return;e.preventDefault();var now=Date.now();if(now-wt<420||Math.abs(e.deltaY)<6)return;wt=now;go(e.deltaY>0?1:-1)},{passive:false});
+o.addEventListener("keydown",function(e){if(!e.target.closest(".pay-net"))return;if(e.key==="ArrowDown"||e.key==="ArrowRight"){e.preventDefault();go(1)}else if(e.key==="ArrowUp"||e.key==="ArrowLeft"){e.preventDefault();go(-1)}else if(e.key==="Enter"||e.key===" "){e.preventDefault();go(1)}});
+o.addEventListener("click",function(e){if(e.target.closest(".pay-net")&&!ctl.locked())go(e.target.closest(".np")?-1:1)})}
+function buyStep(d){var l=rampChains(),n=l.length;if(n<2)return;BUY.chain=l[(l.indexOf(BUY.chain)+d+n)%n];if(BUYA[BUY.chain].indexOf(BUY.asset)<0)BUY.asset="USDC";BUY.dir=0;BUY.err=null;buyRender()}
+function slStep(d){if(SL.ref)return;var l=rampChains(),n=l.length;if(n<2)return;SL.chain=l[(l.indexOf(SL.chain)+d+n)%n];if(BUYA[SL.chain].indexOf(SL.asset)<0)SL.asset="USDC";SL.amt="";SL.dir=0;SL.err=null;slRender()}
 function payFit(v){v=String(v||"");var n=Math.max(1,v.length),d=(v.match(/[.,]/g)||[]).length;return 'style="width:'+Math.max(1,n-d*0.55).toFixed(2)+'ch'+(n>6?';font-size:'+Math.round(76*6/n)+'px':'')+'"'}
 function buyRender(){if(!BUY.o)return;var ch=rampChains(),addr=BUY.chain==="solana"?S.addresses.solana:S.addresses.evm,v=BUY.custom||BUY.amt||"",n=Number(v);
-var h='<h2>Buy</h2>'+payNet(ch,BUY.chain,"data-bc",BUY.dir||0)+
+var h='<h2>Buy</h2>'+payNet(ch,BUY.chain)+
 '<div class="bseg" role="group" aria-label="Coin">'+BUYA[BUY.chain].map(function(a){return '<button data-ba="'+a+'" class="bsb'+(BUY.asset===a?" on":"")+'" aria-pressed="'+(BUY.asset===a)+'">'+tokIcon(a)+esc(a)+'</button>'}).join("")+'</div>'+
 '<div class="pay-mid"><label class="pay-amt" for="bcust"><span class="pay-cur">$</span><input id="bcust" class="pay-in" inputmode="decimal" autocomplete="off" placeholder="0" aria-label="Dollars to spend" value="'+esc(v)+'" '+payFit(v||"0")+' oninput="BUY.custom=BUY.amt=this.value.replace(/[^0-9.]/g,\'\');buyRender()"></label>'+
 '<div class="pay-sub">of '+esc(BUY.asset)+' on '+esc(CHAIN_NAMES[BUY.chain]||BUY.chain)+'</div>'+
