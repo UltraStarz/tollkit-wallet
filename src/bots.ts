@@ -136,6 +136,8 @@ export interface BotSummary {
   spent_usd: number; received_usd: number; units_held: number; value_now_usd: number | null;
   /** received + value now − spent, when the bot bought something. */
   result_usd: number | null; result_pct: number | null;
+  /** 0.9.13: money made on what it already sold (a grid's finished levels; otherwise sales over their average cost). */
+  earned_usd: number;
   round_trips: number; last_trade: string | null; last_price: number | null; started: string;
   /** 0.9.9: a Range bot's position. */
   range?: { in_range: boolean | null; lower: number | null; upper: number | null; value_usd: number | null; fees_usd: number; fees_pending_usd: number; recenters: number; out_since: string | null;
@@ -143,7 +145,10 @@ export interface BotSummary {
 }
 
 /** Status board: rules grouped into bots (a rule made by hand is a bot of one). */
-export function summarize(rules: Rule[]): BotSummary[] {
+/** 0.9.13: today's price for a coin, when the rules themselves haven't seen one (e.g. they run on TOLLkit's server). */
+export type LivePrice = (chain: Chain, token: string) => number | null | undefined;
+
+export function summarize(rules: Rule[], livePrice?: LivePrice): BotSummary[] {
   const groups = new Map<string, Rule[]>();
   for (const r of rules) { if (r.status === "proposed") continue; const k = r.bot ?? `rule-${r.id}`; groups.set(k, [...(groups.get(k) ?? []), r]); }
   const out: BotSummary[] = [];
@@ -152,7 +157,13 @@ export function summarize(rules: Rule[]): BotSummary[] {
     const ok = s((r) => r.state.ok_count ?? r.state.fills.filter((x) => x.ok).length), bad = s((r) => r.state.fail_count ?? r.state.fills.filter((x) => !x.ok).length);
     const spent = s((r) => r.state.spent_usd), got = s((r) => r.state.received_usd);
     const held = Math.max(0, s((r) => r.state.bought_units) - s((r) => r.state.sold_units));
-    const price = rs.map((r) => r.state.last_price).find((x) => typeof x === "number") ?? null;
+    const seen = rs.map((r) => r.state.last_price).find((x) => typeof x === "number") ?? null;
+    const lp = livePrice?.(rs[0]!.chain, rs[0]!.token);
+    const price = typeof lp === "number" && lp > 0 ? lp : seen;
+    // 0.9.13: earned so far. Grids count each finished level; other bots count sales over the average buy price.
+    const isGrid = rs.some((r) => r.kind === "grid" || r.kind === "infinity_grid" || r.state.grid_profit_usd !== undefined);
+    const bought = s((r) => r.state.bought_units), sold = s((r) => r.state.sold_units);
+    const earned = isGrid ? s((r) => r.state.grid_profit_usd) : sold > 0 && bought > 0 ? got - Math.min(sold, bought) * (spent / bought) : 0;
     const value = price !== null ? held * price : null;
     const st = rs.map((r) => r.status);
     const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => ["grid", "dca", "smart_dca", "rebalance", "infinity_grid", "twap", "range"].includes(r.kind)) ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
@@ -170,7 +181,7 @@ export function summarize(rules: Rule[]): BotSummary[] {
       rules: rs.map((r) => ({ id: r.id, description: describeRule(r), status: r.status, ...(r.state.last_error ? { last_error: r.state.last_error } : {}) })),
       trades_ok: ok, trades_failed: bad, success_rate: ok + bad ? Math.round((ok / (ok + bad)) * 1000) / 10 : null,
       spent_usd: Math.round(spent * 100) / 100, received_usd: Math.round(got * 100) / 100, units_held: held, value_now_usd: value === null ? null : Math.round(value * 100) / 100,
-      result_usd: result === null ? null : Math.round(result * 100) / 100, result_pct: result === null ? null : Math.round((result / (rg?.deposited_usd || spent)) * 1000) / 10,
+      result_usd: result === null ? null : Math.round(result * 100) / 100, earned_usd: Math.round(earned * 100) / 100, result_pct: result === null ? null : Math.round((result / (rg?.deposited_usd || spent)) * 1000) / 10,
       ...(rg ? { range: { in_range: rg.in_range ?? null, lower: rg.lower ?? null, upper: rg.upper ?? null, value_usd: rangeValue, fees_usd: rg.fees_usd ?? 0, fees_pending_usd: rg.fees_pending_usd ?? 0,
         recenters: rg.recenters ?? 0, out_since: rg.out_since ?? null, opened_at: rg.opened_at ?? null, open: !!rg.mint, deposited_usd: rg.deposited_usd ?? null, sol: rg.sol ?? null, usdc: rg.usdc ?? null,
         log: (rg.log ?? []).slice(-6).reverse(), ...(() => { const x = rs.find((r) => r.kind === "range")!; return { recenter_min: x.recenter_min ?? 30, by_autopilot: x.suggested_by === "autopilot", error: x.state.last_error ?? null, retry_at: x.state.failures ? x.state.next_run ?? null : null }; })() } } : {}),

@@ -14,6 +14,7 @@ const err = (f: () => unknown) => { try { f(); return ""; } catch (e) { return (
 // ─── settings ───────────────────────────────────────────────────────────────
 const s0 = parseSettings({});
 check(s0.rethink_minutes === 30 && s0.budget_usd === 100 && s0.per_trade_usd === 20 && !s0.sources.x && !("reddit" in s0.sources), "defaults: 30 minutes, $100, $20 a trade, no X, no Reddit", s0);
+check(s0.away_pause === false && parseSettings({ away_pause: true }).away_pause === true, "0.9.13: no pausing while away unless the owner turns it on");
 check(/15, 30 or 60/.test(err(() => parseSettings({ rethink_minutes: 10 }))), "rethink is 15, 30 or 60");
 check(/can't be more than the budget/.test(err(() => parseSettings({ budget_usd: 50, per_trade_usd: 60 }))), "per-trade cap inside the budget");
 check(/network must be turned on/.test(err(() => parseSettings({ chains: ["base"], tokens: [{ chain: "solana", token: "SOL" }] }))), "a token's network must be on");

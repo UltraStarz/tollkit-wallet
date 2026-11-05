@@ -84,13 +84,16 @@ export interface SuperbotSettings {
   /** 0.9.10: Think 24/7: while no device is checking, Autopilot keeps deciding on TOLLkit's server (Solana, paid from the
    *  prepaid AI balance). Active mode: a strategy that passed its paper trial goes live by itself, inside the budget. */
   think_24_7: boolean; active_mode: boolean;
+  /** 0.9.13: when no device is checking, may TOLLkit's server pause Autopilot's rules after a big move (8% drop, or half
+   *  of a 4% rise given back)? Off by default: rules keep running; the daily and weekly loss stops still apply. */
+  away_pause: boolean;
 }
 export const DEFAULT_SETTINGS: SuperbotSettings = {
   chains: ["base", "solana"], tokens: [{ chain: "base", token: "ETH" }, { chain: "solana", token: "SOL" }],
   sources: { news: true, farcaster: true, x: false },
   budget_usd: 100, per_trade_usd: 20, max_token_pct: 25, daily_loss_pct: 5, weekly_loss_pct: 15, slippage_bps: 100,
   paper_days: 7, paper_trades: 20, rethink_minutes: 30, max_strategies: 4, always_on: false, daily_share_pct: 50, pace: "steady",
-  think_24_7: false, active_mode: false,
+  think_24_7: false, active_mode: false, away_pause: false,
 };
 
 export interface Strategy {
@@ -139,6 +142,8 @@ export interface SuperBotDeps {
   dir?: string; proxy: string; fetch?: typeof fetch; now?: () => number;
   /** Today's price for a token the bot may trade (the dashboard's feed, then a quote). */
   price: (chain: Chain, token: string) => Promise<number | undefined>;
+  /** 0.9.13: the dashboard's latest price, right now (for results of strategies that run on TOLLkit's server). */
+  livePrice?: (chain: Chain, token: string) => number | undefined;
   /** True for tokens the owner's wallet already knows (core tokens, or added on Home after the scam check). */
   knownToken: (chain: Chain, token: string) => Promise<boolean>;
   onRulesChanged?: () => void;
@@ -191,6 +196,7 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   // 0.9.12: one Run 24/7 switch: turning it on or off turns deciding while away (Think 24/7) on or off with it.
   else if (b.always_on !== undefined) s.think_24_7 = !!b.always_on;
   if (b.active_mode !== undefined) s.active_mode = !!b.active_mode;
+  if (b.away_pause !== undefined) s.away_pause = !!b.away_pause;
   if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max" && b.pace !== "adaptive") throw new Error("Pace is steady, active, max or adaptive."); s.pace = b.pace; }
   if (s.per_trade_usd > s.budget_usd) throw new Error("The per-trade cap can't be more than the budget.");
   if (s.tokens.some((t) => !s.chains.includes(t.chain))) throw new Error("Every token's network must be turned on.");
@@ -355,13 +361,13 @@ export class SuperBot {
   private summaryOf(st: Strategy, all: Rule[]): BotSummary | null {
     if (!st.bot) return null;
     const ids = new Set([st.bot, ...(st.prev_bots ?? [])]);
-    return summarize(all.filter((r) => r.bot && ids.has(r.bot) && !r.archived).map((r) => (r.bot === st.bot ? r : { ...r, bot: st.bot! })))[0] ?? null;
+    return summarize(all.filter((r) => r.bot && ids.has(r.bot) && !r.archived).map((r) => (r.bot === st.bot ? r : { ...r, bot: st.bot! })), this.d.livePrice)[0] ?? null;
   }
 
   /** What the dashboard shows. */
   view() {
     const s = this.load(), all = this.w.rules().list();
-    const strategies = s.strategies.filter((st) => !st.removed).map((st) => { const sum = this.summaryOf(st, all); return { ...st, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, trades: sum?.trades_ok ?? 0, failed: sum?.trades_failed ?? 0, status: sum?.status ?? (st.stage === "retired" ? "stopped" : "waiting"), last_trade: sum?.last_trade ?? null, days_in_stage: r2((this.now() - Date.parse(st.stage_since)) / 86_400_000) }; });
+    const strategies = s.strategies.filter((st) => !st.removed).map((st) => { const sum = this.summaryOf(st, all); return { ...st, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, earned_usd: sum?.earned_usd ?? 0, trades: sum?.trades_ok ?? 0, failed: sum?.trades_failed ?? 0, status: sum?.status ?? (st.stage === "retired" ? "stopped" : "waiting"), last_trade: sum?.last_trade ?? null, days_in_stage: r2((this.now() - Date.parse(st.stage_since)) / 86_400_000) }; });
     const live = strategies.filter((x) => x.stage === "live");
     return {
       enabled: s.enabled, since: s.since, settings: s.settings, halted: s.halted, stats: s.stats,
@@ -369,7 +375,9 @@ export class SuperBot {
       market: this.adaptive(s) ? s.settings.tokens.map((x) => { const m = this.market[`${x.chain}:${x.token.toLowerCase()}`]; return { chain: x.chain, token: x.token, state: m?.state ?? null, d1: m?.d1 ?? null, d3: m?.d3 ?? null, at: m?.at ?? null }; }) : null,
       strategies, decisions: s.decisions.slice().sort((x, y) => x.ts.localeCompare(y.ts)).slice(-40).reverse(), reports: s.reports.slice(-7).reverse(),
       totals: { live: live.length, paper: strategies.filter((x) => x.stage === "paper").length, retired: strategies.filter((x) => x.stage === "retired").length,
-        live_result_usd: r2(live.reduce((a, x) => a + (x.result_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
+        live_result_usd: r2(live.reduce((a, x) => a + (x.result_usd ?? 0), 0)),
+        // 0.9.13: what live strategies have made on what they sold, the Autopilot screen's headline.
+        live_earned_usd: r2(live.reduce((a, x) => a + (x.earned_usd ?? 0), 0)), paper_earned_usd: r2(strategies.filter((x) => x.stage === "paper").reduce((a, x) => a + (x.earned_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
       next_cycle: s.enabled && s.stats.last_cycle ? nowIso(Date.parse(s.stats.last_cycle) + s.settings.rethink_minutes * 60_000) : null,
       // 0.33.0: X through Grok, from Tollkit's shared snapshot: the mood per coin and the trending memes (paper only).
       x: this.xView(),
@@ -1117,10 +1125,11 @@ export class SuperBot {
 
   // ─── log and reports ─────────────────────────────────────────────────────
   /** 0.9.9: for Run 24/7. While Autopilot is on and running here, the server only acts "while you're away". */
-  awayInfo(): { last_decision: string; drop_pct: number; rise_pct: number } | null {
+  awayInfo(): { last_decision: string; drop_pct: number; rise_pct: number; pause: boolean } | null {
     const s = this.load();
     if (!s.enabled || s.halted || !this.d.active?.()) return null;
-    return { last_decision: nowIso(this.now()), drop_pct: 8, rise_pct: 4 };
+    // 0.9.13: pause: false tells the server not to pause rules for price moves while away (the default).
+    return { last_decision: nowIso(this.now()), drop_pct: 8, rise_pct: 4, pause: s.settings.away_pause === true };
   }
 
   /** 0.9.9: what Tollkit's server paused while no device was open, into Autopilot's decisions. */

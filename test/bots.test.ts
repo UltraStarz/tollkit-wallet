@@ -108,6 +108,7 @@ check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group &
   check(m.state.swaps.length === 4, "below the range it doesn't buy");
   m.state.refuse = { code: "over_daily_limit", reason: "Over today's limit." }; m.state.price.ETH = 2400; await ap.tick();
   const b = summarize(s.list())[0]!;
+  check(b.earned_usd === Math.round((st.grid_profit_usd ?? 0) * 100) / 100 && b.earned_usd > 0, "0.9.13: a grid's earned money is its finished levels' profit", b);
   check(b.trades_failed === 1 && b.trades_ok === 4 && b.round_trips === 2 && b.status === "running", "failures are counted and the bot keeps running", b);
   m.state.refuse = null;
 }
@@ -140,6 +141,19 @@ check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group &
   check(gap >= 0.7 && gap < 1.2, `default levels are ${gap.toFixed(2)}% apart: 0.2%+ kept after 0.25% on each side`);
   check(/too close/.test(err(() => buildBot("grid", "SOL", "solana", { range_pct: 3, levels: 12 }, 200))), "a grid under 0.7% apart is refused (it would lose after fees)");
   check(err(() => buildBot("grid", "SOL", "solana", { range_pct: 5, levels: 12 }, 200)) === "", "a grid about 0.85% apart is allowed");
+}
+
+// --- 0.9.13: results for bots that run on TOLLkit's server (no price seen here), and earned money
+{
+  const s = new RuleStore(tmp());
+  await s.addBot(buildBot("dip", "SOL", "solana", { amount_usd: 10, drop_pct: 2, profit_pct: 2 }, 100).rules, "owner", false);
+  await s.mutate((rs) => { for (const r of rs) r.state.last_price = undefined;
+    rs[0]!.state.spent_usd = 20; rs[0]!.state.bought_units = 0.2; rs[0]!.state.ok_count = 2;
+    rs[1]!.state.received_usd = 10.4; rs[1]!.state.sold_units = 0.1; rs[1]!.state.ok_count = 1; });
+  const noPrice = summarize(s.list())[0]!;
+  check(noPrice.result_usd === null && noPrice.earned_usd === 0.4, "without a price: no result yet, but earned is known ($10.40 for coins that cost $10.00)", noPrice);
+  const priced = summarize(s.list(), (c, t) => (c === "solana" && t === "SOL" ? 105 : undefined))[0]!;
+  check(priced.result_usd === 0.9 && priced.value_now_usd === 10.5 && priced.last_price === 105, "with today's price: 10.40 + 0.1 SOL at $105 − 20 = +$0.90", priced);
 }
 
 console.log(`\nbots: ${pass} passed, ${fail} failed`);

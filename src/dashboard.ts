@@ -102,7 +102,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // The Bots screen: each bot's summary plus its next move and latest trades (0.8.5).
   const botsView = () => {
     const live = w.rules().list().filter((r) => !r.archived), today = new Date().toISOString().slice(0, 10);
-    return summarize(live).map((b) => {
+    return summarize(live, livePrice).map((b) => {
       const rs = live.filter((r) => (r.bot ?? `rule-${r.id}`) === b.id), trades = botTrades(rs, 20);
       return { ...b, next: botNext(rs, b.last_price), trades, trades_today: trades.filter((t) => t.ok && t.ts.startsWith(today)).length, chartable: !!coinbaseProduct(b.token) || tape.series(b.chain, b.token).length > 1 };
     });
@@ -149,7 +149,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   };
   const botsBeat = async () => {
     try { const r = await wf(`${proxy}/bots/leaderboard`, { signal: AbortSignal.timeout(15_000) }); if (r.ok) board = await r.json(); } catch { /* optional */ }
-    await maybeShare(w.dir, summarize(w.rules().list()), symbolOf, { fetch: wf, proxy }).catch(() => false);
+    await maybeShare(w.dir, summarize(w.rules().list(), livePrice), symbolOf, { fetch: wf, proxy }).catch(() => false);
   };
   const botsTimer = o.watch === false ? null : setInterval(() => void botsBeat(), 3600_000);
   if (botsTimer) void botsBeat();
@@ -158,6 +158,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   holdings?.start();
   const coins = Object.fromEntries(Object.entries(KNOWN).map(([c, t]) => [c, Object.fromEntries(Object.values(t).map((x) => [x.symbol, coinId(c as Chain, x.address)]))]));
   const priceOf = (t: string) => prices?.snapshot().prices[t.toUpperCase()]?.usd;
+  // 0.9.13: a bot's price for its results: the feed (SOL, ETH), else the last one this wallet saw for the coin.
+  const livePrice = (chain: Chain, token: string) => priceOf(token) ?? tape.series(chain, token).at(-1)?.[1];
   // 0.9.0: the Autopilot (src/superbot.ts). Same token rule as the Bots screen: core tokens, or ones added on Home.
   const knownToken = async (chain: Chain, token: string) => {
     if (!w.policy.chains.includes(chain)) return false;
@@ -169,6 +171,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const tg = loadTelegram(w.dir);
   superbot = new SuperBot(w, {
     dir: w.dir, proxy, fetch: wf,
+    livePrice,
     price: async (chain, token) => priceOf(token) ?? (autopilot ? await autopilot.price(chain, await resolveToken(chain, token)).catch(() => undefined) : undefined),
     knownToken,
     onRulesChanged: () => { void autopilot?.tick(); void paperPilot?.tick(); void alwaysSync(); },

@@ -46,7 +46,7 @@ export interface TokenAcct { exists: boolean; amount: bigint; delegate: string |
 /** 0.9.9: what the token list says about a coin (src/tokenlist.ts solanaInfo). */
 export type CoinInfo = { symbol?: string; decimals?: number; trust?: string; jupiter?: { suspicious?: boolean } } | null;
 /** 0.9.9: Autopilot's last check-in here, and how far a coin may move while no device is checking. */
-export interface AwayInfo { last_decision: string; drop_pct: number; rise_pct: number }
+export interface AwayInfo { last_decision: string; drop_pct: number; rise_pct: number; /** 0.9.13: false: never pause for price moves while away. */ pause?: boolean }
 export interface AwayEntry { ts: string; rule_id: string; text: string }
 /** The chain, as this client needs it (tests stand in for it). */
 export interface SolChain { lamports(owner: string): Promise<bigint>; token(account: string): Promise<TokenAcct>; send(ixs: TransactionInstruction[]): Promise<string> }
