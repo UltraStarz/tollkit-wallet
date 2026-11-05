@@ -20,7 +20,7 @@ check(/can't be more than the budget/.test(err(() => parseSettings({ budget_usd:
 check(/network must be turned on/.test(err(() => parseSettings({ chains: ["base"], tokens: [{ chain: "solana", token: "SOL" }] }))), "a token's network must be on");
 check(parseSettings({ budget_usd: 5, per_trade_usd: 5 }).budget_usd === 10 && parseSettings({ daily_loss_pct: 99 }).daily_loss_pct === 50, "numbers are clamped");
 // 0.9.6: pace
-check(s0.pace === "steady" && parseSettings({ pace: "active" }).pace === "active", "pace is steady by default, active when chosen");
+check(s0.pace === "adaptive" && parseSettings({ pace: "active" }).pace === "active", "0.9.13: pace is Adaptive by default, active when chosen");
 // 0.9.12: one Run 24/7 switch
 check(parseSettings({ always_on: true }).think_24_7 === true && parseSettings({ always_on: false }, { ...DEFAULT_SETTINGS, think_24_7: true }).think_24_7 === false && parseSettings({ always_on: true, think_24_7: false }).think_24_7 === false,
   "Run 24/7 turns deciding while away on and off with it, unless that's set on its own");
@@ -66,7 +66,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const W = world();
   const v0 = W.bot.view();
   check(!v0.enabled && v0.strategies.length === 0, "off to start");
-  await W.bot.enable({ budget_usd: 100, per_trade_usd: 20 });
+  await W.bot.enable({ budget_usd: 100, per_trade_usd: 20, pace: "steady" });
   await new Promise((r) => setTimeout(r, 30));
   const v = W.bot.view();
   check(v.enabled && v.stats.cycles === 1 && v.stats.steps === 1 && W.calls.length === 1, "turning on runs a cycle and one strategist step", v.stats);
@@ -339,7 +339,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   W.advance(60 * 60_000); await W.bot.tick();
   check(W.bot.view().strategies[0]!.params.drop_pct === 3, "at most once a day");
   const s2 = world();
-  await s2.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
+  await s2.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], pace: "steady" });
   await new Promise((r) => setTimeout(r, 30));
   s2.setSignals(() => ({ id: "same", at: "x", changes: { moved: false } }));
   const k0 = s2.calls.length; s2.advance(31 * 60_000); await s2.bot.tick();
@@ -617,6 +617,20 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const { describeSetup, SetupKinds } = await import("../src/setups.js");
   check(SetupKinds.autopilot_settings.safeParse({ pace: "max", per_trade_usd: 10 }).success && !SetupKinds.autopilot_settings.safeParse({ pace: "wild" }).success, "0.9.13: an Autopilot settings card only takes real settings");
   check(/Autopilot's most per trade to \$10/.test(describeSetup("autopilot_settings", { per_trade_usd: 10 })) && /Autopilot run a Buy the dip bot on ETH/.test(describeSetup("autopilot_strategy", { template: "dip", chain: "base", token: "ETH" })), "0.9.13: the Approvals cards say what will change");
+}
+
+// ─── 0.9.13: Turn off stops every rule Autopilot made, even ones no strategy here tracks ──────────────────────────
+{
+  const W = world();
+  const { buildBot } = await import("../src/bots.js");
+  const other = buildBot("trail", "ETH", "base", { sell_percent: 50, trail_pct: 5 }, 2500);
+  await W.store.addBot(other.rules.map((r) => ({ ...r, bot_name: "Autopilot · Trailing stop · ETH" })), "agent", true, "superbot");
+  const mine = await W.store.add({ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 5, trigger_price: 1000 }, "owner", true);
+  await W.bot.enable({});
+  await new Promise((r) => setTimeout(r, 30));
+  await W.bot.disable();
+  const rs = W.store.list();
+  check(rs.filter((r) => r.by === "superbot").every((r) => r.status === "cancelled") && rs.find((r) => r.id === mine.id)!.status === "active", "0.9.13: Turn off cancels every Autopilot rule, tracked or not, and leaves the owner's own rules alone", rs.map((r) => [r.by, r.status]));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

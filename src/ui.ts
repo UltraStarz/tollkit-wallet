@@ -701,7 +701,9 @@ button.b:hover,.aib:hover{background:var(--tkblue-hi)!important}
 .sbtok input{background:none;border:0;border-radius:0}
 .sbtc,.sbtc.on{background:none;border:0;justify-content:center}.sbtc.on{color:var(--tkblue)}.sbtc.add{color:var(--tkblue)}.ap-pill.off{background:none}
 /* 0.9.9: room between buttons that sit side by side */
-.btns{display:flex;flex-wrap:wrap;gap:10px}.ap .btns{display:grid;gap:10px}.wact{gap:8px}.ap-acts{gap:10px}.tplbtns{gap:10px}
+.btns{display:flex;flex-wrap:wrap;gap:10px}.ap .btns{display:grid;gap:10px}.wact{gap:8px}.ap-acts{gap:10px}
+/* 0.9.13: an arrow or icon inside a button sits on the text's middle, not its baseline. */
+.ap-acts .b,.botcta{display:inline-flex;align-items:center;justify-content:center;gap:6px}.ap-acts .b svg,.botcta svg{flex:none;display:block}.tplbtns{gap:10px}
 </style></head><body>
 <div class="aur" aria-hidden="true"><div class="drift"><i></i><i></i><i></i></div></div>
 <div class="wrap"><div class="card">
@@ -1063,9 +1065,9 @@ var od={on:oa?1:0,t:oa?oa+" on"+(op?" · "+op+" new":""):op?op+" new":"None"};
 var R247=run247(),srv=R247.n;
 // 0.9.6: each line gets its tab's icon in color when something is running (grey when not), the status in the same
 // color, and a chevron, so it reads as "tap to open".
-var row=function(k,lab,st,tab,tip){return '<button class="rbx-r on'+st.on+'" onclick="go(\''+tab+'\')"'+(tip?' title="'+esc(tip)+'"':'')+'><span class="rbx-i i-'+k+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+RBXI[k]+'</svg></span><span class="rbx-l">'+lab+'</span><b class="rbx-v">'+esc(st.t)+'</b><span class="rbx-c" aria-hidden="true">›</span></button>'};
+var row=function(k,lab,st,tab,tip){return '<button class="rbx-r on'+st.on+'" onclick="'+(tab==="run247"?"goRun247()":"go(\'"+tab+"\')")+'"'+(tip?' title="'+esc(tip)+'"':'')+'><span class="rbx-i i-'+k+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+RBXI[k]+'</svg></span><span class="rbx-l">'+lab+'</span><b class="rbx-v">'+esc(st.t)+'</b><span class="rbx-c" aria-hidden="true">›</span></button>'};
 var onN=[ap,bt,od].filter(function(x){return x.on===1}).length+(srv?1:0),warnN=ap.on===2?1:0;
-return '<div class="rbx" aria-label="Overview"><div class="rbx-h">Overview<span class="'+(pend?"acc":warnN?"warn":onN?"ok":"mut")+'">'+(pend?pend+" waiting for you":warnN?"Autopilot needs a look":"")+'</span></div>'+row("ap","Autopilot",ap,"pilot",tl||tp?"Live strategies trade real money; testing ones trade on paper":sb&&sb.enabled?"On and reading the market. It starts a strategy (on paper first) when the signals give it a reason":"")+row("bt","Bots",bt,"autopilot")+row("od","Orders",od,"orders","Scheduled buys, stops, take-profits and alerts")+row("sv","Run 24/7",{on:R247.on?(R247.warn?2:1):0,t:R247.short},R247.n||!R247.ap?"orders":"pilot",R247.text)+(pend?row("wt","Waiting",{on:3,t:pend+" to approve"},"activity"):"")+'</div>'}
+return '<div class="rbx" aria-label="Overview"><div class="rbx-h">Overview<span class="'+(pend?"acc":warnN?"warn":onN?"ok":"mut")+'">'+(pend?pend+" waiting for you":warnN?"Autopilot needs a look":"")+'</span></div>'+row("ap","Autopilot",ap,"pilot",tl||tp?"Live strategies trade real money; testing ones trade on paper":sb&&sb.enabled?"On and reading the market. It starts a strategy (on paper first) when the signals give it a reason":"")+row("bt","Bots",bt,"autopilot")+row("od","Orders",od,"orders","Scheduled buys, stops, take-profits and alerts")+row("sv","Run 24/7",{on:R247.on?(R247.warn?2:1):0,t:R247.short},"run247",R247.text)+(pend?row("wt","Waiting",{on:3,t:pend+" to approve"},"activity"):"")+'</div>'}
 // 0.9.8: Home's "today" is what your coins did since midnight (or since the wallet opened today), not the 24-hour price
 // change of what you hold now: a coin bought at 11 PM used to count the whole day's move (2026-10-28: +$15.66 shown,
 // about +$1.50 real). Each coin's reference price is its price at midnight, or when this device first saw it today,
@@ -1798,6 +1800,8 @@ api("/setups/apply",body).then(function(r){if(r.pending){SU[id]={pw:st.pw,quote:
 var APIDS="",APLOCK=0;
 function ans(id,d){if(Date.now()<APLOCK)return;api("/approve",{id:id,decision:d}).then(function(){flash=[1,d==="approved"?"Approved.":"Denied."];refresh()}).catch(function(e){flash=[0,e.message];render()})}
 var LIMD={},LIMPW="",SETP=null;
+// 0.9.13: Home's Run 24/7 line opens its own page in Settings (what runs, the caps, Revoke).
+function goRun247(){go("settings");setOpen("run247")}
 function setOpen(k){SETP=k;render();var m=document.getElementById("main");if(m)m.scrollTop=0}
 function setBack(){return '<div class="pgbar"><button onclick="SETP=null;render()">‹ Settings</button></div>'}
 function lv(id,def){return Object.prototype.hasOwnProperty.call(LIMD,id)?LIMD[id]:def}
@@ -1874,15 +1878,10 @@ function num(k,lab,ico,unit,step,min,max,pre){var val=v(k);return '<div class="s
 function sec(t,sub,body){return '<div class="sbs"><div class="sbs-h"><b>'+t+'</b>'+(sub?'<small>'+sub+'</small>':'')+'</div>'+body+'</div>'}
 function chip(id,on,lab,extra){return '<label class="sbchip'+(on?" on":"")+'"'+(extra||"")+'><input type="checkbox" id="'+id+'"'+(on?" checked":"")+' onchange="sbIn(this);this.parentNode.classList.toggle(\'on\',this.checked)">'+lab+'</label>'}
 var chains=f.chains||st.chains,src=f.sources||st.sources,toks=f.tokens!=null?f.tokens:st.tokens.map(function(t){return t.chain+":"+t.token}).join(", ");
-var slip=f.slippage_bps!=null?f.slippage_bps:st.slippage_bps,rm=Number(v("rethink_minutes")),pace=v("pace")||"steady",ao=f.always_on!=null?f.always_on:st.always_on;
+var slip=f.slippage_bps!=null?f.slippage_bps:st.slippage_bps,rm=Number(v("rethink_minutes")),pace=v("pace")||"adaptive",ao=f.always_on!=null?f.always_on:st.always_on;
 var cur=sbPresetOf(f,st);
-// 0.9.13: two sliders instead of buttons. Trade size, small to large, scales the per-trade amount, the most in one
-// token, the loss stops and the paper trial together (Careful, Balanced and Bold are points on it). Pace: Steady,
-// Active or Max, or let the market set it (Adaptive).
-var sz=sbSizeOf(f,st),pv=pace==="adaptive"?-1:(["steady","active","max"].indexOf(pace));
-var presets='<div class="sbsl"><div class="sbsl-h"><span>Trade size</span><b id="sb_szl">'+esc(sbSizeLabel(sz,f,st))+'</b></div>'+sbTrack("sb_size",4,sz,'aria-label="Trade size" aria-valuetext="'+esc(SB_SIZES[sz][0])+'" oninput="sbSizeIn(this)" onchange="render()"')+sbTicks(SB_SIZES.map(function(z){return z[0]}),sz)+'</div>'+
-'<div class="sbsl'+(pv<0?" off":"")+'"><div class="sbsl-h"><span>Pace</span><b id="sb_pcl">'+esc(sbPaceLabel(pace))+'</b></div>'+sbTrack("sb_pace",2,pv,'aria-label="Pace, steady to max"'+(pv<0?" disabled":"")+' oninput="sbPaceIn(this)" onchange="sbPace([\'steady\',\'active\',\'max\'][this.value])"')+sbTicks(["Steady","Active","Max"],pv)+''+
-'<label class="sbsl-ad"><input type="checkbox" id="sb_adapt"'+(pv<0?" checked":"")+' onchange="sbPace(this.checked?\'adaptive\':\'active\')"><span><b>Adaptive</b> · the market sets the pace: Max when quiet, rides rises, no new buys in a fall</span></label></div>';
+// 0.9.13: Pace is four buttons, Adaptive first (the default); trade amounts are set in Money below.
+var presets='<div class="sbpl">Pace</div><div class="sbp sbp4" role="radiogroup" aria-label="Pace">'+[["adaptive","Adaptive","the market sets it: Max when quiet, rides rises, no new buys in a fall"],["steady","Steady","when the market gives a reason"],["active","Active","more, smaller trades"],["max","Max","as often as your limits allow"]].map(function(x){return '<button type="button" role="radio" aria-checked="'+(pace===x[0])+'" class="'+(pace===x[0]?"on":"")+'" onclick="sbPace(\''+x[0]+'\')"><b>'+x[1]+'</b><small>'+x[2]+'</small></button>'}).join("")+'</div>';
 return '<div class="sbf">'+presets+
 // 0.9.8: what it reads (news, Farcaster, X) right under Style and Pace.
 (function(){var N=f.notes!=null?f.notes:(st.notes||[]);return N.length?sec("Your notes for Autopilot","from the AI chat",N.map(function(n,i){return '<div class="sbnt"><span>'+esc(n)+'</span><button type="button" class="xcirc sm" aria-label="Remove this note" onclick="sbNoteRm('+i+')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button></div>'}).join("")+'<div class="sbnote">Autopilot reads these before every decision. They never change a limit. Ask the AI chat to add one.</div>'):""})()+
@@ -1961,7 +1960,7 @@ function sbIn(el){SB.f=SB.f||{};if(el.closest&&el.closest(".sbn-in"))el.style.wi
 var SB_PACE={active:{rethink_minutes:15,paper_days:2,paper_trades:8},max:{rethink_minutes:15,paper_days:1,paper_trades:5},adaptive:{rethink_minutes:15,paper_days:1,paper_trades:5}};
 function sbPace(p){SB.f=SB.f||{};SB.f.pace=p;var P=SB_PACE[p];if(P)for(var k in P)SB.f[k]=P[k];render()}
 function sbNoteRm(i){SB.f=SB.f||{};var N=(SB.f.notes!=null?SB.f.notes:((S.superbot||{}).settings||{}).notes||[]).slice();N.splice(i,1);SB.f.notes=N;render()}
-function sbPaceNow(){var f=SB.f||{},st=(S.superbot||{}).settings||{};return f.pace||st.pace||"steady"}
+function sbPaceNow(){var f=SB.f||{},st=(S.superbot||{}).settings||{};return f.pace||st.pace||"adaptive"}
 function sbSave(){var f=SB.f||{},st=S.superbot.settings,body={};if(f.pace)body.pace=f.pace;["budget_usd","per_trade_usd","max_token_pct","daily_share_pct","slippage_bps","daily_loss_pct","weekly_loss_pct","paper_days","paper_trades","max_strategies","rethink_minutes"].forEach(function(k){if(f[k]!=null)body[k]=Number(f[k])});
 if(f.chains)body.chains=f.chains;if(f.notes)body.notes=f.notes;if(f.sources)body.sources=f.sources;if(f.always_on!=null)body.always_on=f.always_on;if(f.think_24_7!=null)body.think_24_7=f.think_24_7;if(f.active_mode!=null)body.active_mode=f.active_mode;
 if(Array.isArray(f.tokens))body.tokens=f.tokens.filter(function(x){return (f.chains||st.chains).indexOf(x.chain)>=0});
@@ -2044,11 +2043,12 @@ var bu=A.signed_until;if(bu&&(A.rules||[]).length){var days=(bu*1000-Date.now())
 return {on:true,ap:ap,n:n,warn:warn,short:short,text:t}}
 // 0.9.12: one card on return: what TOLLkit's server traded, paused and decided while no device was open, since the
 // owner last tapped OK. Pauses from the away checks lift by themselves once a device is back; Think 24/7's stay paused.
-function awaySeen(){try{return localStorage.getItem("tk_away_seen")||""}catch(e){return ""}}
+var AWAYSEEN="";
+function awaySeen(){var l="";try{l=localStorage.getItem("tk_away_seen")||""}catch(e){}var s=(S.ui_prefs||{}).away_seen||"";return [l,s,AWAYSEEN].sort().pop()||""}
 function awayCard(){var since=awaySeen(),b=S.superbot||{},D=(b.decisions||[]).filter(function(d){return (d.by==="server"||d.by==="away")&&d.ts>since}),R=(S.receipts||[]).filter(function(e){return e.kind==="trade"&&/24\/7/.test(e.by||"")&&e.ts>since});
 if(!D.length&&!R.length)return "";var ok=R.filter(function(e){return e.status==="done"}).length,paused=(S.rules||[]).filter(function(r){return rIsAP(r)&&r.status==="paused"}).length;
 return '<div class="ap-c awy"><b>While you were away</b>'+(R.length?'<div class="sm">TOLLkit’s server made '+ok+' trade'+(ok===1?"":"s")+'. They’re in Activity.</div>':'')+D.slice(0,6).map(function(d){return '<div class="awy-i"><span class="mut">'+when(d.ts)+'</span> · '+esc(d.assessment.replace(/^While you were away: /,""))+'</div>'}).join("")+(D.length>6?'<div class="sm mut">'+(D.length-6)+' more in Decisions</div>':'')+'<div class="btns" style="margin-top:8px">'+(paused?'<button class="b" onclick="awayResume()">Resume '+paused+' paused</button>':'')+'<button class="b g" onclick="awayDismiss()">OK</button></div></div>'}
-function awayDismiss(){try{localStorage.setItem("tk_away_seen",new Date().toISOString())}catch(e){}render()}
+function awayDismiss(){var t=new Date().toISOString();AWAYSEEN=t;try{localStorage.setItem("tk_away_seen",t)}catch(e){}S.ui_prefs=Object.assign({},S.ui_prefs||{},{away_seen:t});render();api("/ui/pref",{key:"away_seen",value:t}).catch(function(){})}
 function awayResume(){var ids=(S.rules||[]).filter(function(r){return rIsAP(r)&&r.status==="paused"}).map(function(r){return r.id});Promise.all(ids.map(function(id){return api("/rules/status",{id:id,status:"active"})})).then(function(){flash=[1,"Resumed."];awayDismiss();return refresh()}).catch(function(e){flash=[0,e.message];render()})}
 // 0.9.12: on Adaptive pace, what each coin's market is doing and what that means for its strategies.
 function apMarket(b){var M=b.market;if(!M||!M.length)return "";var W={quiet:["quiet","tight grids and small dips"],normal:["normal","as Active"],rising:["rising","wider targets, riding it"],falling:["falling","grid and dip buys wait"]};

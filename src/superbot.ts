@@ -97,7 +97,7 @@ export const DEFAULT_SETTINGS: SuperbotSettings = {
   chains: ["base", "solana"], tokens: [{ chain: "base", token: "ETH" }, { chain: "solana", token: "SOL" }],
   sources: { news: true, farcaster: true, x: false },
   budget_usd: 100, per_trade_usd: 20, max_token_pct: 25, daily_loss_pct: 5, weekly_loss_pct: 15, slippage_bps: 100,
-  paper_days: 7, paper_trades: 20, rethink_minutes: 30, max_strategies: 4, always_on: false, daily_share_pct: 50, pace: "steady",
+  paper_days: 7, paper_trades: 20, rethink_minutes: 30, max_strategies: 4, always_on: false, daily_share_pct: 50, pace: "adaptive",
   think_24_7: false, active_mode: false, away_pause: false,
 };
 
@@ -538,6 +538,11 @@ export class SuperBot {
   async disable(reason = "The owner turned Autopilot off.") {
     const s = this.load(), all = this.w.rules().list();
     for (const st of s.strategies) if (st.stage !== "retired") await this.stopRules(st, all, reason);
+    // 0.9.13: and every other rule Autopilot made, tracked here or not (a copy another device made, an older bot),
+    // so turning it off really stops all of it.
+    const left = this.w.rules().list().filter((r) => r.by === "superbot" && ["active", "paused", "proposed"].includes(r.status));
+    for (const r of left) if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false);
+    if (left.length) await this.w.rules().mutate((rs) => { for (const r of rs) if (left.some((x) => x.id === r.id)) { r.status = "cancelled"; r.state.note = reason.slice(0, 120); } });
     await this.update((st) => { st.enabled = false; st.halted = null; for (const x of st.strategies) if (x.stage !== "retired") { x.stage = "retired"; x.stage_since = nowIso(this.now()); x.history.push({ ts: nowIso(this.now()), note: reason }); } st.paper_rules = []; });
     await this.log("rule", reason, [{ type: "retire", reason, sources: [], applied: true, outcome: "all strategies stopped" }]);
     this.d.onRulesChanged?.();

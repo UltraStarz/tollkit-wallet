@@ -112,6 +112,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // "Keep running when closed": hand the switched-on rules to Tollkit's server and bring back what it traded.
   // 0.9.12: one nudge per thing, kept across restarts (Telegram, when it's set up).
   const warnedFile = path.join(w.dir, "always-warned.json");
+  const uiPrefsFile = path.join(w.dir, "ui-prefs.json");
+  const uiPrefs = (): Record<string, string> => { try { const j = JSON.parse(readFileSync(uiPrefsFile, "utf8")); return j && typeof j === "object" ? j : {}; } catch { return {}; } };
   const warnOnce = (key: string) => { let m: Record<string, string> = {}; try { m = JSON.parse(readFileSync(warnedFile, "utf8")); } catch { /* none yet */ } if (m[key]) return false; m[key] = new Date().toISOString(); try { writeFileSync(warnedFile, JSON.stringify(m), { mode: 0o600 }); } catch { /* best effort */ } return true; };
   let lastAlways = 0;
   const alwaysSync = async () => {
@@ -324,7 +326,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           setups: setups.waiting().map(showSetup), app_budgets: budgetView(w.dir), tollkit_tools: catalogView(w.dir),
           backup: { kind: backupKind(w.dir), done: backupDone(w.dir) },
           ext: { paired: w.dapps().paired(), sites: w.dapps().sites() },
-          holdings: holdings ? holdings.snapshot() : null, coins, superbot: superbot?.view() ?? null });
+          holdings: holdings ? holdings.snapshot() : null, coins, superbot: superbot?.view() ?? null, ui_prefs: uiPrefs() });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
       // 0.8.5: a price chart for a bot (its levels and trades on it) or for a token being set up.
@@ -674,6 +676,13 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (bad) return send(res, 400, { error: bad.message, code: bad.code });
         void ai.send(text, "chat", images.length ? { images, thumbs } : {}).catch(() => {});
         return send(res, 200, { ok: true });
+      }
+      // 0.9.13: small view choices kept in the wallet (the extension's sandboxed page has no localStorage).
+      if (p === "/api/ui/pref") {
+        const k = String(b.key ?? ""), v = String(b.value ?? "").slice(0, 64);
+        if (!/^[a-z_]{2,32}$/.test(k)) return send(res, 400, { error: "Bad key." });
+        const cur = uiPrefs(); cur[k] = v; const keys = Object.keys(cur).slice(-40), out: Record<string, string> = {}; for (const x of keys) out[x] = cur[x]!;
+        writeFileSync(uiPrefsFile, JSON.stringify(out), { mode: 0o600 }); return send(res, 200, { ok: true, ui_prefs: out });
       }
       if (p === "/api/ai/checkin") { if (!ai) return send(res, 400, { error: "AI chat is off here." }); ai.setCheckin(Number(b.hours)); return send(res, 200, { ok: true }); }
       // Claude through Tollkit is paid in USDC: swap a little SOL or ETH (trading limits apply), then send again.
