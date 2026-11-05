@@ -67,10 +67,12 @@ await page.route("**/api/state", async (r) => {
   st.always = { ...(st.always ?? {}), config: { ...(st.always?.config ?? {}), enabled: true }, running: liveIds, rules: liveIds };
   st.superbot.totals.committed_usd = 1400;
   // Autopilot's own bots show on its screen, not under My bots; the owner's ETH bot would flag "you have a rule on it".
-  st.bots = st.bots.filter((b: any) => !apIds.has(b.id)).map((b: any) => { const [usd, n, today] = DEMO.bots[b.id]; return { ...b, status: "running", result_usd: usd, trades_ok: n, trades_today: today, last_trade: new Date(Date.now() - 40 * 60_000).toISOString() }; });
+  st.bots = st.bots.filter((b: any) => !apIds.has(b.id)).map((b: any) => { const [usd, n, today] = DEMO.bots[b.id]; return { ...b, status: "running", result_usd: usd, earned_usd: Math.round(usd * 0.7 * 100) / 100, trades_ok: n, trades_today: today, last_trade: new Date(Date.now() - 40 * 60_000).toISOString() }; });
   st.rules = st.rules.filter((r: any) => r.bot !== dipBot);
-  for (const x of st.superbot.strategies) { const [pct, usd, n] = DEMO.strategies[x.bot]; Object.assign(x, { result_pct: pct, result_usd: usd, trades: n }); }
+  for (const x of st.superbot.strategies) { const [pct, usd, n] = DEMO.strategies[x.bot]; Object.assign(x, { result_pct: pct, result_usd: usd, earned_usd: Math.round(usd * 0.6 * 100) / 100, trades: n }); }
   st.superbot.totals.live_result_usd = DEMO.strategies[apLive][1];
+  // 0.9.13: the Autopilot headline is money earned on what it sold.
+  st.superbot.totals.live_earned_usd = Math.round(DEMO.strategies[apLive][1] * 0.6 * 100) / 100;
   await r.fulfill({ json: st });
 });
 async function shot(name: string, setup: () => Promise<void>) {
