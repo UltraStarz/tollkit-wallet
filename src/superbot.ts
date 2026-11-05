@@ -35,7 +35,7 @@ import { withLock } from "./ledger.js";
 import { buildBot, summarize, TEMPLATES, type BotSummary } from "./bots.js";
 import { serverRunnable } from "./alwayson.js";
 import { solRunnable } from "./alwayson-sol.js";
-import type { Rule, RuleStore } from "./rules.js";
+import { describeRule, type Rule, type RuleStore } from "./rules.js";
 import type { TollkitWallet } from "./wallet.js";
 import { SUPERBOT_SYSTEM, DECIDE_TOOL, checkDecision, strategistUser } from "./strategist.js";
 import { marketState, type MarketState } from "./botlogic.js";
@@ -87,7 +87,12 @@ export interface SuperbotSettings {
   /** 0.9.13: when no device is checking, may TOLLkit's server pause Autopilot's rules after a big move (8% drop, or half
    *  of a 4% rise given back)? Off by default: rules keep running; the daily and weekly loss stops still apply. */
   away_pause: boolean;
+  /** 0.9.13: the owner's standing instructions, kept from the AI chat ("be careful this week", "no meme coins").
+   *  Autopilot's strategist reads them before every decision; they never widen a limit. */
+  notes?: string[];
 }
+/** 0.9.13: a strategy is rebuilt with new settings at most this often, so its bot isn't swapped out every check. */
+export const REBUILD_MS = 12 * 3600_000;
 export const DEFAULT_SETTINGS: SuperbotSettings = {
   chains: ["base", "solana"], tokens: [{ chain: "base", token: "ETH" }, { chain: "solana", token: "SOL" }],
   sources: { news: true, farcaster: true, x: false },
@@ -111,6 +116,11 @@ export interface Strategy {
   widened_bot?: string;
   /** 0.9.10: its bots from earlier in this stage. An AI tweak rebuilds the rules but keeps the clock and the results. */
   prev_bots?: string[];
+  /** 0.9.13: every bot this strategy ran before its current one (any stage), so a leftover copy can be found and
+   *  stopped, and the Bots list shows one bot per strategy. */
+  old_bots?: string[];
+  /** 0.9.13: when Autopilot last rebuilt it with new settings (an AI tweak, tightening, a resize). At most once in REBUILD_MS. */
+  rebuilt_at?: string;
   /** 0.9.9: the owner stopped it (never rebuilt), paused its bot (Autopilot leaves it alone), or removed it from the list. */
   stopped_by_owner?: boolean; owner_paused?: boolean; removed?: boolean;
   /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
@@ -197,6 +207,7 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   else if (b.always_on !== undefined) s.think_24_7 = !!b.always_on;
   if (b.active_mode !== undefined) s.active_mode = !!b.active_mode;
   if (b.away_pause !== undefined) s.away_pause = !!b.away_pause;
+  if (b.notes !== undefined) { if (!Array.isArray(b.notes)) throw new Error("Notes are a list."); s.notes = b.notes.map((x) => String(x).replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean).slice(0, 8); }
   if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max" && b.pace !== "adaptive") throw new Error("Pace is steady, active, max or adaptive."); s.pace = b.pace; }
   if (s.per_trade_usd > s.budget_usd) throw new Error("The per-trade cap can't be more than the budget.");
   if (s.tokens.some((t) => !s.chains.includes(t.chain))) throw new Error("Every token's network must be turned on.");
@@ -283,6 +294,40 @@ export function sizeToShare(template: string, params: Record<string, unknown>, s
 }
 
 /**
+ * 0.9.13: everything Autopilot is doing, read-only, for the AI chat (autopilot_status): whether it's on, its
+ * settings and limits, each strategy with its stage, settings, results and money earned, its recent decisions with
+ * their reasons and outcomes, and its daily reports. The chat explains Autopilot; it never changes it.
+ */
+export function autopilotReport(w: { dir: string; rules(): { list(): Rule[] } }, o: { decisions?: number } = {}) {
+  let s: Partial<State> | null = null;
+  try { const f = path.join(walletHome(w.dir), SUPERBOT.file); if (existsSync(f)) s = JSON.parse(readFileSync(f, "utf8")); } catch { s = null; }
+  if (!s) return { on: false, note: "Autopilot hasn't been turned on in this wallet." };
+  const st = { ...DEFAULT_SETTINGS, ...(s.settings ?? {}) }, all = w.rules().list();
+  const strategies = (s.strategies ?? []).filter((x) => !x.removed).map((x) => {
+    const ids = new Set([x.bot, ...(x.prev_bots ?? [])].filter(Boolean) as string[]);
+    const sum = summarize(all.filter((r) => r.bot && ids.has(r.bot) && !r.archived).map((r) => (r.bot === x.bot ? r : { ...r, bot: x.bot! })), (w as any).hooks?.livePrice)[0] ?? null;
+    const rules = all.filter((r) => r.bot === x.bot && !r.archived).map((r) => ({ id: r.id, status: r.status, description: describeRule(r), ...(r.state.last_error ? { last_error: r.state.last_error } : {}) }));
+    return { id: x.id, name: x.name, template: x.template, chain: x.chain, token: x.token, stage: x.stage, since: x.stage_since, params: x.params, money: x.stage === "live" ? "real" : x.stage === "paper" ? "practice" : "none",
+      status: sum?.status ?? null, trades: sum?.trades_ok ?? 0, failed: sum?.trades_failed ?? 0, earned_usd: sum?.earned_usd ?? 0, result_usd: sum?.result_usd ?? null, result_pct: sum?.result_pct ?? null, last_trade: sum?.last_trade ?? null,
+      ...(x.ready ? { passed_paper: x.ready } : {}), ...(x.owner_paused ? { paused_by_owner: true } : {}), ...(x.stopped_by_owner ? { stopped_by_owner: true } : {}),
+      recent: (x.history ?? []).slice(-4).map((h) => `${h.ts.slice(0, 16)} ${h.note}`), rules };
+  });
+  const live = strategies.filter((x) => x.stage === "live");
+  return {
+    on: !!s.enabled, since: s.since ?? null, halted: s.halted ?? null, notes: st.notes ?? [],
+    settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_strategies: st.max_strategies, max_token_pct: st.max_token_pct, daily_loss_pct: st.daily_loss_pct, weekly_loss_pct: st.weekly_loss_pct,
+      pace: st.pace, active_mode: st.active_mode, run_24_7: st.always_on, think_24_7: st.think_24_7, rethink_minutes: st.rethink_minutes, chains: st.chains, tokens: st.tokens, sources: st.sources, paper_days: st.paper_days, paper_trades: st.paper_trades },
+    totals: { live: live.length, practice: strategies.filter((x) => x.stage === "paper").length, earned_live_usd: Math.round(live.reduce((a, x) => a + (x.earned_usd ?? 0), 0) * 100) / 100, result_live_usd: Math.round(live.reduce((a, x) => a + (x.result_usd ?? 0), 0) * 100) / 100 },
+    strategies: strategies.filter((x) => x.stage !== "retired"),
+    retired: strategies.filter((x) => x.stage === "retired").slice(-8).map((x) => ({ name: x.name, token: x.token, why: x.recent.at(-1) ?? null, earned_usd: x.earned_usd, result_usd: x.result_usd })),
+    last_check: s.stats?.last_cycle ?? null,
+    decisions: (s.decisions ?? []).slice().sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, o.decisions ?? 15).map((d) => ({ ts: d.ts, by: d.by, view: d.market_view, assessment: d.assessment,
+      actions: (d.actions ?? []).map((a) => ({ type: a.type, ...(a.strategy_id ? { strategy: a.strategy_id } : {}), reason: a.reason, applied: a.applied, outcome: a.outcome })) })),
+    reports: (s.reports ?? []).slice(-3).reverse(),
+  };
+}
+
+/**
  * 0.9.11: the size the AI tab uses when the owner names no amount: Autopilot's equal share per network (shareUsd with
  * the owner's Autopilot budget and maximum strategies, or the defaults), capped at the per-trade limit.
  */
@@ -362,6 +407,18 @@ export class SuperBot {
     if (!st.bot) return null;
     const ids = new Set([st.bot, ...(st.prev_bots ?? [])]);
     return summarize(all.filter((r) => r.bot && ids.has(r.bot) && !r.archived).map((r) => (r.bot === st.bot ? r : { ...r, bot: st.bot! })), this.d.livePrice)[0] ?? null;
+  }
+
+  /** 0.9.13: for the Bots list: older copies of a strategy's bot fold into its current one (same stage) or are hidden. */
+  botFold(): { fold: Record<string, string>; hide: Set<string> } {
+    const fold: Record<string, string> = {}, hide = new Set<string>(), cur = new Set<string>();
+    for (const st of this.load().strategies) {
+      if (st.bot) cur.add(st.bot);
+      if (st.bot) for (const b of st.prev_bots ?? []) fold[b] = st.bot;
+      for (const b of st.old_bots ?? []) if (!fold[b]) hide.add(b);
+    }
+    for (const b of cur) hide.delete(b);
+    return { fold, hide };
   }
 
   /** What the dashboard shows. */
@@ -545,6 +602,7 @@ export class SuperBot {
       // 0.9.7: Active pace tightens idle strategies, and decides at every rethink, not only when the market moved.
       const active = (after.settings.pace ?? "steady") !== "steady"; // "active", "max" or "adaptive"
       await this.noticeOwnerStops(this.w.rules().list());
+      await this.stopLeftovers(this.w.rules().list());
       if (active) await this.tightenIdle(this.w.rules().list());
       if (this.adaptive(after)) await this.rideRising(this.w.rules().list());
       if (force || moved || stale || active) { await this.step(snap); await this.endRangeIdeas(); }
@@ -669,6 +727,7 @@ export class SuperBot {
       const params = this.clampParams(s, st.template, next);
       if (params.note) continue;
       const why = `No trade in ${SUPERBOT.idleHours} hours on ${s.settings.pace === "max" ? "Max" : s.settings.pace === "adaptive" ? `Adaptive (${st.token.length > 12 ? "the coin" : st.token} ${mk ?? "steady"})` : "Active"} pace: tightened ${describeChange(st.params, params.params)} and re-centred on today's price.`;
+      if (this.rebuiltLately(st)) continue;
       const res = await this.restage(st, st.stage === "live" ? "live" : "paper", why, all, params.params, true);
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
@@ -706,6 +765,7 @@ export class SuperBot {
       const params = this.clampParams(s, st.template, next);
       if (params.note) continue;
       const why = `${coin} is rising (${m.d1}% in 24 hours, ${m.d3}% in 3 days) and ${st.name} hasn't traded in ${SUPERBOT.idleHours} hours: widened ${describeChange(st.params, params.params)} on Adaptive pace and re-centred on today's price.`;
+      if (this.rebuiltLately(st)) continue;
       const res = await this.restage(st, st.stage === "live" ? "live" : "paper", why, all, params.params, true);
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: adaptive", `${coin} rising`], applied: res.applied, outcome: res.outcome }]);
@@ -755,6 +815,26 @@ export class SuperBot {
    * 0.9.9: catches stops made before this version, or by another device: a strategy whose bot has no active or paused
    * rule left and at least one the owner cancelled (Autopilot's own cancels carry a note) is treated as stopped.
    */
+  /**
+   * 0.9.13: a bot Autopilot replaced (an older copy of a strategy) or a strategy it retired or removed must not keep
+   * trading. Only bots Autopilot itself recorded as its own are stopped; anything it never tracked is left alone.
+   */
+  private async stopLeftovers(all: Rule[]) {
+    const s = this.load(), cur = new Set(s.strategies.filter((x) => x.stage !== "retired" && !x.removed && x.bot).map((x) => x.bot!));
+    for (const st of s.strategies) for (const b of st.prev_bots ?? []) cur.add(b); // same-stage copies already stopped; never touch the current set
+    const gone = new Set<string>();
+    for (const st of s.strategies) {
+      for (const b of st.old_bots ?? []) if (!cur.has(b)) gone.add(b);
+      if ((st.stage === "retired" || st.removed) && st.bot && !cur.has(st.bot)) gone.add(st.bot);
+    }
+    const left = all.filter((r) => r.by === "superbot" && r.bot && gone.has(r.bot) && ["active", "paused", "proposed"].includes(r.status));
+    if (!left.length) return;
+    await this.w.rules().mutate((rs) => { for (const r of rs) if (left.some((x) => x.id === r.id)) { r.status = "cancelled"; r.state.note = "Stopped: Autopilot replaced this bot with a newer copy."; } });
+    for (const r of left) if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false);
+    await this.log("rule", `Stopped ${left.length} rule${left.length === 1 ? "" : "s"} of older copies of its bots, so each strategy runs once.`, [{ type: "retire", reason: "older copy still running", sources: [], applied: true, outcome: `${left.length} rule${left.length === 1 ? "" : "s"} cancelled` }]);
+    this.d.onRulesChanged?.();
+  }
+
   private async noticeOwnerStops(all: Rule[]) {
     for (const st of this.load().strategies.filter((x) => x.stage !== "retired" && x.bot)) {
       const rs = all.filter((r) => r.by === "superbot" && r.bot === st.bot);
@@ -797,6 +877,7 @@ export class SuperBot {
     return this.view();
   }
 
+  private rebuiltLately(st: Strategy) { return !!st.rebuilt_at && this.now() - Date.parse(st.rebuilt_at) < REBUILD_MS; }
   private async restage(st: Strategy, stage: "paper" | "live", why: string, all: Rule[], params = st.params, keepClock = false): Promise<{ applied: boolean; outcome: string }> {
     const s = this.load();
     if (stage === "live") {
@@ -814,6 +895,8 @@ export class SuperBot {
       if (!keepClock) y.past = [...(y.past ?? []), { stage: y.stage, result_pct: sum?.result_pct ?? null, trades: sum?.trades_ok ?? 0 }].slice(-6);
       // 0.9.10: same stage, clock kept: the old bot's results stay with the strategy; a new stage starts clean.
       y.prev_bots = keepClock && y.stage === stage && y.bot ? [...(y.prev_bots ?? []), y.bot].slice(-20) : [];
+      if (y.bot) y.old_bots = [...(y.old_bots ?? []).filter((b) => b !== y.bot), y.bot].slice(-40);
+      if (keepClock) y.rebuilt_at = nowIso(this.now());
       y.stage = stage; if (!keepClock) y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
       if (stage === "paper") x.paper_rules.push(...made.map((r) => r.id));
     });
@@ -869,6 +952,8 @@ export class SuperBot {
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
       recent_decisions: s.decisions.filter((d) => d.by === "strategist").slice(-3).map((d) => ({ ts: d.ts, view: d.market_view, actions: d.actions.map((a) => `${a.type}${a.strategy_id ? ` ${a.strategy_id}` : ""}${a.applied ? "" : " (not applied)"}`) })),
+      // 0.9.13: the owner's standing instructions from the AI chat.
+      ...(s.settings.notes?.length ? { owner_notes: s.settings.notes } : {}),
       // 0.9.1: the owner's own rules, so the strategist doesn't work against them.
       owner_rules: all.filter((r) => !isAutopilotRule(r) && ["active", "paused", "proposed"].includes(r.status)).slice(0, 20).map((r) => ({ kind: r.kind, chain: r.chain, token: r.token.length > 12 ? r.token.slice(0, 8) + "…" : r.token, status: r.status, ...(r.trigger_price ? { trigger_price: r.trigger_price } : {}), ...(r.amount_usd ? { amount_usd: r.amount_usd } : {}), ...(r.sell_percent ? { sell_percent: r.sell_percent } : {}), ...(r.trail_pct ? { trail_pct: r.trail_pct } : {}), ...(r.every ? { every: r.every } : {}) })),
       sources_on: Object.entries(s.settings.sources).filter(([, v]) => v).map(([k]) => k),
@@ -928,6 +1013,27 @@ export class SuperBot {
   }
 
   /** One action from the strategist, checked against the owner's limits before anything is created or stopped. */
+  /**
+   * 0.9.13: the owner asked (from the AI chat, then tapped Apply) for Autopilot to run a strategy. It goes through
+   * exactly the checks Autopilot's own proposals do (budget, slots, no doubles, the owner's rules, paper first) and
+   * Autopilot manages it from then on.
+   */
+  async ownerAsk(a: { template: string; chain: string; token: string; params?: Record<string, unknown>; reason?: string }) {
+    if (!this.load().enabled) throw new Error("Turn Autopilot on first.");
+    const why = String(a.reason ?? "You asked for it from the AI chat.").slice(0, 200);
+    const res = await this.apply({ type: "propose", template: a.template, chain: a.chain, token: a.token, params: a.params ?? {}, reason: why, sources: ["you asked"] });
+    await this.log("rule", res.applied ? `You asked for a ${a.template} on ${a.token}; Autopilot added it.` : `You asked for a ${a.template} on ${a.token}; Autopilot couldn't add it: ${res.outcome}.`, [{ type: "propose", reason: why, sources: ["you asked"], ...res }]);
+    this.d.onRulesChanged?.();
+    return res;
+  }
+  /** 0.9.13: add or remove one of the owner's standing notes. */
+  async setNote(op: "add" | "remove" | "clear", text?: string) {
+    const s = this.load(), cur = s.settings.notes ?? [], t = String(text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+    const next = op === "clear" ? [] : op === "remove" ? cur.filter((x) => x.toLowerCase() !== t.toLowerCase()) : t && !cur.some((x) => x.toLowerCase() === t.toLowerCase()) ? [...cur, t].slice(-8) : cur;
+    await this.update((x) => { x.settings = { ...x.settings, notes: next }; });
+    return next;
+  }
+
   private async apply(a: any): Promise<{ applied: boolean; outcome: string }> {
     const s = this.load(), all = this.w.rules().list();
     if (s.halted) return { applied: false, outcome: "the bot is stopped by a loss limit" };
@@ -958,6 +1064,7 @@ export class SuperBot {
         const clash = clashWithOwner(st.template, params.params, all, st.chain, st.token, await this.d.price(st.chain, st.token).catch(() => undefined));
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
+        if (this.rebuiltLately(st)) return { applied: false, outcome: "changed less than 12 hours ago; left as it is" };
         return this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params, true);
       }
       case "propose": {
@@ -977,6 +1084,8 @@ export class SuperBot {
         if (!tok) return { applied: false, outcome: `${a.token} is not on the allowed list for ${chainName(chain)}` };
         if (a.template === "alert" || a.template === "twap" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
         if (running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
+        // 0.9.13: and never a second copy of a bot that is still running, even one no strategy tracks any more.
+        if (all.some((r) => r.by === "superbot" && !r.archived && ["active", "paused", "proposed"].includes(r.status) && r.template === a.template && r.chain === chain && r.token.toLowerCase() === tok.token.toLowerCase())) return { applied: false, outcome: `a ${a.template} on ${tok.token.length > 12 ? "this coin" : tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
         // 0.9.12 Adaptive pace: nothing new that buys a coin while it's falling.
@@ -1023,6 +1132,7 @@ export class SuperBot {
       if (!(a1 > 0) || Math.abs(a1 - a0) < Math.max(0.5, a0 * 0.1)) continue;
       const neverSells = st.template === "dca" || (st.template === "signal" && st.params.side !== "sell");
       if (st.stage === "live" && !neverSells && (this.summaryOf(st, all)?.units_held ?? 0) > 1e-9) { waiting = true; continue; }
+      if (this.rebuiltLately(st)) continue;
       await this.restage(st, st.stage, `Resized from your balance: $${r2(a0)} → $${r2(a1)}${st.template === "grid" ? " a level" : st.template === "dca" ? " a buy" : ""}.`, this.w.rules().list(), next, true);
     }
     if (!waiting) await this.update((x) => { x.sized = 1; });
@@ -1076,7 +1186,7 @@ export class SuperBot {
       settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_token_pct: st.max_token_pct, max_strategies: st.max_strategies, pace: st.pace, daily_loss_pct: st.daily_loss_pct,
         share_usd: this.shares.solana ?? shareUsd(st.budget_usd, undefined, st.max_strategies),
         paper_days: st.paper_days, paper_trades: st.paper_trades, rethink_minutes: st.rethink_minutes, slippage_bps: st.slippage_bps,
-        tokens: st.tokens.filter((x) => x.chain === "solana").map((x) => ({ token: x.token })), sources_on: Object.entries(st.sources).filter(([, v]) => v).map(([k]) => k) },
+        tokens: st.tokens.filter((x) => x.chain === "solana").map((x) => ({ token: x.token })), sources_on: Object.entries(st.sources).filter(([, v]) => v).map(([k]) => k), ...(st.notes?.length ? { notes: st.notes } : {}) },
       strategies: s.strategies.filter((x) => x.stage !== "retired" && x.chain === "solana").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, name: x.name, template: x.template, token: x.token, params: x.params, stage: x.stage,
         rule_ids: this.rulesOf(s, x, all).filter((r) => r.status === "active" || r.status === "paused").map((r) => r.id), result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, trades: sum?.trades_ok ?? 0, days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000) }; }),
     };

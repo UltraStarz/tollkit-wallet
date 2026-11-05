@@ -75,14 +75,9 @@ check(ai.view().checkin.every_hours === 0 && calls.length === n0, "check-ins off
 let e2 = ""; try { ai.setCheckin(5); } catch (e) { e2 = (e as Error).message; }
 check(/Pick off/.test(e2), "only the offered schedules");
 ai.setCheckin(4);
-await ai.tick();
-check(calls.length === n0, "first check-in waits a full period");
 clock += 4 * 3600_000 + 1000;
 await ai.tick();
-const ck = ai.view().messages.at(-1)!;
-check(calls.length === n0 + 1 && /Scheduled check-in \(every 4 hours\)/.test(calls.at(-1)!.prompt) && !!ck.checkin && !!ck.quiet, "check-in runs when due; 'No changes' shows as a quiet line", ck);
-await ai.tick();
-check(calls.length === n0 + 1, "and not again until the next period");
+check(calls.length === n0 && ai.view().checkin.every_hours === 0, "0.9.13: check-ins are retired: a schedule is ignored and the AI never runs on its own (only Autopilot does)");
 
 // a check-in suggestion goes to Telegram; Approve turns it on
 const sentTg: any[] = [];

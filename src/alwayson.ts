@@ -40,7 +40,7 @@ export const FLOOR = { dcaBand: 0.12, limit: 0.03, takeProfit: 0.03, stopLoss: 0
 /** ETH left for the device's own transactions when a sell is "all" or a share of the balance (as autopilot.ts). */
 const RESERVE: Partial<Record<EvmChain, bigint>> = { base: 50_000_000_000_000n, ethereum: 2_000_000_000_000_000n, arbitrum: 100_000_000_000_000n };
 const DAY = 86_400;
-const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss"];
+const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss", "trailing_stop", "signal_buy", "signal_sell"];
 /** Uses a bot's piece may have in its week: its own amounts, and the doubling sizes. */
 const BOT_USES = { exact: 100, ladder: 40 } as const;
 /** A grid's floors come from its own range (3% past it); other bots' from today's price (12% band, as DCA). */
@@ -80,7 +80,9 @@ export function serverRunnable(r: Rule, chains: EvmChain[], kinds?: string[]): s
   }
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
   if (r.after || r.sell_from) return "Rules that wait for another rule run only while the app is open.";
-  if (["limit_buy", "dca"].includes(r.kind) && !r.amount_usd) return "Needs a dollar amount.";
+  if (["limit_buy", "dca", "signal_buy"].includes(r.kind) && !r.amount_usd) return "Needs a dollar amount.";
+  if (r.kind === "trailing_stop" && !r.trail_pct) return "Needs how far it may fall.";
+  if (r.kind.startsWith("signal_") && !r.when) return "Needs its signal.";
   return null;
 }
 
@@ -290,7 +292,7 @@ export class AlwaysOn {
     const signed = Object.fromEntries(Object.entries(l.signed ?? {}).filter(([k]) => k.startsWith(chain + ":")));
     const stale = rules.filter((r) => {
       const s = signed[`${chain}:${r.id}`];
-      return !s || s.key !== sigKey(r) || (!s.failed && s.until - now < REFRESH_DAYS * DAY) || (s.failed && s.until < now) || ((r.kind === "dca" || (isBotKind(r.kind) && r.kind !== "grid")) && Math.abs(eth - s.price) / s.price > 0.05) || (s.sell !== undefined && BigInt(s.sell) > ethBal);
+      return !s || s.key !== sigKey(r) || (!s.failed && s.until - now < REFRESH_DAYS * DAY) || (s.failed && s.until < now) || ((r.kind === "dca" || r.kind === "trailing_stop" || r.kind.startsWith("signal_") || (isBotKind(r.kind) && r.kind !== "grid")) && Math.abs(eth - s.price) / s.price > 0.05) || (s.sell !== undefined && BigInt(s.sell) > ethBal);
     });
     const gone = Object.keys(signed).filter((k) => !rules.some((r) => `${chain}:${r.id}` === k));
     const problems: Record<string, string> = {};
@@ -345,6 +347,7 @@ export class AlwaysOn {
     }) : ({
       id: r.id, kind: r.kind, amount_usd: r.amount_usd, trigger_price: r.trigger_price, every: r.every,
       times: r.times, max_price: r.max_price, group: r.group, expires_at: r.expires_at, runs: r.state.runs, next_run: r.state.next_run,
+      ...(r.kind === "trailing_stop" ? { trail_pct: r.trail_pct, high: Math.max(r.state.high ?? 0, eth) } : {}), ...(r.when ? { when: r.when } : {}),
     }));
     const j = await this.call("sync", body);
     return { running: (j.running ?? []) as string[], problems: { ...problems, ...(j.problems ?? {}) }, signed: out };
@@ -408,6 +411,13 @@ export class AlwaysOn {
       if (!out.length) throw new Error("Nothing for this bot to sign.");
       return { slips: out };
     }
+    // 0.9.13: a signal buy may fire any time in the window, up to the buys it has left, at most 12% above today's price.
+    if (r.kind === "signal_buy") {
+      const left = Math.max(0, (r.times ?? 1) - r.state.runs);
+      if (!left) throw new Error("All its buys are done.");
+      await sign("buy", now - 60, end, left, parseUnits(r.amount_usd!.toFixed(usdc.decimals), usdc.decimals), eth18(r.amount_usd!, eth * (1 + FLOOR.dcaBand)));
+      return { slips: out };
+    }
     if (r.kind === "dca" || r.kind === "limit_buy") {
       const amt = parseUnits(r.amount_usd!.toFixed(usdc.decimals), usdc.decimals);
       if (r.kind === "limit_buy") {
@@ -442,8 +452,11 @@ export class AlwaysOn {
     let sellAtomic = r.sell_percent !== undefined ? (spendable * BigInt(Math.round(r.sell_percent * 100))) / 10_000n : parseUnits(r.sell_amount!, 18);
     if (sellAtomic > spendable) sellAtomic = spendable;
     if (sellAtomic <= 0n) throw new Error(spendable <= 0n && free > 0n ? nothingToSell(r, "ETH", free) : "No ETH to sell on this network.");
-    const cut = r.kind === "stop_loss" ? FLOOR.stopLoss : r.kind === "take_profit" ? FLOOR.takeProfit : FLOOR.limit;
-    const floor = parseUnits((Number(formatUnits(sellAtomic, 18)) * r.trigger_price! * (1 - cut)).toFixed(usdc.decimals), usdc.decimals);
+    const cut = r.kind === "stop_loss" || r.kind === "trailing_stop" ? FLOOR.stopLoss : r.kind === "take_profit" ? FLOOR.takeProfit : r.kind === "signal_sell" ? FLOOR.dcaBand : FLOOR.limit;
+    // 0.9.13: a trailing stop sells at most trail_pct under its high, and its high is never under today's price; a signal
+    // sell's floor comes from today's price. Both are re-signed when the price moves 5%.
+    const basis = r.kind === "trailing_stop" ? eth * (1 - r.trail_pct! / 100) : r.kind === "signal_sell" ? eth : r.trigger_price!;
+    const floor = parseUnits((Number(formatUnits(sellAtomic, 18)) * basis * (1 - cut)).toFixed(usdc.decimals), usdc.decimals);
     await sign("sell", now - 60, end, 1, sellAtomic, floor);
     return { slips: out, sell: sellAtomic };
   }

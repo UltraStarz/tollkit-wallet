@@ -35,6 +35,14 @@ export const SetupKinds = {
   connect_app: z.object({ app: z.enum(["claude", "claude-code", "cursor", "vscode", "codex", "gemini"]) }).strict(),
   app_budget: z.object({ app: z.string().min(1).max(40), weekly_usd: z.number().positive().max(1_000_000).nullable() }).strict(),
   always_budget: z.object({ budget_usd: z.number().min(1).max(100_000) }).strict(),
+  // 0.9.13: the AI chat steers Autopilot through the owner: a strategy for Autopilot to run, or a change to its settings.
+  autopilot_strategy: z.object({ template: z.string().min(2).max(20), chain: z.enum(CHAIN_ENUM), token: z.string().min(2).max(64), params: z.record(z.string(), z.union([z.number(), z.string(), z.boolean()])).optional() }).strict(),
+  autopilot_settings: z.object({
+    budget_usd: z.number().min(10).max(100_000).optional(), per_trade_usd: z.number().min(1).max(100_000).optional(), max_strategies: z.number().int().min(1).max(10).optional(),
+    max_token_pct: z.number().min(5).max(100).optional(), daily_loss_pct: z.number().min(1).max(50).optional(), weekly_loss_pct: z.number().min(1).max(90).optional(),
+    pace: z.enum(["steady", "active", "max", "adaptive"]).optional(), active_mode: z.boolean().optional(), always_on: z.boolean().optional(),
+    tokens: z.array(z.object({ chain: z.enum(CHAIN_ENUM), token: z.string().min(2).max(64) })).min(1).max(12).optional(),
+  }).strict(),
 } as const;
 export type SetupKind = keyof typeof SetupKinds;
 export const SETUP_KIND_NAMES = Object.keys(SetupKinds) as SetupKind[];
@@ -72,12 +80,24 @@ export function describeSetup(kind: SetupKind, p: Record<string, any>): string {
     case "connect_app": return `Connect ${p.app} to this wallet.`;
     case "app_budget": return p.weekly_usd === null ? `Remove ${p.app}'s weekly budget.` : `Give ${p.app} a weekly budget of ${usd(p.weekly_usd)}.`;
     case "always_budget": return `Let Tollkit's server spend up to ${usd(p.budget_usd)} of USDC in total for rules that keep running when the app is closed.`;
+    case "autopilot_strategy": return `Have Autopilot run ${TPL[p.template] ? `a ${TPL[p.template]} bot` : `a ${String(p.template).replace(/_/g, " ")}`} on ${String(p.token).length > 12 ? "this coin" : p.token} (${chainName(p.chain)}). It starts on paper and fits inside Autopilot's budget.`;
+    case "autopilot_settings": {
+      const parts: string[] = [], L: Record<string, string> = { budget_usd: "budget", per_trade_usd: "most per trade", max_token_pct: "most in one token", daily_loss_pct: "daily loss stop", weekly_loss_pct: "weekly loss stop" };
+      for (const [k, l] of Object.entries(L)) if (p[k] !== undefined) parts.push(`set Autopilot's ${l} to ${k.endsWith("_pct") ? p[k] + "%" : usd(p[k])}`);
+      if (p.max_strategies !== undefined) parts.push(`let it run up to ${p.max_strategies} strategies`);
+      if (p.pace) parts.push(`set its pace to ${p.pace}`);
+      if (p.active_mode !== undefined) parts.push(p.active_mode ? "let strategies that pass on paper go live by themselves" : "wait for your Go live on each strategy");
+      if (p.always_on !== undefined) parts.push(p.always_on ? "keep it running 24/7" : "stop it while your devices are off");
+      if (p.tokens) parts.push(`trade only ${p.tokens.map((t: any) => t.token.length > 12 ? "a coin" : t.token).join(", ")}`);
+      return parts.length ? cap(parts.join(", ")) + "." : "Change Autopilot's settings.";
+    }
   }
 }
+const TPL: Record<string, string> = { dip: "Buy the dip", grid: "Grid trader", dca: "Steady buyer", signal: "Trade on a signal", protect: "Protect a position", trail: "Trailing stop", ladder: "Take-profit ladder", smart_dca: "Smart DCA", rebalance: "Rebalancer", infinity_grid: "Infinity grid" };
 const cap = (s: string) => s[0]!.toUpperCase() + s.slice(1);
 
 /** True for the kinds the dashboard asks the password for before applying. */
-export const needsPassword = (k: SetupKind) => !["app_budget", "cash_out", "always_budget"].includes(k);
+export const needsPassword = (k: SetupKind) => !["app_budget", "cash_out", "always_budget", "autopilot_strategy", "autopilot_settings"].includes(k);
 
 const DAY = 24 * 3600_000, KEEP = 7 * DAY, MAX_WAITING = 20;
 const fileOf = (dir?: string) => path.join(walletHome(dir), "setups.json");

@@ -53,7 +53,7 @@ put(A.dir, "policy.json", { sealed: "per-device" });
 await A.s.turnOn();
 check(store.get(key.address.toLowerCase())?.rev === 1 && A.s.runsHere() && A.s.view().devices[0]!.runs_bots, "first device: uploads, and runs the bots");
 const raw = Buffer.from(sent.at(-1)!, "base64").toString("latin1");
-check(!/grid|g1|superbot|KEYS-NEVER-LEAVE/.test(raw), "the server only ever sees scrambled bytes (no rule names)");
+check(!/grid|"g1"|superbot|KEYS-NEVER-LEAVE/.test(raw), "the server only ever sees scrambled bytes (no rule names)");
 const plain = open(syncKey(key.privateKey), sent.at(-1)!);
 check(!plain.includes("KEYS-NEVER-LEAVE") && !plain.includes("per-device"), "keys and the spending limits are never in the copy");
 

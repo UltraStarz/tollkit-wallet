@@ -98,6 +98,8 @@ const ELIZA_NAMES: Record<string, { name: string; similes: string[] }> = {
   receipts: { name: "TOLLKIT_RECEIPTS", similes: ["TRANSACTION_HISTORY", "WALLET_HISTORY", "RECEIPTS"] },
   autopilot_propose: { name: "TOLLKIT_AUTOPILOT_SET", similes: ["LIMIT_ORDER", "STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP", "DCA", "RECURRING_BUY", "SET_STRATEGY"] },
   autopilot_rules: { name: "TOLLKIT_AUTOPILOT_RULES", similes: ["LIST_ORDERS", "OPEN_ORDERS", "MY_STRATEGIES"] },
+  autopilot_note: { name: "TOLLKIT_AUTOPILOT_NOTE", similes: ["AUTOPILOT_NOTE", "TELL_AUTOPILOT", "REMEMBER_FOR_AUTOPILOT"] },
+  autopilot_status: { name: "TOLLKIT_AUTOPILOT_STATUS", similes: ["AUTOPILOT_STATUS", "WHAT_IS_AUTOPILOT_DOING", "AUTOPILOT_DECISIONS"] },
   autopilot_cancel: { name: "TOLLKIT_AUTOPILOT_CANCEL", similes: ["CANCEL_ORDER", "STOP_STRATEGY"] },
   paper_swap: { name: "TOLLKIT_PAPER_SWAP", similes: ["PAPER_TRADE", "PRACTICE_TRADE", "SIMULATE_TRADE"] },
   paper_status: { name: "TOLLKIT_PAPER_STATUS", similes: ["PAPER_BALANCE", "PAPER_PORTFOLIO"] },

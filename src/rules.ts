@@ -303,6 +303,8 @@ export class RuleStore {
     if (parsed.replaces) {
       const old = this.get(parsed.replaces);
       if (!old || ["done", "cancelled", "expired"].includes(old.status)) throw new Error(`replaces: no open rule ${parsed.replaces}.`);
+      // 0.9.13: Autopilot's own rules are changed by Autopilot only; an assistant replacing one made a second copy.
+      if (old.by === "superbot" && app !== "superbot") throw new Error("That rule belongs to Autopilot, which changes its own rules. Leave it, or ask the owner to change it on the Autopilot tab.");
     }
     const now = new Date();
     const active = by === "owner" || autoActivate;

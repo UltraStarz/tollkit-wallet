@@ -114,7 +114,9 @@ export function describeAmount(chain: Chain, token: string, atomic: string): str
 export class TollkitWallet {
   readonly dir: string;
   /** Set by whoever runs the autopilot (the dashboard): called when an AI tool adds or changes rules, so they start at once. */
-  readonly hooks: { rulesChanged?: () => void } = {};
+  readonly hooks: { rulesChanged?: () => void;
+    /** 0.9.13: the dashboard's Autopilot, for the AI chat's standing notes, and today's price for bot results. */
+    autopilotNote?: (op: "add" | "remove" | "clear", text?: string) => Promise<string[]>; livePrice?: (chain: Chain, token: string) => number | undefined } = {};
   private constructor(private keys: Keys, private password: string, readonly policy: Policy, private readonly o: WalletOptions, readonly sanctions: Sanctions) {
     this.dir = walletHome(o.dir);
   }

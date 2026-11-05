@@ -78,7 +78,7 @@ const autoW = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https:/
 autoW.setPolicy(PW, { ...autoW.policy, agent_rules: "auto" });
 const c2 = new Client({ name: "cursor", version: "1" }); { const [a, b] = InMemoryTransport.createLinkedPair(); await buildServer(autoW).connect(a); await c2.connect(b); }
 const auto = await call(c2, "bot_start", { chain: "base", token: "ETH", template: "dca", params: { amount_usd: 5, every: "week" } });
-check(auto.ok === true && auto.status === "active" && auto.rules[0].rule.by === "Cursor", "with agent_rules=auto the bot starts at once, tagged with the app", auto);
+check(auto.ok === true && auto.status === "proposed" && auto.rules[0].rule.by === "Cursor", "0.9.13: even with agent_rules=auto, an app's bot waits for the owner, tagged with the app", auto);
 const adv2 = new Client({ name: "x", version: "1" }); { const [a, b] = InMemoryTransport.createLinkedPair(); await buildServer(autoW, { advisor: true }).connect(a); await adv2.connect(b); }
 const advBot = await call(adv2, "bot_start", { chain: "base", token: "ETH", template: "dca", params: { amount_usd: 5, every: "week" } });
 check(advBot.ok === true && advBot.status === "proposed" && advBot.rules[0].rule.by === "Tollkit AI", "Tollkit AI's bots always wait for the owner, whatever agent_rules says");

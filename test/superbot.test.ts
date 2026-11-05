@@ -537,5 +537,87 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check((W.bot.view() as any).settings.pace === "max", "picking Max again afterwards keeps it");
 }
 
+// ─── 0.9.13: no doubles. A bot of the same kind on the same coin that still runs blocks a new one, and a bot of a
+// strategy Autopilot retired (or replaced) that kept running is stopped. ───────────────────────────────────────────
+{
+  const W = world({ decision: () => ({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, reason: "Dip buyer.", sources: ["s"] }] }) });
+  const { buildBot } = await import("../src/bots.js");
+  const fs = await import("node:fs");
+  const old = buildBot("dip", "ETH", "base", { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, 2500);
+  await W.store.addBot(old.rules.map((r) => ({ ...r, bot_name: "Autopilot · Buy the dip · ETH" })), "agent", true, "superbot");
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
+  await new Promise((r) => setTimeout(r, 30));
+  const d = W.bot.view().decisions.find((x: any) => x.actions?.some((a: any) => a.type === "propose"));
+  check(!!d && d.actions[0].applied === false && /already running/.test(d.actions[0].outcome), "0.9.13: a second dip buyer on ETH is refused while one still runs", d?.actions);
+  check(W.store.list().filter((r) => r.status === "active").length === 2, "0.9.13: the one already running is left alone (Autopilot never tracked it)");
+  const st = JSON.parse(fs.readFileSync(path.join(W.dir, "superbot.json"), "utf8"));
+  st.strategies.push({ id: "old1", name: "Buy the dip · ETH", template: "dip", chain: "base", token: "ETH", params: {}, stage: "retired", bot: old.bot, created_at: "2026-10-19T00:00:00Z", stage_since: "2026-10-19T00:00:00Z", history: [] });
+  fs.writeFileSync(path.join(W.dir, "superbot.json"), JSON.stringify(st));
+  W.advance(60 * 60_000); await W.bot.tick(); await new Promise((r) => setTimeout(r, 30));
+  const rs = W.store.list().filter((r) => r.bot === old.bot);
+  check(rs.length === 2 && rs.every((r) => r.status === "cancelled" && /newer copy/.test(r.state.note ?? "")), "0.9.13: a retired strategy's bot that kept running is stopped, with a note", rs.map((r) => [r.status, r.state.note]));
+}
+
+// ─── 0.9.13: a strategy is rebuilt with new settings at most once every 12 hours ───────────────────────────────────
+{
+  let step = 0;
+  const W = world({ decision: () => {
+    step++;
+    if (step === 1) return { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, reason: "Dip buyer.", sources: ["s"] }] };
+    const id = W.bot.view().strategies[0].id;
+    return { assessment: "b", market_view: "neutral", confidence: 0.5, actions: [{ type: "adjust", strategy_id: id, params: { drop_pct: 5 + step }, reason: "Tweak.", sources: ["s"] }] };
+  } });
+  await W.bot.enable({});
+  await new Promise((r) => setTimeout(r, 30));
+  await W.bot.cycle(true);
+  const b1 = W.bot.view().strategies[0].bot;
+  W.advance(60 * 60_000); await W.bot.cycle(true);
+  const v = W.bot.view(), last = v.decisions[0].actions[0];
+  check(v.strategies[0].bot === b1 && last.applied === false && /12 hours/.test(last.outcome), "0.9.13: a second tweak an hour later is left alone", last);
+  W.advance(12 * 3600_000); await W.bot.cycle(true);
+  check(W.bot.view().strategies[0].bot !== b1, "0.9.13: after 12 hours it can change again");
+}
+// ─── 0.9.13: an assistant can't replace one of Autopilot's rules ────────────────────────────────────────────────────
+{
+  const st = new RuleStore(tmp());
+  const ap = await st.add({ kind: "limit_buy", chain: "solana", token: "SOL", amount_usd: 5, trigger_price: 90 }, "agent", true, "superbot");
+  const err = await st.add({ kind: "limit_buy", chain: "solana", token: "SOL", amount_usd: 6, trigger_price: 91, replaces: ap.id }, "agent", true, "claude").then(() => "", (e) => (e as Error).message);
+  check(/belongs to Autopilot/.test(err) && st.list().length === 1, "0.9.13: replacing an Autopilot rule from an assistant is refused", err);
+}
+
+// ─── 0.9.13: the chat sees everything Autopilot does (autopilot_status) ─────────────────────────────────────────────
+{
+  const W = world({ decision: () => ({ assessment: "Quiet market; adding a dip buyer.", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, reason: "Dip buyer for a quiet week.", sources: ["s"] }] }) });
+  const { autopilotReport } = await import("../src/superbot.js");
+  check(autopilotReport({ dir: W.dir, rules: () => W.store }).on === false, "0.9.13: before it's on, the report says so");
+  await W.bot.enable({ budget_usd: 100 });
+  await new Promise((r) => setTimeout(r, 30));
+  const r = autopilotReport({ dir: W.dir, rules: () => W.store }) as any;
+  const st = r.strategies[0], d = r.decisions.find((x: any) => x.by === "strategist");
+  check(r.on && r.settings.budget_usd === 100 && st && st.template === "dip" && st.money === "practice" && st.rules.length === 2 && /Buy/.test(st.rules[0].description), "0.9.13: the report has its settings and each strategy with its stage and rules", st);
+  check(d && /dip buyer/.test(d.assessment) && d.actions[0].type === "propose" && d.actions[0].applied === true && /quiet week/.test(d.actions[0].reason), "0.9.13: and its decisions, with the reason and what happened", d);
+}
+
+// ─── 0.9.13: the chat steers Autopilot: a strategy it asked for, standing notes, settings through Approvals ───────
+{
+  const W = world();
+  await W.bot.enable({ budget_usd: 100, tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
+  await new Promise((r) => setTimeout(r, 30));
+  const res = await W.bot.ownerAsk({ template: "dip", chain: "base", token: "ETH", params: { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, reason: "You asked for a dip buyer." });
+  const v = W.bot.view();
+  check(res.applied && v.strategies.some((x: any) => x.template === "dip" && x.stage === "paper"), "0.9.13: a strategy the owner asked for becomes one of Autopilot's, on paper", res);
+  const again = await W.bot.ownerAsk({ template: "dip", chain: "base", token: "ETH", params: {} });
+  check(!again.applied && /already running/.test(again.outcome), "0.9.13: and asking twice doesn't make a double", again);
+  check(v.decisions.some((d: any) => /You asked for a dip/.test(d.assessment)), "0.9.13: the log says the owner asked for it");
+  const n1 = await W.bot.setNote("add", "Be careful this week"); await W.bot.setNote("add", "be careful this week"); const n2 = await W.bot.setNote("add", "No meme coins");
+  check(n1.length === 1 && n2.length === 2, "0.9.13: notes are kept once each", n2);
+  W.advance(SUPERBOT.rethink[1] * 60_000 + 1000); await W.bot.cycle(true);
+  check(JSON.stringify(W.calls.at(-1)?.body?.context?.owner_notes) === JSON.stringify(["Be careful this week", "No meme coins"]), "0.9.13: Autopilot's next decision gets the owner's notes", W.calls.at(-1)?.body?.context?.owner_notes);
+  check((await W.bot.setNote("remove", "no meme coins")).length === 1 && (await W.bot.setNote("clear")).length === 0, "0.9.13: notes can be removed or cleared");
+  const { describeSetup, SetupKinds } = await import("../src/setups.js");
+  check(SetupKinds.autopilot_settings.safeParse({ pace: "max", per_trade_usd: 10 }).success && !SetupKinds.autopilot_settings.safeParse({ pace: "wild" }).success, "0.9.13: an Autopilot settings card only takes real settings");
+  check(/Autopilot's most per trade to \$10/.test(describeSetup("autopilot_settings", { per_trade_usd: 10 })) && /Autopilot run a Buy the dip bot on ETH/.test(describeSetup("autopilot_strategy", { template: "dip", chain: "base", token: "ETH" })), "0.9.13: the Approvals cards say what will change");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

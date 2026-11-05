@@ -22,7 +22,7 @@ import { checkToken, isCoreToken, loadExtraLists, searchEvm, searchSolana } from
 import { serverRunnable } from "./alwayson.js";
 import { isBotKind } from "./botlogic.js";
 import { buyLink } from "./buy.js";
-import { suggestedSizes } from "./superbot.js";
+import { autopilotReport, suggestedSizes } from "./superbot.js";
 import { budgetView } from "./appbudget.js";
 import { SETUP_KIND_NAMES, Setups, showSetup, type SetupKind } from "./setups.js";
 
@@ -142,8 +142,21 @@ export const ACTIONS = [
     description: "Recent price candles for ETH or SOL (open, high, low, close) with the period's change, high and low. Use it to judge trends and to set sensible trigger prices.",
     run: async (_w, a) => priceHistory(a) }),
   def({ name: "autopilot_propose", spends: false, schema: ProposeArgs,
-    description: "Set up autopilot rules: limit buy/sell, stop-loss, take-profit, trailing stop, recurring buy (DCA), grid, or an alert (kind \"alert\": notifies only, never trades; price above/below, a big 24h move, hourly RSI overbought/oversold, or crossing the 50-hour average). Give plain English in `text` (e.g. \"buy $25 of SOL every Monday; sell half my ETH if it rises 10% and all if it falls 8%\") or exact `rules`. Give each rule a short plain `reason`; to change an existing rule, propose its replacement with `replaces: <id>`. Unless the owner allows auto, rules wait for the owner to turn them on in the dashboard; fills follow the owner's limits.",
+    description: "Set up autopilot rules: limit buy/sell, stop-loss, take-profit, trailing stop, recurring buy (DCA), grid, or an alert (kind \"alert\": notifies only, never trades; price above/below, a big 24h move, hourly RSI overbought/oversold, or crossing the 50-hour average). Give plain English in `text` (e.g. \"buy $25 of SOL every Monday; sell half my ETH if it rises 10% and all if it falls 8%\") or exact `rules`. Give each rule a short plain `reason`; to change an existing rule, propose its replacement with `replaces: <id>`. Rules wait for the owner to turn them on in the wallet (only Autopilot acts on its own); fills follow the owner's limits.",
     run: async (w, a, ctx) => proposeRules(w, a, { neverAuto: ctx?.advisor, app: ctx?.app }) }),
+  // 0.9.13: the owner's standing instructions for Autopilot, kept from the chat. They shape its decisions, never its limits.
+  def({ name: "autopilot_note", spends: false, sets: true, schema: z.object({ action: z.enum(["add", "remove", "clear", "list"]), text: z.string().max(200).optional().describe("The instruction in the owner's words, e.g. \"be careful this week\"") }),
+    description: "Keep a standing instruction for Autopilot that the owner gave you (\"be careful this week\", \"no meme coins\", \"focus on SOL\"). Autopilot reads its notes before every decision. Add one only when the owner asks; remove it when they say it no longer applies. Notes never change a limit: for that, use setup_request autopilot_settings.",
+    run: async (w, a) => {
+      if (!w.hooks.autopilotNote) return { ok: false, refused: { code: "not_running", reason: "Autopilot isn't running here; open the wallet app." } };
+      if (a.action !== "list" && a.action !== "clear" && !a.text) return { ok: false, refused: { code: "bad_input", reason: "Give the note's text." } };
+      const notes = a.action === "list" ? (autopilotReport(w) as any).notes ?? [] : await w.hooks.autopilotNote(a.action, a.text);
+      return { ok: true, notes };
+    } }),
+  // 0.9.13: what Autopilot (the strategy feature that runs on its own) is doing and why, read-only.
+  def({ name: "autopilot_status", spends: false, schema: z.object({ decisions: z.number().int().min(1).max(40).optional().describe("How many recent decisions to include (default 15)") }),
+    description: "Everything Autopilot is doing, read-only: whether it's on or stopped by a loss limit, its settings and limits (budget, per-trade cap, pace, Active mode, Run 24/7), each strategy (stage: practice on paper or live with real money, its settings, trades, money earned, result, its rules and recent changes), the strategies it retired and why, its recent decisions with the reasons and what happened, and its daily reports. Use it to explain Autopilot to the owner; Autopilot changes its own strategies, so never try to change them.",
+    run: async (w, a) => autopilotReport(w, { decisions: a.decisions }) }),
   def({ name: "autopilot_rules", spends: false, schema: RulesListArgs,
     description: "The autopilot's rules with a plain description of each, status, last price seen, fills and any error.",
     run: async (w, a) => w.rules().list().filter((r) => !a.status || r.status === a.status).map(showRule) }),
@@ -161,17 +174,17 @@ export const ACTIONS = [
   // Tier 1 (below): done at once. Nothing here moves money or loosens a limit; the owner's limits, approvals and
   // each app's weekly budget still apply to every trade these set up.
   def({ name: "bot_templates", spends: false, schema: NoArgs,
-    description: "The ready-made bots the owner can run (steady buyer/DCA, buy the dip, protect a position, trailing stop, take-profit ladder, grid, Smart DCA, rebalancer, infinity grid, split order) with each one's fields, defaults and risk, plus the owner's per-app budgets. Fees: trades by Grid, Infinity grid and Smart DCA bots pay Tollkit 0.25% on each buy and each sell (0.5% round trip); every other trade pays 0.5%. A grid's levels must be at least 0.7% apart so each round trip keeps about 0.2% after fees; the default grid is ±8%, 16 levels (about 1.07% apart), $25 a level. Run 24/7 (trading while the wallet is closed) works for bots on Solana (SOL against USDC) and on Base (ETH against USDC), and for ETH orders on Base (steady buys, limits, take-profit, stop-loss); on other networks and tokens they trade only while the wallet is open.",
+    description: "The ready-made bots the owner can run (steady buyer/DCA, buy the dip, protect a position, trailing stop, take-profit ladder, grid, Smart DCA, rebalancer, infinity grid, split order) with each one's fields, defaults and risk, plus the owner's per-app budgets. Fees: trades by Grid, Infinity grid and Smart DCA bots pay Tollkit 0.25% on each buy and each sell (0.5% round trip); every other trade pays 0.5%. A grid's levels must be at least 0.7% apart so each round trip keeps about 0.2% after fees; the default grid is ±8%, 16 levels (about 1.07% apart), $25 a level. Run 24/7 (trading while the wallet is closed) works for bots on Solana (SOL against USDC) and on Base (ETH against USDC), for SOL orders on Solana (steady buys, limits, take-profit, stop-loss, trailing stops, signal trades, and a dip buy's take-profit that waits for it), and for ETH orders on Base (the same, except steps that wait for another rule); on other networks and tokens they trade only while the wallet is open.",
     run: async (w) => ({ templates: TEMPLATES, app_budgets: budgetView(w.dir), agent_rules: w.policy.agent_rules }) }),
   def({ name: "bot_preview", spends: false, sets: false, schema: BotArgs,
     description: "Preview a bot at today's price without starting it: the plain rules it would make. Use it to show the owner what a bot will do.",
     run: async (w, a) => { try { const b = await makeBot(w, a); return { ok: true, name: b.built.name, price: b.price ?? null, rules: b.built.rules.map(describeRule) }; } catch (e) { return bad(e); } } }),
   def({ name: "bot_start", spends: false, sets: true, schema: BotArgs.extend({ reason: z.string().max(300).optional().describe("One plain sentence on why, shown to the owner") }),
-    description: "Start a ready-made bot for the owner. Its trades follow the owner's limits and this app's weekly budget. Unless the owner allows auto, the bot waits for the owner to turn it on in the wallet.",
+    description: "Start a ready-made bot for the owner. Its trades follow the owner's limits and this app's weekly budget. The bot waits for the owner to turn it on in the wallet (only Autopilot acts on its own).",
     run: async (w, a, ctx) => {
       try {
         const b = await makeBot(w, a);
-        const auto = !ctx?.advisor && w.policy.agent_rules === "auto";
+        const auto = false /* 0.9.13: only Autopilot acts on its own; an app's rules wait for the owner */;
         const rules = b.built.rules.map((r) => ({ ...r, ...(a.reason ? { reason: a.reason } : {}) }));
         const made = await w.rules().addBot(rules, "agent", auto, ctx?.app);
         w.hooks.rulesChanged?.();
@@ -181,7 +194,7 @@ export const ACTIONS = [
     } }),
   def({ name: "bots_status", spends: false, schema: NoArgs,
     description: "Every bot and hand-made rule, grouped: status, trades, money in and out, result so far.",
-    run: async (w) => summarize(w.rules().list().filter((r) => !r.archived)) }),
+    run: async (w) => summarize(w.rules().list().filter((r) => !r.archived), w.hooks.livePrice) }),
   def({ name: "bot_control", spends: false, sets: true, schema: z.object({ bot: z.string().min(4).max(40).describe("The bot id from bots_status"), action: z.enum(["pause", "resume", "stop", "remove"]) }),
     description: "Pause, resume or stop a bot, or remove a stopped or finished one from the list (its trades stay in Activity).",
     run: async (w, a) => {
@@ -268,7 +281,9 @@ export const ACTIONS = [
       + "limits {per_trade_usd?, daily_trades_usd?, per_payment_usd?, daily_payments_usd?, per_seller_daily_usd?, approval_above_usd?, max_slippage_bps?, chains?, block_seller_warnings?, agent_rules?: propose|auto}; "
       + "withdraw_address {action: add|remove, chain, address, label?}; withdraw {chain, token, to (a saved address), amount}; move {asset: USDC|ETH, from, to, amount}; "
       + "cash_out {chain, asset, amount}; connect_app {app: claude|claude-code|cursor|vscode|codex|gemini}; "
-      + "app_budget {app, weekly_usd (null removes)}; always_budget {budget_usd}. Requests expire after a day.",
+      + "app_budget {app, weekly_usd (null removes)}; always_budget {budget_usd}; "
+      + "autopilot_strategy {template (bot_templates id), chain, token, params?}: Autopilot runs it as one of its own strategies (paper first, inside its budget and slots, no doubles); "
+      + "autopilot_settings {budget_usd?, per_trade_usd?, max_strategies?, max_token_pct?, daily_loss_pct?, weekly_loss_pct?, pace?: steady|active|max|adaptive, active_mode?, always_on?, tokens?: [{chain, token}]}. Requests expire after a day.",
     run: async (w, a, ctx) => { try { return { ok: true, request: showSetup(await new Setups(w.dir).add(a.kind, a.params, a.reason, ctx?.app ?? "An AI app")), note: "The owner will see this on the wallet's Approvals screen. Check setup_requests for what happened." }; } catch (e) { return bad(e); } } }),
   def({ name: "setup_requests", spends: false, schema: z.object({ status: z.enum(["waiting", "applied", "dismissed", "expired"]).optional() }),
     description: "Setup requests and what the owner did with them.",
@@ -325,7 +340,7 @@ export async function proposeRules(w: TollkitWallet, a: z.infer<typeof ProposeAr
   }
   if (!drafts.length) return { ok: false, refused: { code: "nothing_understood", reason: "No rules were understood. Try e.g. \"buy $25 of SOL every Monday\" or pass `rules`." }, unparsed };
   for (const d of drafts) { const why = ruleProblem(d); if (why) return { ok: false, refused: { code: "bad_rule", reason: `${describeRule(d)}: ${why}` }, unparsed }; }
-  const store = w.rules(), auto = !o.neverAuto && w.policy.agent_rules === "auto", made = [] as ReturnType<typeof showRule>[];
+  const store = w.rules(), auto = false /* 0.9.13: only Autopilot acts on its own */, made = [] as ReturnType<typeof showRule>[];
   for (const d of drafts) { try { made.push(showRule(await store.add(d, "agent", auto, o.app))); } catch (e) { return { ok: false, refused: { code: "bad_rule", reason: `${describeRule(d)}: ${(e as Error).message}` }, rules: made, unparsed }; } }
   w.hooks.rulesChanged?.();
   return {

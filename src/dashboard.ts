@@ -101,8 +101,10 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   paperPilot?.start();
   // The Bots screen: each bot's summary plus its next move and latest trades (0.8.5).
   const botsView = () => {
-    const live = w.rules().list().filter((r) => !r.archived), today = new Date().toISOString().slice(0, 10);
-    return summarize(live, livePrice).map((b) => {
+    // 0.9.13: one bot per Autopilot strategy: copies it replaced fold into the current bot, or drop out once stopped.
+    const fd = superbot?.botFold() ?? { fold: {}, hide: new Set<string>() };
+    const live = w.rules().list().filter((r) => !r.archived).map((r) => (r.bot && fd.fold[r.bot] ? { ...r, bot: fd.fold[r.bot] } : r)), today = new Date().toISOString().slice(0, 10);
+    return summarize(live, livePrice).filter((b) => !(fd.hide.has(b.id) && (b.status === "stopped" || b.status === "done"))).map((b) => {
       const rs = live.filter((r) => (r.bot ?? `rule-${r.id}`) === b.id), trades = botTrades(rs, 20);
       return { ...b, next: botNext(rs, b.last_price), trades, trades_today: trades.filter((t) => t.ok && t.ts.startsWith(today)).length, chartable: !!coinbaseProduct(b.token) || tape.series(b.chain, b.token).length > 1 };
     });
@@ -185,6 +187,9 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });
   if (o.watch !== false) superbot.start();
+  // 0.9.13: the AI chat keeps the owner's standing notes on Autopilot, and bot results use today's price.
+  w.hooks.autopilotNote = (op, text) => superbot!.setNote(op, text);
+  w.hooks.livePrice = livePrice;
   // 0.9.9: Run 24/7 knows when Autopilot is watching here, and what the server paused while it wasn't.
   w.alwaysSol().awayInfo = () => superbot?.awayInfo() ?? null;
   w.alwaysSol().onAway = (e) => superbot?.logAway(e);
@@ -215,6 +220,17 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const applySetup = async (r: SetupRequest, b: Record<string, any>): Promise<{ ok: true; note?: string; pending?: boolean; quote?: unknown; result?: unknown }> => {
     const q = r.params as any;
     switch (r.kind) {
+      // 0.9.13: from the AI chat, through the owner's Apply: Autopilot runs it, or changes how it works.
+      case "autopilot_strategy": {
+        if (!superbot) throw new Error("Autopilot isn't running here.");
+        const out = await superbot.ownerAsk({ template: q.template, chain: q.chain, token: q.token, params: q.params, reason: r.reason });
+        if (!out.applied) throw new Error(`Autopilot couldn't add it: ${out.outcome}.`);
+        return { ok: true, note: `Autopilot added it (${out.outcome}).` };
+      }
+      case "autopilot_settings": {
+        if (!superbot) throw new Error("Autopilot isn't running here.");
+        await superbot.setSettings(q); return { ok: true, note: "Autopilot's settings changed." };
+      }
       case "limits": {
         const next = PolicySchema.safeParse({ ...w.policy, ...q, withdraw_addresses: w.policy.withdraw_addresses });
         if (!next.success) throw new Error(next.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));

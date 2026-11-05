@@ -37,7 +37,9 @@ const rule = (x: any) => ({ id: "r1", status: "active", created_by: "owner", cre
 check(serverRunnable(rule({ kind: "dca", amount_usd: 10, every: "day" }), ["base"]) === null, "a recurring ETH buy on Base can run while closed");
 check(/Solana/.test(serverRunnable(rule({ kind: "dca", amount_usd: 10, every: "day", chain: "solana", token: "SOL" }), ["base"]) ?? ""), "Solana rules stay on the device");
 check(/ETH rules/.test(serverRunnable(rule({ kind: "dca", amount_usd: 10, every: "day", token: "WETH" }), ["base"]) ?? ""), "only ETH for now");
-check(/kind of rule/.test(serverRunnable(rule({ kind: "trailing_stop", trail_pct: 5, sell_percent: 50 }), ["base"]) ?? ""), "trailing stops stay on the device");
+check(serverRunnable(rule({ kind: "trailing_stop", trail_pct: 5, sell_percent: 50 }), ["base"]) === null, "0.9.13: a Base ETH trailing stop can run while closed");
+check(serverRunnable(rule({ kind: "signal_buy", amount_usd: 20, when: { signal: "rsi_below", tf: "1h" } }), ["base"]) === null && /its signal/.test(serverRunnable(rule({ kind: "signal_sell", sell_percent: 50 }), ["base"]) ?? ""), "0.9.13: Base signal trades can run while closed (with their signal)");
+check(/how far/.test(serverRunnable(rule({ kind: "trailing_stop", sell_percent: 50 }), ["base"]) ?? ""), "a trailing stop needs its distance");
 const K = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss", "grid", "smart_dca", "rebalance", "infinity_grid", "twap"];
 check(serverRunnable(rule({ kind: "grid", amount_usd: 25, lower_price: 2000, upper_price: 2600, levels: 16 }), ["base"], K) === null, "a Base ETH grid can run while closed when the server runs bots");
 check(/doesn't run this bot/.test(serverRunnable(rule({ kind: "grid", amount_usd: 25, lower_price: 2000, upper_price: 2600, levels: 16 }), ["base"]) ?? ""), "an older server that doesn't list bots: the bot stays on the device");

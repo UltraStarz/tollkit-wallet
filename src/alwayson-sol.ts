@@ -32,7 +32,7 @@ import { solanaInfo } from "./tokenlist.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
-const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss", "signal_buy", "signal_sell"];
+const KINDS = ["dca", "limit_buy", "limit_sell", "take_profit", "stop_loss", "trailing_stop", "signal_buy", "signal_sell"];
 /** SOL kept unwrapped for network fees and account rent. */
 export const SOL_RESERVE = 20_000_000n; // 0.02 SOL
 
@@ -96,10 +96,12 @@ export function solRunnable(r: Rule): string | null {
   if (!isSolRule(r) && !coinMint(r)) return "Only SOL and Solana coins (by their address) can run 24/7.";
   if (isBot(r)) return r.kind === "twap" && r.side === "sell" ? null : r.amount_usd ? null : "Needs a dollar amount.";
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
-  if (r.after || r.sell_from) return "Rules that wait for another rule run only while the app is open.";
+  // 0.9.13: a step that waits for another (a dip buy's take-profit) runs 24/7 on SOL; on other coins only while the app is open.
+  if ((r.after || r.sell_from) && !isSolRule(r)) return "On this coin, rules that wait for another rule run only while the app is open.";
+  if (r.kind === "trailing_stop" && !r.trail_pct) return "Needs how far it may fall.";
   if (isBuy(r) && !r.amount_usd) return "Needs a dollar amount.";
-  if (r.kind !== "dca" && !r.kind.startsWith("signal_") && !r.trigger_price) return "Needs a trigger price.";
-  if (!isBuy(r) && r.sell_amount === undefined && r.sell_percent === undefined) return "Needs an amount to sell.";
+  if (r.kind !== "dca" && r.kind !== "trailing_stop" && !r.kind.startsWith("signal_") && !r.trigger_price) return "Needs a trigger price.";
+  if (!isBuy(r) && r.sell_amount === undefined && r.sell_percent === undefined && !r.sell_from) return "Needs an amount to sell.";
   return null;
 }
 
@@ -349,6 +351,12 @@ export class SolAlwaysOn {
         if (v.done && (r.status === "active" || r.status === "paused")) r.status = "done";
       }
     });
+    // 0.9.13: a trailing stop the server watched keeps the highest price it saw.
+    const hi = Object.entries(state.rules ?? {}).filter(([, v]: any) => v && typeof v.high === "number");
+    if (hi.length) await store.mutate((rs) => { for (const [id, v] of hi as [string, any][]) { const r = rs.find((x) => x.id === id); if (r && r.kind === "trailing_stop" && v.high > (r.state.high ?? 0)) r.state.high = v.high; } });
+    // ...and a buy the server filled says exactly what it got, so the sell after it (sell_from) sells that, here or there.
+    const gt = Object.entries(state.rules ?? {}).filter(([, v]: any) => v && typeof v.got === "string" && /^\d+$/.test(v.got));
+    if (gt.length) await store.mutate((rs) => { for (const [id, v] of gt as [string, any][]) { const r = rs.find((x) => x.id === id); if (r && BigInt(v.got) > BigInt(r.state.bought_atomic ?? "0")) r.state.bought_atomic = v.got; } });
     if (state.delegate !== cfg.delegate) throw new Error("Tollkit's server named a different key than before; not changing anything.");
     // 0.9.9: what the server paused while no device was checking, once each, into Autopilot's decisions.
     const awayNew: AwayEntry[] = this.update((x) => { const seen = new Set(x.seen_away ?? []), key = (e: AwayEntry) => `${e.ts}|${e.rule_id}`; const n = (state.away_log ?? []).filter((e: AwayEntry) => e && !seen.has(key(e))); x.seen_away = [...seen, ...n.map(key)].slice(-300); return n; });
@@ -415,7 +423,20 @@ export class SolAlwaysOn {
     } else if (usdcAllowed > 0n) { ixs.push(createRevokeInstruction(usdcA, this.owner)); usdcAllowed = 0n; }
 
     // Sells: wrap the SOL each one may sell (fixed when it's turned on), and allow exactly that much.
-    const sells = solActive.filter((r) => !isBuy(r) && !isBot(r));
+    // 0.9.13: a sell of what an earlier step buys (sell_from). Once that buy has filled it sells exactly what it got;
+    // while the buy still waits, the server runs both, and the SOL it will buy is allowed (not wrapped) ahead of time.
+    const byId = new Map(store.list().map((r) => [r.id, r] as const)), onIds = new Set(solActive.map((r) => r.id));
+    const gotOf = (r: Rule) => { const f = r.sell_from ? byId.get(r.sell_from) : undefined; return f && f.status === "done" ? BigInt(f.state.bought_atomic ?? "0") : null; };
+    const waits = (id?: string) => { const f = id ? byId.get(id) : undefined; return !!f && f.status !== "done"; };
+    const linked: Record<string, { after?: string; sell_from?: string }> = {};
+    let linkRoom = 0n;
+    for (const r of solActive) {
+      const a = waits(r.after) ? r.after : undefined, sf = r.sell_from && waits(r.sell_from) ? r.sell_from : undefined;
+      if ((a && !onIds.has(a)) || (sf && !onIds.has(sf))) { problems[r.id] = "Runs 24/7 once the step before it is on 24/7 too."; continue; }
+      if (a || sf) linked[r.id] = { ...(a ? { after: a } : {}), ...(sf ? { sell_from: sf } : {}) };
+      if (sf) { const f = byId.get(sf)!, p = f.trigger_price || f.state.last_price || 0; if (p > 0 && f.amount_usd) linkRoom += BigInt(Math.ceil((f.amount_usd / p) * 1.05 * 1e9)); }
+    }
+    const sells = solActive.filter((r) => !isBuy(r) && !isBot(r) && !problems[r.id] && !linked[r.id]?.sell_from).map((r) => { const g = gotOf(r); return g !== null ? { ...r, sell_amount: String(Number(g) / 1e9), sell_percent: undefined } as Rule : r; });
     const sigKey = (r: Rule) => JSON.stringify([r.kind, r.sell_amount, r.sell_percent, r.trigger_price, r.group, r.state.runs]);
     const free = lamports > SOL_RESERVE ? lamports - SOL_RESERVE : 0n;
     const set: Record<string, { key: string; lamports: string }> = {};
@@ -459,8 +480,8 @@ export class SolAlwaysOn {
     const fixT = Object.entries(splitTotal);
     if (fixT.length) await this.o.rules().mutate((rs) => { for (const [id, t] of fixT) { const x = rs.find((y) => y.id === id); if (x && !x.state.bot?.sell_total) x.state.bot = { ...(x.state.bot ?? {}), sell_total: t }; } });
     if (px > 0) botRoom = BigInt(Math.ceil((Number(usdcAllowed) / 1e6 / (px * 0.5)) * 1e9));
-    const target = wrapTarget(sells.filter((r) => !problems[r.id]), amounts) + botWrap, allow = target + botRoom;
-    if (target > 0n || botRoom > 0n) {
+    const target = wrapTarget(sells.filter((r) => !problems[r.id]), amounts) + botWrap, allow = target + botRoom + linkRoom;
+    if (target > 0n || botRoom > 0n || linkRoom > 0n) {
       if (wsolBal < target) {
         const add = target - wsolBal;
         if (add > free) for (const r of [...sells, ...bots]) problems[r.id] ??= `Not enough SOL: setting this aside needs ${(Number(add) / 1e9).toFixed(4)} SOL more, plus 0.02 SOL for fees.`;
@@ -470,7 +491,7 @@ export class SolAlwaysOn {
           wsolBal = target;
         }
       }
-      if (!wsolMade && botRoom > 0n) { ixs.push(createAssociatedTokenAccountIdempotentInstruction(this.owner, wsolA, this.owner, new PublicKey(WSOL_MINT))); wsolMade = true; }
+      if (!wsolMade && (botRoom > 0n || linkRoom > 0n)) { ixs.push(createAssociatedTokenAccountIdempotentInstruction(this.owner, wsolA, this.owner, new PublicKey(WSOL_MINT))); wsolMade = true; }
       const short = [...sells, ...bots].some((r) => problems[r.id]?.startsWith("Not enough SOL"));
       // Plain sells allow exactly what's set aside; with bots on, re-sign when it no longer covers what they hold, or the USDC side was refilled.
       if (!short && (bots.length ? wsolAllowed < target || l.dirty || usdcRefilled : wsolAllowed !== allow)) { ixs.push(createApproveInstruction(wsolA, delegate, this.owner, allow)); wsolAllowed = allow; }
@@ -560,7 +581,8 @@ export class SolAlwaysOn {
     const body = { ...(this.paceInfo?.() === "adaptive" ? { ap_pace: "adaptive" } : {}), ...(away ? { away } : {}), ...(brain || adopted.length ? { brain: { ...(brain ?? { on: false }), adopted } } : {}), rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
         profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs,
         bot: { ...(r.state.bot ?? {}), ...(r.kind === "grid" ? { grid: r.state.grid } : {}), ...(splitTotal[r.id] ? { sell_total: splitTotal[r.id], v: (r.state.bot?.v ?? 0) + 1 } : {}) } })
-      : ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, sell_amount: !isBuy(r) ? sellAmt(r) : undefined, trigger_price: r.trigger_price,
+      : ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, sell_amount: !isBuy(r) && !linked[r.id]?.sell_from ? sellAmt(r) : undefined, trigger_price: r.trigger_price,
+      ...(linked[r.id] ?? {}), ...(r.kind === "trailing_stop" ? { trail_pct: r.trail_pct, high: r.state.high } : {}),
       every: r.every, times: r.times, max_price: r.max_price, group: r.group, expires_at: r.expires_at, runs: r.state.runs, next_run: r.state.next_run, ...(r.when ? { when: r.when } : {}) })) };
     let running: string[] = l0.running ?? [];
     try { const j = await this.call("sync", body); running = j.running ?? []; if (adopted.length) this.update((x) => { x.adopted = (x.adopted ?? []).filter((id) => !adopted.includes(id)); }); }

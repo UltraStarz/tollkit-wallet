@@ -16,8 +16,9 @@ const rule = (x: any) => ({ id: "r1", status: "active", created_by: "owner", cre
 check(solRunnable(rule({ kind: "dca", amount_usd: 5, every: "day" })) === null, "a recurring SOL buy can run 24/7");
 check(solRunnable(rule({ kind: "take_profit", trigger_price: 300, sell_percent: 50 })) === null, "a SOL take-profit can run 24/7");
 check(/Only SOL/.test(solRunnable(rule({ kind: "dca", amount_usd: 5, every: "day", token: "BONK" })) ?? ""), "only SOL for now");
-check(/kind of rule/.test(solRunnable(rule({ kind: "trailing_stop", trail_pct: 5, sell_percent: 50 })) ?? ""), "trailing stops stay on the device");
-check(/another rule/.test(solRunnable(rule({ kind: "take_profit", trigger_price: 300, sell_percent: 50, sell_from: "x" })) ?? ""), "bot steps that wait for another rule stay on the device");
+check(solRunnable(rule({ kind: "trailing_stop", trail_pct: 5, sell_percent: 50 })) === null, "0.9.13: a SOL trailing stop can run 24/7");
+check(solRunnable(rule({ kind: "take_profit", trigger_price: 300, sell_from: "x", after: "x" })) === null, "0.9.13: a SOL step that sells what an earlier step bought can run 24/7");
+check(/another rule/.test(solRunnable(rule({ kind: "take_profit", trigger_price: 300, sell_from: "x", token: "Dz9mQ9NzkBcCsuGPFJ3r1bS4wgqKMHBPiVuniW8Mbonk" })) ?? ""), "on other coins, steps that wait for another rule stay on the device");
 check(sellLamports(rule({ kind: "stop_loss", sell_percent: 50 }) as any, 1_000_000_000n) === 500_000_000n && sellLamports(rule({ kind: "stop_loss", sell_amount: "5" }) as any, 1_000_000_000n) === 1_000_000_000n, "a sell sets aside its share, never more than is free");
 check(wrapTarget([rule({ id: "a", group: "g" }), rule({ id: "b", group: "g" }), rule({ id: "c" })] as any, { a: 3n, b: 5n, c: 2n }) === 7n, "a take-profit and its stop-loss share the same SOL");
 check(wrapTarget([rule({ id: "a", sell_percent: 100 }), rule({ id: "b", sell_percent: 100 }), rule({ id: "c", sell_amount: "1" }), rule({ id: "d", sell_amount: "1" })] as any, { a: 9n, b: 9n, c: 2n, d: 2n }) === 13n, "two \"sell all\" rules (a stop and a take-profit the AI set up separately) share one set-aside; fixed amounts each get their own");
@@ -187,6 +188,31 @@ check(out.running.length === 0 && /Not turned on/.test(out.problems[dca.id] ?? "
   check(sent.length === n1, "two or more buys of room: left alone");
   s3.setCap(80); await s3.sync();
   check(s3.view().usd_cap === 80 && accts[usdcA]!.delegated === 80_000_000n, "Settings raises the cap, and it's signed at the next sync");
+}
+// 0.9.13: a dip buyer runs 24/7 as a pair: the buy, and its take-profit waiting on it; the SOL it will buy is allowed, not wrapped.
+{
+  const dir5 = mkdtempSync(path.join(os.tmpdir(), "aos-")), store5 = new RuleStore(dir5);
+  const s5 = new SolAlwaysOn({ key: () => kp, address: OWN, dir: dir5, rpc: "x", proxy: "https://api.tollkit.dev/wallet", rules: () => store5, chain, fetch: fakeFetch });
+  Object.assign(accts[usdcA]!, { amount: 200_000_000n, delegate: null, delegated: 0n });
+  Object.assign(accts[wsolA]!, { exists: false, amount: 0n, delegate: null, delegated: 0n });
+  const ids = await store5.addBot([{ kind: "limit_buy", chain: "solana", token: "SOL", amount_usd: 20, trigger_price: 100 }, { kind: "take_profit", chain: "solana", token: "SOL", trigger_price: 102, after: "@0", sell_from: "@0" }] as any, "owner", true);
+  const [b5, t5] = store5.list();
+  void ids;
+  s5.set(b5!.id, true, 50); s5.set(t5!.id, true);
+  const o5 = await s5.sync();
+  check(o5.running.includes(b5!.id) && o5.running.includes(t5!.id) && !o5.problems[t5!.id], "the dip buy and its take-profit both go to the server", o5.problems);
+  const sentRules = calls.filter((c) => c.route === "sync").at(-1)!.body.rules, tp = sentRules.find((r: any) => r.id === t5!.id);
+  check(tp.after === b5!.id && tp.sell_from === b5!.id && tp.sell_amount === undefined, "the take-profit says which step it waits for, and sells what that step buys", tp);
+  check(accts[wsolA]!.delegated >= 200_000_000n && accts[wsolA]!.amount === 0n, "the SOL the buy will get (about 0.2 SOL at $100) is allowed ahead of time, nothing wrapped", { allowed: accts[wsolA]!.delegated, wrapped: accts[wsolA]!.amount });
+  // only the take-profit on 24/7: it has to wait for its buy to be on too
+  s5.set(b5!.id, false); const o6 = await s5.sync();
+  check(/step before it/.test(o6.problems[t5!.id] ?? ""), "a take-profit whose buy isn't on 24/7 says why", o6.problems);
+  // a trailing stop carries its distance and its highest price
+  const tr = await store5.add({ kind: "trailing_stop", chain: "solana", token: "SOL", trail_pct: 5, sell_percent: 10 }, "owner", true);
+  await store5.mutate((rs) => { rs.find((x) => x.id === tr.id)!.state.high = 120; });
+  s5.set(t5!.id, false); s5.set(tr.id, true); lamports = 2_000_000_000n; await s5.sync();
+  const trs = calls.filter((c) => c.route === "sync").at(-1)!.body.rules.find((r: any) => r.id === tr.id);
+  check(trs && trs.trail_pct === 5 && trs.high === 120, "a trailing stop goes to the server with its distance and highest price", trs);
 }
 console.log(`\nalwayson-sol: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
