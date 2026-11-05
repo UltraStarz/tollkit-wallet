@@ -60,6 +60,9 @@ await page.route("**/api/state", async (r) => {
   const st = await (await r.fetch()).json();
   st.prices = { prices: { ...DEMO.prices, WETH: DEMO.prices.ETH }, at: new Date().toISOString() };
   st.backup = { ...st.backup, done: true };
+  // Stand-ins for the token-check and Connect your AI shots (the address is blurred in the picture).
+  st.holdings = st.holdings ?? { hidden: 0 };
+  st.connect = { ...(st.connect ?? {}), remote: { on: true, online: true, url: "https://tollkit.dev/c/example-private-connector-address-0000000000" } };
   st.devices = { ...(st.devices ?? {}), on: true, devices: [{ id: "d1", name: "Chrome" }, { id: "d2", name: "iPhone" }], last_sync: new Date().toISOString(), last_error: null };
   const apIds = new Set([apLive, apPaper]), liveIds = st.rules.filter((r: any) => r.bot === apLive).map((r: any) => r.id);
   st.autopilot = { ...st.autopilot, here: true, last_tick: new Date().toISOString() };
@@ -94,7 +97,26 @@ async function shot(name: string, setup: () => Promise<void>) {
 await page.goto(dash.url);
 await shot("home", async () => { await page.waitForSelector("#tot"); });
 await shot("autopilot", async () => { await page.evaluate(() => (window as any).go("pilot")); });
-await shot("bots", async () => { await page.evaluate(() => (window as any).go("autopilot")); });
+await shot("bots", async () => { await page.evaluate(() => { (window as any).go("autopilot"); window.scrollTo(0, 0); }); await page.waitForTimeout(300); await page.evaluate(() => window.scrollTo(0, 0)); });
+// Token check: a made-up token with two warnings, the way the check shows a risky one.
+await shot("scamcheck", async () => {
+  await page.evaluate(`go("home")`); await page.waitForTimeout(500);
+  const fill = `(function(){ADDT=true;AT.chain="base";AT.q="0x1234567890123456789012345678901234567890";AT.confirm=false;
+    AT.chk={chain:"base",address:"0x1234567890123456789012345678901234567890",symbol:"FAKE",name:"Fake USD",trust:"unknown",
+      warnings:["No on-chain pool pairs this token with USDC, so it may be hard to sell.","The owner can create more tokens."],powers:[],facts:["Total supply 1,000,000,000.","Not on the wallet's token lists."]};
+    render();var el=document.querySelector(".addt");if(el)el.scrollIntoView({block:"end"});return !!el})()`;
+  console.log("token check card:", await page.evaluate(fill));
+  await page.waitForTimeout(400); await page.evaluate(fill);
+});
+// Connect your AI: a stand-in address, blurred, like a private one would be.
+await shot("connect", async () => {
+  await page.evaluate(`(function(){ADDT=false;AT.chk=null;go("home");window.scrollTo(0,0)})()`); await page.waitForTimeout(400);
+  const fill = `(function(){if(!AIO)openAI();else aiRender();
+    if(!document.getElementById("blurai")){var st=document.createElement("style");st.id="blurai";st.textContent="#ai-url,[id^=ai-url]{filter:blur(6px)}";document.head.appendChild(st)}
+    var a=document.activeElement;if(a&&a.blur)a.blur();var dl=document.querySelector(".aidlg");if(dl)dl.scrollTop=0;return !!document.querySelector("[id^=ai-url]")})()`;
+  await page.evaluate(fill); await page.waitForTimeout(500);
+  console.log("connector address shown:", await page.evaluate(fill));
+});
 if (process.argv.includes("--probe")) {
   const st = await (await page.request.get(dash.url.replace(/\/?(\?.*)?$/, "") + "/api/state", { headers: { "x-tw-token": new URL(dash.url).searchParams.get("t") ?? "" } })).json().catch((e) => String(e));
   console.log(dash.url, typeof st === "string" ? st : Object.keys(st));
