@@ -1757,7 +1757,7 @@ var it=function(k,label,why){return '<button role="menuitem" onclick="MNU=false;
 m.innerHTML=it("settings","Settings",w.settings?"Not backed up":"")+it("approvals","Approvals",w.approvals?w.approvals.n+" waiting":"")+it("withdraw","Send","");m.hidden=false;var f=m.querySelector("button");if(f)f.focus()}
 document.addEventListener("click",function(e){if(MNU&&!e.target.closest("#mnu")&&!e.target.closest("#menub")){MNU=false;menuR()}});
 document.addEventListener("keydown",function(e){if(MNU&&e.key==="Escape"){MNU=false;menuR();var b=document.getElementById("menub");if(b)b.focus()}});
-function go(k){if(k==='settings'&&tab!=='settings')SETP=null;if(k===tab&&!flash)return;var changed=k!==tab;if(TABS.indexOf(tab)>=0)LASTTAB=tab;if(MNU){MNU=false;menuR()}tab=k;flash=null;render(true);if(changed){var mm=document.getElementById("main");if(mm)mm.scrollTop=0}}
+function go(k){if(k==='settings'&&tab!=='settings')SETP=null;if(k===tab&&!flash)return;var changed=k!==tab;if(TABS.indexOf(tab)>=0)LASTTAB=tab;if(MNU){MNU=false;menuR()}tab=k;flash=null;var m0=document.getElementById("main");if(changed&&m0)m0.style.paddingBottom="";render(true);if(changed){var mm=document.getElementById("main");if(mm)mm.scrollTop=0}}
 // 0.9.6: a message animates in once. The screen redraws every few seconds; before, each redraw replayed the
 // animation, so a "Saved." seemed to pop up again and again. Good news now clears itself after a few seconds.
 var FL=null,FLR=0;
@@ -1819,8 +1819,14 @@ var HT="tokens";try{HT=localStorage.getItem("tk_ht")||"tokens"}catch(e){}
 function setHT(k){HT=k;try{localStorage.setItem("tk_ht",k)}catch(e){}render()}
 // 0.9.3: the same tabs on Autopilot, Bots, Orders and Activity. Picked tab is kept while the panel is open.
 var PT={};
-function setPT(pg,k){PT[pg]=k;LASTAP=null;render();var m=document.getElementById("main");if(m)m.scrollTop=0}
-function pgTabs(pg,L,cur){return '<div class="htabs" role="tablist">'+L.map(function(t){return '<button role="tab" aria-selected="'+(cur===t[0])+'" class="'+(cur===t[0]?"on":"")+'" onclick="setPT(\''+pg+'\',\''+t[0]+'\')">'+t[1]+(t[2]?'<span class="htn">'+t[2]+'</span>':'')+'</button>'}).join("")+'</div>'}
+// Nov 6: switching a sub-tab keeps the tab bar where it was on screen (no jump to the top).
+function setPT(pg,k){var q='.htabs[data-pt="'+pg+'"]',b0=document.querySelector(q),y0=b0?b0.getBoundingClientRect().top:null,mn=document.getElementById("main");
+ PT[pg]=k;LASTAP=null;render();
+ var b1=document.querySelector(q);mn=document.getElementById("main");if(y0===null||!b1||!mn)return;var d=b1.getBoundingClientRect().top-y0;if(Math.abs(d)<1)return;
+ // a shorter tab: add room at the bottom (kept until the page changes) so the bar can stay where it was
+ var want=Math.max(0,mn.scrollTop+d);mn.scrollTop=want;
+ for(var i=0;i<3&&mn.scrollTop<want-1;i++){mn.style.paddingBottom=((parseFloat(getComputedStyle(mn).paddingBottom)||0)+want-mn.scrollTop)+"px";mn.scrollTop=want}}
+function pgTabs(pg,L,cur){return '<div class="htabs" role="tablist" data-pt="'+pg+'">'+L.map(function(t){return '<button role="tab" aria-selected="'+(cur===t[0])+'" class="'+(cur===t[0]?"on":"")+'" onclick="setPT(\''+pg+'\',\''+t[0]+'\')">'+t[1]+(t[2]?'<span class="htn">'+t[2]+'</span>':'')+'</button>'}).join("")+'</div>'}
 function homeTabs(){var L=[["tokens","Tokens"],["live","Live"],["trades","Trades"],["deposit","Deposit"]],dot=liveEv().length>0;return '<div class="htabs" role="tablist">'+L.map(function(t){return '<button role="tab" aria-selected="'+(HT===t[0])+'" class="'+(HT===t[0]?"on":"")+'" onclick="setHT(\''+t[0]+'\')">'+t[1]+(t[0]==="live"&&dot?'<span class="livedot"></span>':'')+'</button>'}).join("")+'</div>'}
 function tradesTab(){var r=(S.receipts||[]).filter(function(e){return e.kind==="trade"}).slice(0,8);if(!r.length)return '<div class="htempty">No trades yet. Swaps, orders, bots and Autopilot trades show here.</div>';return r.map(actRow).join("")+'<button class="htmore" onclick="go(\'activity\')">All activity</button>'}
 function depositTab(){return '<div class="htnote sm mut">Send coins to these addresses to add them to this wallet.</div><div class="row">'+chainIcon("base","ethereum")+'<div><div class="sm mut">'+EVMNAMES+'</div><div class="addr" title="'+esc(S.addresses.evm)+'">'+esc(short(S.addresses.evm))+'</div></div>'+cpBtn(S.addresses.evm)+'</div><div class="row">'+chainIcon("solana")+'<div><div class="sm mut">Solana</div><div class="addr" title="'+esc(S.addresses.solana)+'">'+esc(short(S.addresses.solana))+'</div></div>'+cpBtn(S.addresses.solana)+'</div>'+bkLink()}
