@@ -29,6 +29,25 @@ const g = conn([null], 10);
 let e4 = ""; try { await sendAndConfirm(g.c, tx(), [kp], { pollMs: 1, maxMs: 30 }); } catch (e) { e4 = (e as Error).message; }
 check(/still waiting/.test(e4) && !/nothing changed/.test(e4), "not expired yet but out of time: doesn't claim nothing happened", e4);
 
+// Nov 5: plain transactions pay a priority fee (going rate, kept in bounds) and try once more after being dropped.
+{
+  const t = tx(); const a2 = conn([null, { confirmationStatus: "confirmed" }]);
+  a2.c.getRecentPrioritizationFees = async () => [{ prioritizationFee: 0 }, { prioritizationFee: 50_000 }, { prioritizationFee: 90_000 }, { prioritizationFee: 9_000_000 }];
+  await sendAndConfirm(a2.c, t, [kp], { pollMs: 1 });
+  const cb = t.instructions.filter((i) => i.programId.toBase58() === "ComputeBudget111111111111111111111111111111");
+  const price = cb.length === 2 ? Number(cb[1]!.data.readBigUInt64LE(1)) : -1;
+  check(cb.length === 2 && price === 2_000_000, "adds a unit limit and a priority price, capped at 2,000,000", price);
+  const t2 = tx(); const a3 = conn([null]); a3.c.getRecentPrioritizationFees = async () => [];
+  await sendAndConfirm(a3.c, t2, [kp], { pollMs: 1, maxMs: 1 }).catch(() => {});
+  const p2 = Number(t2.instructions[1]!.data.readBigUInt64LE(1));
+  check(p2 === 20_000, "no recent fees: the minimum price", p2);
+  let calls = 0, h = 101; const st2: any[] = [null, null, { confirmationStatus: "confirmed" }]; let si = 0;
+  const r: any = { getLatestBlockhash: async () => { calls++; return { blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 }; }, sendRawTransaction: async () => "SIG",
+    getSignatureStatuses: async (_s: any, opt?: any) => ({ value: [calls >= 2 ? { confirmationStatus: "confirmed" } : null] }), getBlockHeight: async () => (calls >= 2 ? 10 : h) };
+  check(await sendAndConfirm(r, tx(), [kp], { pollMs: 1 }) === "SIG" && calls === 2, "dropped once: tries again with a fresh blockhash and lands", calls);
+  void st2; void si;
+}
+
 // 0.9.12: resends at every check until it lands; after JITO_ALONE_MS they go the normal way too.
 {
   const sent: boolean[] = []; let i = 0, now = 1_000_000;

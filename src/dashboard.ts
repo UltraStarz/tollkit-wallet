@@ -41,6 +41,9 @@ import { budgetView, setBudget } from "./appbudget.js";
 import { Setups, showSetup, needsPassword, type SetupRequest } from "./setups.js";
 import { catalogView, refreshCatalog, setHidden } from "./tollkit-tools.js";
 import { SuperBot, type SuperBotDeps } from "./superbot.js";
+import { solRunnable } from "./alwayson-sol.js";
+const BOT_KINDS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"];
+import { serverRunnable } from "./alwayson.js";
 import { loadTelegram } from "./wallet.js";
 import { notify } from "./telegram.js";
 
@@ -567,11 +570,54 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
             await alwaysSync();
             return send(res, 200, { always: w.always().view(), always_sol: w.alwaysSol().view() });
           }
+          // Nov 5: one switch for everything. Every bot and order that can run 24/7 is turned on, Autopilot's own Run 24/7
+          // too, then one sync (one transaction per network). Any that can't be set up go back off, with the reason.
+          if (b.action === "all_on") {
+            const [sc, ec] = await Promise.all([w.alwaysSol().config().catch(() => null), w.always().config().catch(() => null)]);
+            if (!sc?.enabled && !ec?.enabled) return send(res, 400, { error: sc?.reason ?? ec?.reason ?? "Can't reach Tollkit's server right now." });
+            const turned: string[] = [], skipped: Record<string, string> = {};
+            for (const r of w.rules().list()) {
+              if (!["active", "paused"].includes(r.status) || r.by === "superbot" || superbot?.isPaperRule(r.id)) continue;
+              if (b.scope === "bots" && !BOT_KINDS.includes(r.kind)) continue;
+              const sol = r.chain === "solana", ao = sol ? w.alwaysSol() : w.always();
+              if (ao.isOn(r.id)) continue;
+              const kinds = (sol ? (sc as any)?.kinds : (ec as any)?.kinds) as string[] | undefined;
+              const why = sol ? (!sc?.enabled ? "Not on Solana yet." : solRunnable(r) ?? (kinds && ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind) && !kinds.includes(r.kind) ? "TOLLkit's server doesn't run this bot 24/7 yet." : null))
+                : (!ec?.enabled ? "Not on this network yet." : serverRunnable(r, (ec as any).chains, kinds));
+              if (why) { skipped[r.id] = why; continue; }
+              ao.set(r.id, true); turned.push(r.id);
+            }
+            let ap = false;
+            const sv0 = superbot?.view() as any;
+            if (b.scope !== "bots" && superbot && sv0?.enabled && !sv0?.settings?.always_on) { await superbot.setSettings({ always_on: true }); ap = true; }
+            await alwaysSync();
+            const sv = w.alwaysSol().view(), ev = w.always().view(), failed: Record<string, string> = {};
+            for (const id of turned) {
+              const r = w.rules().get(id); if (!r) continue;
+              const v = r.chain === "solana" ? sv : ev, prob = v.problems[id];
+              if (prob && !v.running.includes(id)) { (r.chain === "solana" ? w.alwaysSol() : w.always()).set(id, false); failed[id] = prob; }
+            }
+            if (Object.keys(failed).length) await alwaysSync();
+            return send(res, 200, { always: w.always().view(), always_sol: w.alwaysSol().view(), turned_on: turned.length - Object.keys(failed).length, autopilot: ap, failed, skipped });
+          }
+          // Nov 5: the Bots page switch, off: every bot of the owner's stops running 24/7 (it keeps running while the app is open).
+          if (b.action === "bots_off") {
+            let n = 0;
+            for (const r of w.rules().list()) {
+              if (!BOT_KINDS.includes(r.kind) || r.by === "superbot") continue;
+              const ao = r.chain === "solana" ? w.alwaysSol() : w.always();
+              if (ao.isOn(r.id)) { ao.set(r.id, false); n++; }
+            }
+            await alwaysSync();
+            return send(res, 200, { always: w.always().view(), always_sol: w.alwaysSol().view(), turned_off: n });
+          }
           if (b.action === "off") {
             // Each network on its own: one failing doesn't keep the other on.
             const errs: string[] = [];
             if (b.chain !== "solana") await w.always().off().catch((e) => errs.push((e as Error).message));
             if (b.chain !== "evm" && w.alwaysSol().anyOn()) await w.alwaysSol().off().catch((e) => errs.push(`Solana: ${(e as Error).message}`));
+            // Nov 5: "Turn off all 24/7" in Settings also turns off Autopilot's own Run 24/7.
+            if (b.all === true) { const v = superbot?.view() as any; if (superbot && v?.settings?.always_on) await superbot.setSettings({ always_on: false }).catch((e) => errs.push((e as Error).message)); }
             if (errs.length) return send(res, 400, { error: errs.join(" ") });
             return send(res, 200, { always: w.always().view(), always_sol: w.alwaysSol().view() });
           }

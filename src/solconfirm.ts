@@ -6,16 +6,42 @@
  * exists, so confirmation would never arrive. This polls getSignatureStatuses instead, and gives up once the
  * transaction's blockhash can no longer land (getBlockHeight past lastValidBlockHeight).
  */
-import type { Connection, Keypair, Transaction } from "@solana/web3.js";
+import { ComputeBudgetProgram, type Connection, type Keypair, type Transaction } from "@solana/web3.js";
+
+/**
+ * Nov 5: plain transactions (the Run 24/7 allowance, sends, staking) now pay a priority fee like swaps do. Without
+ * one they were often dropped while Solana was busy ("Couldn't set the allowance: ... dropped"). The price is the
+ * recent going rate for the accounts it writes (75th percentile), kept between 20,000 and 2,000,000 micro-lamports
+ * per unit with a 300,000-unit limit: at most 0.0006 SOL, usually far less.
+ */
+export const PRIO_UNITS = 300_000, PRIO_MIN = 20_000, PRIO_MAX = 2_000_000;
+export async function priorityPrice(conn: Connection, tx: Transaction): Promise<number> {
+  try {
+    const keys = [...new Set(tx.instructions.flatMap((i) => i.keys.filter((k) => k.isWritable).map((k) => k.pubkey.toBase58())))].slice(0, 128);
+    const { PublicKey } = await import("@solana/web3.js");
+    const fees = (await (conn as any).getRecentPrioritizationFees({ lockedWritableAccounts: keys.map((k) => new PublicKey(k)) })) as { prioritizationFee: number }[];
+    const v = fees.map((f) => f.prioritizationFee).sort((a, b) => a - b);
+    const p = v.length ? v[Math.floor(v.length * 0.75)]! : 0;
+    return Math.min(PRIO_MAX, Math.max(PRIO_MIN, Math.ceil(p * 1.2)));
+  } catch { return PRIO_MIN * 5; }
+}
 
 export async function sendAndConfirm(conn: Connection, tx: Transaction, signers: Keypair[], o: { pollMs?: number; maxMs?: number } = {}): Promise<string> {
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
+  if (!tx.instructions.some((i) => i.programId.equals(ComputeBudgetProgram.programId))) {
+    const price = await priorityPrice(conn, tx);
+    tx.instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units: PRIO_UNITS }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: price }));
+  }
   if (!tx.feePayer) tx.feePayer = signers[0]!.publicKey;
-  tx.sign(...signers);
-  const raw = tx.serialize();
-  const sig = await conn.sendRawTransaction(raw, { preflightCommitment: "confirmed", maxRetries: 3 });
-  return pollSolana(conn, sig, lastValidBlockHeight, "transaction", { ...o, resend: () => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }) });
+  // Nov 5: dropped means nothing happened (its blockhash expired), so try once more with a fresh one before saying so.
+  for (let attempt = 0; ; attempt++) {
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = blockhash;
+    tx.sign(...signers);
+    const raw = tx.serialize();
+    const sig = await conn.sendRawTransaction(raw, { preflightCommitment: "confirmed", maxRetries: 3 });
+    try { return await pollSolana(conn, sig, lastValidBlockHeight, "transaction", { ...o, resend: () => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }) }); }
+    catch (e) { if (attempt >= 1 || !/network dropped/.test((e as Error).message)) throw e; }
+  }
 }
 
 /** How long a swap goes only through Jito before its resends also go the normal way (see pollSolana's `resend`). */
