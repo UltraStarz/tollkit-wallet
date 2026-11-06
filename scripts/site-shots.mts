@@ -43,7 +43,7 @@ writeFileSync(path.join(dir, "superbot.json"), JSON.stringify({
 }));
 const dash = await startDashboard(w, PW, { port: 17499, watch: false, autopilot: false, ai: false, connectApps: false });
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 400, height: 820 }, colorScheme: "dark" });
+const page = await browser.newPage({ viewport: { width: 400, height: 820 }, deviceScaleFactor: 3, colorScheme: "dark" });
 // ---- example numbers ---------------------------------------------------------------------------------
 const DEMO = {
   balances: { base: [{ token: "ETH", amount: "3.85" }, { token: "USDC", amount: "3180" }], solana: [{ token: "SOL", amount: "96.4" }, { token: "USDC", amount: "4200" }] },
@@ -60,6 +60,7 @@ await page.route("**/api/state", async (r) => {
   const st = await (await r.fetch()).json();
   st.prices = { prices: { ...DEMO.prices, WETH: DEMO.prices.ETH }, at: new Date().toISOString() };
   st.backup = { ...st.backup, done: true };
+  st.ui_prefs = { ...(st.ui_prefs ?? {}), tour_done: "1" }; // no first-run card in the website shots
   // Stand-ins for the token-check and Connect your AI shots (the address is blurred in the picture).
   st.holdings = st.holdings ?? { hidden: 0 };
   st.connect = { ...(st.connect ?? {}), remote: { on: true, online: true, url: "https://tollkit.dev/c/example-private-connector-address-0000000000" } };
@@ -85,7 +86,7 @@ async function shot(name: string, setup: () => Promise<void>) {
   // The site uses WebP; Chromium encodes it (no image tools needed).
   const enc = await browser.newPage();
   const b64 = await enc.evaluate(async (src) => { const i = new Image(); i.src = src; await i.decode(); const c = document.createElement("canvas"); c.width = i.width; c.height = i.height;
-    c.getContext("2d")!.drawImage(i, 0, 0); return c.toDataURL("image/webp", 0.86).split(",")[1]; }, "data:image/png;base64," + png.toString("base64"));
+    c.getContext("2d")!.drawImage(i, 0, 0); return c.toDataURL("image/webp", 0.9).split(",")[1]; }, "data:image/png;base64," + png.toString("base64"));
   await enc.close();
   writeFileSync(path.join(OUT, `${name}.webp`), Buffer.from(b64, "base64"));
 }
@@ -95,7 +96,7 @@ async function shot(name: string, setup: () => Promise<void>) {
   // A string, not a function: tsx's helpers don't exist in the page.
   await page.addInitScript(`(()=>{const d=new Date();localStorage.setItem("tk_day",JSON.stringify({date:d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate(),since:new Date(new Date().setHours(0,0,0,0)).getTime(),p:${JSON.stringify(p)}}))})()`); }
 await page.goto(dash.url);
-await shot("home", async () => { await page.waitForSelector("#tot"); });
+await shot("home", async () => { await page.waitForSelector("#tot"); await page.evaluate(() => window.scrollTo(0, 0)); await page.waitForTimeout(300); });
 await shot("autopilot", async () => { await page.evaluate(() => (window as any).go("pilot")); });
 await shot("bots", async () => { await page.evaluate(() => { (window as any).go("autopilot"); window.scrollTo(0, 0); }); await page.waitForTimeout(300); await page.evaluate(() => window.scrollTo(0, 0)); });
 // Token check: a made-up token with two warnings, the way the check shows a risky one.
