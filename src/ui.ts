@@ -704,6 +704,35 @@ button.b:hover,.aib:hover{background:var(--tkblue-hi)!important}
 .btns{display:flex;flex-wrap:wrap;gap:10px}.ap .btns{display:grid;gap:10px}.wact{gap:8px}.ap-acts{gap:10px}
 /* 0.9.13: an arrow or icon inside a button sits on the text's middle, not its baseline. */
 .ap-acts .b,.botcta{display:inline-flex;align-items:center;justify-content:center;gap:6px}.ap-acts .b svg,.botcta svg{flex:none;display:block}.tplbtns{gap:10px}
+.pp{--mono:ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:4px}
+.pp-head{display:grid;grid-template-columns:46px 1fr;gap:4px 12px;align-items:center;padding:14px;border-radius:16px;background:var(--surf);border:1px solid var(--line)}
+.pp-orb{flex:none;width:46px;height:46px;border-radius:50%;border:2px solid var(--line);display:flex;gap:5px;align-items:center;justify-content:center}.pp-orb span{width:5px;height:16px;border-radius:3px;background:var(--mut)}.pp-orb.on{border-color:#4a8eff;box-shadow:0 0 0 4px rgba(74,142,255,.12)}.pp-orb.on span{background:#4a8eff}
+.pp-title{font:800 17px -apple-system,system-ui,sans-serif;letter-spacing:-.01em}.pp-title span{color:#4a8eff}
+.pp-run{font:11.5px var(--mono);color:var(--mut);margin-top:3px;display:flex;align-items:center;gap:6px;white-space:nowrap}.pp-led{width:7px;height:7px;border-radius:50%;background:var(--mut)}.pp-led.on{background:var(--ok);box-shadow:0 0 8px var(--ok);animation:ppblink 1.6s infinite}
+.pp-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.pp-head .pp-chips{grid-column:2}.pp-chips span{font:10.5px var(--mono);padding:2px 6px;border-radius:6px;border:1px solid var(--line);color:var(--mut)}
+.pp-nums{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);text-align:left}.pp-nums b{display:block;font:700 16px var(--mono)}.pp-nums small{font:10px var(--mono);color:var(--mut)}
+.pp-lbl{font:600 10.5px var(--mono);letter-spacing:.06em;color:var(--mut);margin:16px 2px 8px;display:flex;justify-content:space-between}
+@keyframes ppblink{50%{opacity:.35}}
+.pp-k-read{--c:#4a8eff}.pp-k-meme{--c:#d55bea}.pp-k-think{--c:#6ea0ff}.pp-k-check{--c:#ff6b8a}.pp-k-size{--c:#9a85ff}.pp-k-test{--c:#f5a623}.pp-k-trade{--c:#2fcf8f}.pp-k-log{--c:#ff9a52}
+.pp-card{padding:12px 14px 11px;border-radius:14px;background:var(--surf);border:1px solid var(--line)}
+.pp-warn .pp-card{border-color:color-mix(in srgb,var(--warn) 50%,var(--line))}.pp-bad .pp-card{border-color:color-mix(in srgb,#ff6b6b 55%,var(--line))}
+.pp-hd{display:flex;align-items:center;gap:8px}
+.pp-ic{flex:none;width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:11px;color:var(--c);background:color-mix(in srgb,var(--c) 18%,transparent)}
+.pp-name{font:700 12.5px var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--c)}
+.pp-tag{margin-left:auto;font:700 9.5px var(--mono);letter-spacing:.08em;padding:2px 7px;border-radius:5px;color:var(--c);background:color-mix(in srgb,var(--c) 16%,transparent)}
+.pp-desc{font-size:12px;color:var(--mut);margin-top:6px}
+.pp-key{font:600 13px var(--mono);color:var(--c);margin-top:7px}
+.pp-meta{font:11px var(--mono);color:var(--mut);margin-top:4px}
+.pp-warn .pp-key{color:var(--warn)}.pp-bad .pp-key{color:#ff6b6b}.pp-idle .pp-key{color:var(--mut)}
+.pp-rail{margin-top:16px}.pp-st{position:relative}
+.pp-join{height:22px;display:flex;justify-content:center}.pp-join i{position:relative;width:2px;height:100%;border-radius:2px;background:linear-gradient(var(--c),color-mix(in srgb,var(--c) 15%,transparent));opacity:.55;overflow:hidden}
+.pp-rail.on .pp-join i:after{content:"";position:absolute;left:-1px;width:4px;height:8px;border-radius:2px;background:var(--c);box-shadow:0 0 8px var(--c);animation:ppdrop 1.8s ease-in infinite}
+.pp-st:last-child .pp-join{display:none}
+@keyframes ppdrop{0%{top:-8px;opacity:0}20%{opacity:1}100%{top:22px;opacity:0}}
+.pp-log{border-radius:14px;background:#05060a;border:1px solid var(--line);padding:8px 10px;max-height:340px;overflow:auto}
+.pp-l{display:grid;grid-template-columns:40px 58px 1fr;gap:8px;font:11.5px/1.45 var(--mono);padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)}.pp-l:last-child{border-bottom:0}
+.pp-t{color:var(--mut)}.pp-full{display:none}.pp-l.open .pp-full{display:inline}.pp-l.open .pp-sh{display:none}.pp-more{cursor:pointer}.pp-more .pp-sh:after{content:" ›";color:var(--mut)}.pp-k{font-weight:700;font-size:10px;letter-spacing:.05em;padding-top:1px}.pp-c-ok{color:var(--ok)}.pp-c-bad{color:#ff6b6b}.pp-c-q{color:var(--mut)}.pp-c-acc{color:#4a8eff}.pp-x{color:#c9ccd6;overflow-wrap:anywhere}
+@media (prefers-reduced-motion:reduce){.pp-rail.on .pp-join i:after,.pp-led.on{animation:none}}
 .qpk{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px;align-items:center}.qp{border:0;background:var(--surf2);color:var(--tx);border-radius:999px;padding:6px 12px;font:600 13px inherit;cursor:pointer}.qp.on{background:#1d4fc4;color:#fff}
 .aofix{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .sbq{grid-template-columns:repeat(4,1fr)!important}.sbq button{padding:10px 4px}
@@ -2070,6 +2099,48 @@ var prog="";if(x.stage==="paper"&&x.ready){prog='<div class="ap-prog ap-pass"><d
 else if(x.stage==="paper"){var pc=Math.round(Math.min(1,Math.max(x.days_in_stage/st.paper_days,x.trades/st.paper_trades))*100);prog='<div class="ap-prog'+(pc>=100?' ap-done':'')+'"><div class="lbl"><span>'+(pc>=100?'Trial done · not beating USDC yet':'Paper trial')+'</span><span>'+Math.min(x.days_in_stage,st.paper_days).toFixed(0)+' of '+st.paper_days+' days · '+Math.min(x.trades,st.paper_trades)+' of '+st.paper_trades+' trades</span></div><div class="bar"><i data-w="'+pc+'"></i></div></div>'}
 var more=open?'<div class="ap-more"><div class="ap-chips">'+Object.keys(x.params||{}).map(function(k){return '<span class="chip">'+esc(apParam(k,x.params[k]))+'</span>'}).join("")+'</div>'+(x.past&&x.past.length?'<div class="sm mut" style="margin-top:6px">Before this: '+x.past.map(function(p){return p.stage+" "+(p.result_pct===null?"—":p.result_pct+"%")+" after "+p.trades+" trades"}).join(", ")+'</div>':'')+(x.history&&x.history.length?'<div class="sm mut" style="margin-top:4px">'+esc(x.history[x.history.length-1].note)+'</div>':'')+'<div class="ap-acts2" onclick="event.stopPropagation()">'+(x.stage!=="retired"?'<button class="b g sbtn"'+(SB.stb===x.id?" disabled":"")+' onclick="apStop(\''+x.id+'\')">'+(SB.stb===x.id?"Stopping…":"Stop")+'</button>':'')+'<button class="b g sbtn no"'+(SB.rmb===x.id?" disabled":"")+' onclick="apRemove(\''+x.id+'\')">'+(SB.rmb===x.id?"Removing…":"Remove")+'</button></div></div>':"";
 return '<div class="ap-c'+(open?" open":"")+'" onclick="apTog(\'s:'+x.id+'\')"><div class="ap-s">'+tokIcon(sym,x.chain)+'<div class="ap-tx"><div class="nm">'+esc(x.symbol?x.name.replace(/ · [^·]*$/," · "+String(x.symbol).toUpperCase()):symText(x.name))+'</div><div class="meta"><span class="ap-stage '+x.stage+'">'+x.stage+'</span><span>'+(x.stage==="live"?x.days_in_stage+'d · ':'')+x.trades+' trade'+(x.trades===1?"":"s")+(x.failed?' · <span class="bad">'+x.failed+' failed</span>':'')+(x.stage==="live"&&(S.rules||[]).some(function(y){return !rIsAP(y)&&rOn(y)&&y.chain===x.chain&&String(y.token).toLowerCase()===String(x.token).toLowerCase()})?' · <span class="ap-ovl" title="Your own rule trades this token too. Autopilot only sells what this strategy bought.">you have a rule on it</span>':'')+'</span></div></div><div class="res">'+res+'</div></div>'+prog+more+'</div>'}
+// Nov 6: the Pipeline: what Autopilot is doing right now, stage by stage, from its real state (no made-up numbers),
+// then the log in terminal style: every decision and every trade, newest first, each with its reason.
+function pipeAgo(t){if(!t)return "never";var m=Math.round((Date.now()-Date.parse(t))/60000);return m<1?"just now":m<60?m+"m ago":m<1440?Math.round(m/60)+"h ago":Math.round(m/1440)+"d ago"}
+// A log line's first full sentence (never cut mid-word); the whole reason shows when the line is tapped.
+function pipeShort(t){t=String(t||"").trim();var m=/^(.+?[.!?])(\s|$)/.exec(t),f=m?m[1]:t;if(f.length>130){f=f.slice(0,130);f=f.slice(0,f.lastIndexOf(" ")>60?f.lastIndexOf(" "):130).replace(/[,;:]$/,"")+"…"}return f}
+function cap1(x){x=String(x||"");return x.charAt(0).toUpperCase()+x.slice(1)}
+function pipeHM(t){var d=new Date(t);return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)}
+function pipeHtml(b){var st=b.settings||{},S2=(b.strategies||[]).filter(function(x){return x.stage!=="retired"}),live=S2.filter(function(x){return x.stage==="live"}),paper=S2.filter(function(x){return x.stage==="paper"});
+var D=b.decisions||[],ai=D.filter(function(d){return d.by==="strategist"||d.by==="server"}),last=ai[0],mk=b.market||[],today=new Date().toDateString();
+var todayN=D.filter(function(d){return new Date(d.ts).toDateString()===today}).length,view=last&&last.market_view?String(last.market_view).replace(/_/g," "):"—";
+var ch=(st.chains||[])[0]||"solana",usdc=mvHave(ch,"USDC"),pool=Math.min(st.budget_usd||0,usdc==null?(st.budget_usd||0):usdc),share=Math.min(st.per_trade_usd||1e9,Math.floor(pool/Math.max(1,st.max_strategies||1)*100)/100);
+var falling=mk.filter(function(m){return m.state==="falling"}),rising=mk.filter(function(m){return m.state==="rising"});
+var act=last?(last.actions||[]).filter(function(a){return a.type!=="keep"}):[],LB={propose:"proposed",adjust:"adjusted",pause:"paused",resume:"resumed",retire:"retired",promote:"put live",demote:"sent back to paper"};
+var bestP=paper.reduce(function(m,x){return x.result_pct!=null&&(m==null||x.result_pct>m)?x.result_pct:m},null),earned=live.reduce(function(a,x){return a+(x.earned_usd||0)},0);
+var lastTrade=S2.map(function(x){return x.last_trade}).filter(Boolean).sort().pop();
+var R247=run247(),halted=b.halted;
+var stage=function(k,ic,name,tag,state,desc,key,meta){return '<div class="pp-st pp-'+state+' pp-k-'+k+'"><div class="pp-card"><div class="pp-hd"><span class="pp-ic">'+ic+'</span><b class="pp-name">'+name+'</b><span class="pp-tag">'+tag+'</span></div><div class="pp-desc">'+desc+'</div><div class="pp-key">'+key+'</div><div class="pp-meta">'+meta+'</div></div><div class="pp-join"><i></i></div></div>'};
+var on=b.enabled&&!halted,X=b.x||{},allMemes=X.trending||[],memes=allMemes.filter(function(c){return c.safe!==false}),flagged=allMemes.length-memes.length,m0=mk[0],lc=b.stats&&b.stats.last_cycle;
+var hm=function(t){return t?pipeHM(t):"--:--"};
+var h='<div class="pp"><div class="pp-head"><div class="pp-orb'+(on?" on":"")+'"><span></span><span></span></div><div style="min-width:0"><div class="pp-title">Autopilot <span>Pipeline</span></div><div class="pp-run"><span class="pp-led'+(on?" on":"")+'"></span>'+(halted?"stopped":on?"running · "+hm(lc):"off")+'</div></div><div class="pp-nums"><div><b>'+live.length+'</b><small>live</small></div><div><b>'+paper.length+'</b><small>testing</small></div><div><b class="'+(earned>0?"ok":earned<0?"bad":"")+'">'+sgn(earned,fmtUsd(Math.abs(earned)))+'</b><small>earned</small></div></div></div>';
+h+='<div class="pp-rail'+(on?" on":"")+'">';
+h+=stage("read","◉","Market","READ",m0?"ok":"idle","prices, funding, fear &amp; greed, news",m0?esc(tokName(m0.chain,m0.token))+" "+(m0.state||"watching")+(m0.d1!=null?" "+(m0.d1>0?"+":"")+m0.d1+"%":""):"market "+esc(view),"read "+pipeAgo(lc)+" · "+hm(lc));
+if(st.sources&&st.sources.x)h+=stage("meme","✦","Memes","SCAN",memes.length?"ok":"idle","trending on X, token-checked",allMemes.length?memes.length+" passed"+(flagged?" · "+flagged+" flagged":"")+" · paper only":"none checked yet",(memes.length?memes.slice(0,3).map(function(c){return "$"+esc(c.symbol)}).join(" · ")+" · ":"")+"checked "+pipeAgo(X.at));
+h+=stage("think","✺","AI strategist","THINK",last?"ok":"idle","decides what to start, change or stop",last?(act.length?act.map(function(a){return esc(cap1(LB[a.type]||a.type))+(a.template?" "+esc(String(a.template).replace(/_/g," ")):"")+(a.token?" · "+esc(tokName(a.chain,a.token)):"")}).slice(0,2).join(", "):"no changes, waiting"):"no decisions yet",(last?hm(last.ts)+" · ":"")+todayN+" today · "+esc(view));
+h+=stage("check","⛨","Safety","GUARD",halted?"bad":falling.length?"warn":"ok","limits, loss stops, big moves",halted?"stopped by a loss limit":falling.length?"buys held · "+falling.map(function(m){return esc(tokName(m.chain,m.token))}).join(", ")+" falling":rising.length?"letting winners run":"nothing trades unchecked","loss stop "+(st.daily_loss_pct||0)+"%/day · "+(st.weekly_loss_pct||0)+"%/wk");
+h+=stage("size","◈","Sizer","SIZE",pool>0?"ok":"warn","sizes from your balance",usd(share)+" a strategy","of "+usd(pool)+(usdc!=null?" USDC":"")+" · "+(st.max_strategies||1)+" slots · cap "+usd(st.per_trade_usd||0));
+h+=stage("test","◐","Paper test","TEST",paper.length?"ok":"idle","every strategy practises first",paper.length+" testing"+(bestP!=null?" · best "+(bestP>0?"+":"")+bestP+"%":""),"pass: "+(st.paper_days||0)+"d + "+(st.paper_trades||0)+" trades"+(st.active_mode?" · auto go-live":""));
+h+=stage("trade","▲","Executor","LIVE",live.length?"ok":"idle","real trades inside your limits",live.length+" live · earned "+sgn(earned,fmtUsd(Math.abs(earned))),(lastTrade?"last trade "+hm(lastTrade)+" · ":"")+(R247.on?"24/7 on server":"while app is open"));
+h+=stage("log","≡","Logger","WRITE","ok","writes every decision",'no trade without a reason',"line #"+(b.decisions_kept||D.length)+(last?" · "+hm(last.ts):""));
+h+='</div>';
+// Nov 6: the checked-memes feed: every coin from X with TOLLkit's token check result, newest scan first.
+if(st.sources&&st.sources.x&&allMemes.length){var WN={mint_authority_active:"mint still open",freeze_authority_active:"can freeze",no_pool:"no pool",low_liquidity:"thin pool"};
+ var depth=function(d){return d==null?"":d>=1e6?"$"+(d/1e6).toFixed(1)+"M pool":"$"+Math.round(d/1000)+"k pool"};
+ h+='<div class="pp-lbl" style="margin-top:18px">CHECKED MEMES <span>'+allMemes.length+' checked · '+hm(X.at)+'</span></div><div class="pp-log">'+allMemes.slice(0,12).map(function(c){var ok=c.safe!==false,w=(c.warnings||[]).map(function(x){return WN[x]||String(x).replace(/_/g," ")});
+  var why=ok?[depth(c.pool_depth_usd),"no mint","mood "+(c.mood||"—")].filter(Boolean).join(" · "):(w.length?w.join(" · "):"failed the check")+(c.pool_depth_usd!=null?" · "+depth(c.pool_depth_usd):"");
+  return '<div class="pp-l"><span class="pp-t">'+hm(X.at)+'</span><span class="pp-k pp-c-'+(ok?"ok":"bad")+'">'+(ok?"PASS":"FLAG")+'</span><span class="pp-x"><b style="color:#fff">$'+esc(c.symbol)+'</b> '+esc(why)+'</span></div>'}).join("")+'</div>'}
+// the log, terminal style: decisions + Autopilot's trades, newest first
+var lines=[];D.slice(0,30).forEach(function(d){(d.actions||[]).forEach(function(a){lines.push({t:d.ts,k:a.type==="keep"?"KEEP":String(a.type).toUpperCase(),c:a.type==="keep"?"q":a.type==="retire"||a.type==="pause"?"bad":"ok",x:(a.token?tokName(a.chain,a.token)+" · ":"")+(a.reason||a.outcome||"")})})});
+(S.receipts||[]).filter(function(e){return e.by==="superbot"}).slice(0,20).forEach(function(e){lines.push({t:e.ts,k:e.status==="failed"?"FAILED":"TRADE",c:e.status==="failed"?"bad":"acc",x:(e.detail||"")+(e.usd?" · "+usd(e.usd):"")})});
+lines.sort(function(a,b2){return a.t<b2.t?1:-1});
+h+='<div class="pp-lbl" style="margin-top:18px">LOG <span>'+lines.length+' recent</span></div><div class="pp-log">'+(lines.length?lines.slice(0,16).map(function(l){var full=String(l.x),sh=pipeShort(full);return '<div class="pp-l'+(sh!==full?' pp-more':'')+'" onclick="this.classList.toggle(\'open\')"><span class="pp-t">'+pipeHM(l.t)+'</span><span class="pp-k pp-c-'+l.c+'">'+l.k+'</span><span class="pp-x"><span class="pp-sh">'+esc(sh)+'</span><span class="pp-full">'+esc(full)+'</span></span></div>'}).join(""):'<div class="pp-l"><span class="pp-x" style="grid-column:1/-1">Nothing yet. Lines appear as Autopilot reads, decides and trades.</span></div>')+'</div>';
+return h+'</div>'}
 function apDecision(d){var srvd=d.by==="server",ai=d.by==="strategist"||srvd,away=d.by==="away",k="d:"+d.ts,open=SB.x&&SB.x[k];var acts=d.actions.filter(function(a){return a.type!=="keep"||d.actions.length===1});
 var LBL={keep:"Left strategies unchanged",propose:"New on paper",adjust:"Adjusted",pause:"Paused",resume:"Resumed",retire:"Retired",promote:"Went live",demote:"Back to paper"};
 var title=acts.length===1&&acts[0].type==="keep"?"No changes":acts.map(function(a){return (LBL[a.type]||a.type)+(a.token?" · "+tokName(a.chain,a.token):a.strategy_id?" · "+apShort(a.strategy_id):"")}).join(" · ");
@@ -2164,7 +2235,8 @@ if(b.stats.last_error)h+='<div class="ap-halt" style="border-color:color-mix(in 
 h+=apX(b);
 if(SB.edit)return h+sbForm(st);
 var D=b.decisions||[],R=b.reports||[],L=live.concat(paper),pt=PT.pilot||"strat";
-h+=pgTabs("pilot",[["strat","Strategies",L.length||""],["dec","Decisions"],["rep","Reports"]],pt);
+h+=pgTabs("pilot",[["pipe","Pipeline"],["strat","Strategies",L.length||""],["dec","Decisions"],["rep","Reports"]],pt);
+if(pt==="pipe")h+=pipeHtml(b);
 if(pt==="strat")h+='<div class="ap-h3 aph"><small>'+(ret.length?ret.length+' retired · ':'')+'tap for details</small></div>'+(L.length?L.map(apStrat).join(""):'<div class="ap-c sm mut" style="cursor:default">None yet. The AI proposes one when the signals give it a reason; it starts on paper.</div>');
 if(pt==="dec")h+='<div class="ap-h3 aph"><small>tap for reasons</small></div>'+(D.length?D.slice(0,SB.more?40:5).map(apDecision).join("")+(D.length>5?'<button class="b g sbtn" style="margin-top:8px" onclick="SB.more=!SB.more;render()">'+(SB.more?"Show fewer":"Show all "+D.length)+'</button>':""):'<div class="ap-c sm mut" style="cursor:default">Nothing yet. The first check runs within a minute.</div>');
 if(pt==="rep")h+=(R.length?'':'<div class="htempty">The first daily report arrives after Autopilot\'s first full day.</div>');if(pt==="rep"&&R.length)h+='<div class="ap-h3 aph"><small>'+(/telegram/i.test(S.approvals||"")?'also sent to Telegram':'one a day')+'</small></div>'+R.slice(0,SB.rep?7:1).map(function(r){return '<div class="ap-rep"><b>'+esc(r.date)+'</b>'+esc(r.text.split("\n").slice(1).join("\n"))+'</div>'}).join("")+(R.length>1?'<button class="b g sbtn" style="margin-top:8px" onclick="SB.rep=!SB.rep;render()">'+(SB.rep?"Fewer":"Last "+Math.min(7,R.length)+" days")+'</button>':'');
