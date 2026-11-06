@@ -531,6 +531,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           if (action === "x_hide") return send(res, 200, { superbot: await superbot.xHide(b.address, true) });
           if (action === "x_unhide") return send(res, 200, { superbot: await superbot.xHide(null, false) });
           if (action === "cycle") { await superbot.cycle(true); return send(res, 200, { superbot: superbot.view() }); }
+          // Nov 5: the Big moves alert on Home: Sell now (the protected share) or Keep going.
+          if (action === "move") { const r = await superbot.moveAct(String(b.key ?? ""), b.act === "sell_now" ? "sell_now" : "keep"); return send(res, 200, { superbot: r, sold: r.sold }); }
           // 0.9.10: Think 24/7's AI balance: look it up, or top it up (sends USDC to TOLLkit, so it needs the password).
           if (action === "credit") { await w.alwaysSol().config(); await w.alwaysSol().credit(); return send(res, 200, { superbot: superbot.view() }); }
           if (action === "topup") {

@@ -518,12 +518,17 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(ctx.limits?.pace === "adaptive" && ctx.market_states?.["solana:SOL"]?.state === "falling", "the strategist gets each coin's state", ctx.market_states);
   const ap = (template: string) => ({ chain: "solana", token: "SOL", template, by: "superbot" }) as any;
   check(/SOL is falling \(-4.5% in 24 hours/.test(W.bot.holdBuy(ap("grid")) ?? "") && !!W.bot.holdBuy(ap("dip")), "falling: Autopilot's grid and dip buys wait");
-  check(W.bot.holdBuy(ap("dca")) === null && W.bot.holdBuy({ ...ap("grid"), by: undefined }) === null, "Steady buyer and the owner's own bots never wait");
+  check(W.bot.holdBuy(ap("dca")) === null, "Steady buyer never waits");
+  check(/Big moves holds your bot's buys/.test(W.bot.holdBuy({ ...ap("grid"), template: undefined, kind: "grid", by: undefined }) ?? ""), "Nov 5: the owner's own grid waits too (Big moves, on by default)");
+  await W.bot.setSettings({ moves: { own: false } });
+  check(W.bot.holdBuy({ ...ap("grid"), template: undefined, kind: "grid", by: undefined }) === null, "Nov 5: with 'Guard my own bots' off, the owner's grid buys");
   state = hist(0.4, 0.2); W.advance(31 * 60_000); await W.bot.tick();
   check(W.bot.holdBuy(ap("grid")) === null && (W.bot.view() as any).market[0].state === "quiet", "once SOL steadies, buys go again");
-  await W.bot.setSettings({ pace: "steady" });
+  await W.bot.setSettings({ pace: "steady", moves: { on: false } });
   state = hist(-6, -4.5); W.advance(31 * 60_000); await W.bot.tick();
-  check(W.bot.holdBuy(ap("grid")) === null && (W.bot.view() as any).market === null, "other paces never hold buys");
+  check(W.bot.holdBuy(ap("grid")) === null && (W.bot.view() as any).market === null, "other paces with Big moves off never hold buys");
+  await W.bot.setSettings({ moves: { on: true } }); W.advance(31 * 60_000); await W.bot.tick();
+  check(/Big moves holds grid and dip buys/.test(W.bot.holdBuy(ap("grid")) ?? ""), "Nov 5: on Steady, Big moves still holds grid buys while the coin falls");
 }
 // Max moves to Adaptive once; choosing a pace by hand afterwards sticks.
 {
@@ -535,6 +540,45 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(v.settings.pace === "adaptive" && v.decisions.some((d: any) => /Pace changed from Max to Adaptive/.test(d.assessment)), "an existing Max pace becomes Adaptive, and the log says so");
   await W.bot.setSettings({ pace: "max" }); W.advance(31 * 60_000); await W.bot.tick();
   check((W.bot.view() as any).settings.pace === "max", "picking Max again afterwards keeps it");
+}
+
+// ─── Nov 5: Big moves ───────────────────────────────────────────────────────
+{
+  const hist = (d3: number, d1: number) => { const c: number[] = Array(8).fill(100); const at24 = 100 * (1 + d3 / 100) / (1 + d1 / 100);
+    for (let h = 71; h >= 0; h--) c.push(h >= 24 ? 100 + (at24 - 100) * (72 - h) / 48 : at24 + (at24 * (1 + d1 / 100) - at24) * (24 - h) / 24); return c; };
+  check(parseSettings({}).moves?.on === true && parseSettings({}).moves?.share_pct === 50 && parseSettings({ moves: { trail_pct: 5 } }).moves?.trail_pct === 5, "Nov 5: Big moves is on by default (50%, 3% trail), and its picks are kept");
+  check(/Trail 2, 3, 5 or 8%/.test(err(() => parseSettings({ moves: { trail_pct: 4 } }))), "Nov 5: only the offered trail sizes");
+  let state = hist(-11, -9.5);
+  const W = world({ closes: async () => state });
+  await W.bot.enable({ chains: ["base"], tokens: [{ chain: "base", token: "ETH" }], pace: "steady" });
+  await new Promise((r) => setTimeout(r, 30));
+  const { buildBot } = await import("../src/bots.js");
+  const fs = await import("node:fs");
+  const b = buildBot("dip", "ETH", "base", { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, 2500);
+  await W.store.addBot(b.rules.map((r) => ({ ...r, bot_name: "Autopilot · Buy the dip · ETH" })), "agent", true, "superbot");
+  const st = JSON.parse(fs.readFileSync(path.join(W.dir, "superbot.json"), "utf8"));
+  st.strategies.push({ id: "bm1", name: "Buy the dip · ETH", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, stage: "live", bot: b.bot, created_at: "2026-10-19T00:00:00Z", stage_since: "2026-10-19T00:00:00Z", history: [] });
+  fs.writeFileSync(path.join(W.dir, "superbot.json"), JSON.stringify(st));
+  (W.bot as any).summaryOf = () => ({ units_held: 2, result_usd: 0, result_pct: 0, trades_ok: 1, earned_usd: 0 });
+  W.advance(31 * 60_000); await W.bot.tick(); await new Promise((r) => setTimeout(r, 30));
+  const ts = W.store.list().filter((r) => r.kind === "trailing_stop" && r.status === "active");
+  const tp = W.store.list().find((r) => r.bot === b.bot && r.kind === "take_profit");
+  check(ts.length === 1 && ts[0]!.trail_pct === 3 && ts[0]!.sell_amount === "1" && ts[0]!.by === "superbot" && ts[0]!.bot === b.bot, "Nov 5: a 9.5% drop puts a 3% trailing stop on half of what the live strategy holds", ts);
+  check(!!tp && !!tp.group && tp.group === ts[0]?.group, "Nov 5: it shares the take-profit's group, so only one of them sells", [tp?.group, ts[0]?.group]);
+  const v = W.bot.view() as any;
+  check(v.moves?.length === 1 && v.moves[0].kind === "falling" && v.moves[0].did.some((x: string) => /trailing stop/.test(x)), "Nov 5: one Big move alert, saying what it did", v.moves);
+  check(W.notes.some((n) => /ETH is down 9.5% in 24 hours/.test(n)), "Nov 5: the owner is told", W.notes);
+  W.advance(31 * 60_000); await W.bot.tick();
+  check(W.store.list().filter((r) => r.kind === "trailing_stop" && r.status === "active").length === 1 && W.notes.filter((n) => /is down/.test(n)).length === 1, "Nov 5: one stop and one alert per move, not one per check");
+  const r1 = await W.bot.moveAct(v.moves[0].key, "sell_now");
+  const ls = W.store.list().filter((r) => r.kind === "limit_sell" && r.reason && /Sell now/.test(r.reason));
+  check(r1.sold === 1 && ls.length === 1 && ls[0]!.sell_amount === "1" && ls[0]!.group === ts[0]!.group && ls[0]!.trigger_price! < 2500, "Nov 5: Sell now sells the protected share just under today's price, in the same group", ls);
+  check(((W.bot.view() as any).moves ?? []).length === 0, "Nov 5: the alert goes away once answered");
+  state = hist(0.5, 0.3); W.advance(31 * 60_000); await W.bot.tick();
+  check(W.store.get(ts[0]!.id)?.status === "cancelled", "Nov 5: once the coin calms down, an unfilled trailing stop is cancelled", W.store.get(ts[0]!.id)?.status);
+  // A spike: DCA buys wait near the top.
+  state = hist(12, 10); W.advance(31 * 60_000); await W.bot.tick();
+  check(/jumped 10% in 24 hours/.test(W.bot.holdBuy({ chain: "base", token: "ETH", template: "smart_dca", by: "superbot", kind: "smart_dca" } as any) ?? ""), "Nov 5: on a 10% spike, Autopilot's DCA buys wait near the top");
 }
 
 // ─── 0.9.13: no doubles. A bot of the same kind on the same coin that still runs blocks a new one, and a bot of a

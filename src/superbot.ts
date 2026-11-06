@@ -90,7 +90,14 @@ export interface SuperbotSettings {
   /** 0.9.13: the owner's standing instructions, kept from the AI chat ("be careful this week", "no meme coins").
    *  Autopilot's strategist reads them before every decision; they never widen a limit. */
   notes?: string[];
+  /** Nov 5: Big moves. When a coin jumps or drops 8% or more in 24 hours: Autopilot's holdings get a trailing stop on
+   *  share_pct of what they hold (trail_pct below the high), buys wait while it falls (and DCA buys while it spikes),
+   *  a grid that broke out above its range follows the price within the hour, and the owner gets an alert. `own`:
+   *  the owner's own grid bots wait to buy while their coin falls too. */
+  moves?: { on: boolean; own: boolean; share_pct: number; trail_pct: number };
 }
+export const MOVES = { bigPct: 8, followMs: 3600_000, alertMs: 24 * 3600_000 } as const;
+export const DEFAULT_MOVES = { on: true, own: true, share_pct: 50, trail_pct: 3 };
 /** 0.9.13: a strategy is rebuilt with new settings at most this often, so its bot isn't swapped out every check. */
 export const REBUILD_MS = 12 * 3600_000;
 export const DEFAULT_SETTINGS: SuperbotSettings = {
@@ -98,7 +105,7 @@ export const DEFAULT_SETTINGS: SuperbotSettings = {
   sources: { news: true, farcaster: true, x: false },
   budget_usd: 100, per_trade_usd: 20, max_token_pct: 25, daily_loss_pct: 5, weekly_loss_pct: 15, slippage_bps: 100,
   paper_days: 7, paper_trades: 20, rethink_minutes: 30, max_strategies: 4, always_on: false, daily_share_pct: 50, pace: "adaptive",
-  think_24_7: false, active_mode: false, away_pause: false,
+  think_24_7: false, active_mode: false, away_pause: false, moves: { ...DEFAULT_MOVES },
 };
 
 export interface Strategy {
@@ -126,13 +133,19 @@ export interface Strategy {
   /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
    * money on its own. */
   ready?: { at: string; result_pct: number; trades: number } | null;
+  /** Nov 5: Big moves: the trailing stop it added for the current big move, and when a broken-out grid last followed. */
+  guard?: { rule: string; kind: "rising" | "falling"; at: string } | null;
+  followed_at?: string;
 }
+/** Nov 5: a big move on one coin, for the alert on Home (key chain:token). */
+export interface MoveAlert { chain: Chain; token: string; kind: "rising" | "falling"; d1: number; at: string; did: string[]; seen?: boolean }
 export interface AppliedAction { type: string; strategy_id?: string; template?: string; chain?: string; token?: string; params?: Record<string, unknown>; reason: string; sources: string[]; applied: boolean; outcome: string }
 export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" | "away" | "server" }
 export interface Report { date: string; text: string; live_result_usd: number | null; trades: number; decisions: number }
 interface State {
   enabled: boolean; since: string | null; settings: SuperbotSettings; strategies: Strategy[]; decisions: Decision[]; reports: Report[];
   paper_rules: string[];
+  moves_seen?: Record<string, MoveAlert>;
   halted: { reason: string; at: string; until: string | null } | null;
   marks: { day: string; day_start: number; week: string; week_start: number } | null;
   /** 0.9.8: Trending on X coins the owner hid (lowercased addresses): not shown, never paper-tested. */
@@ -208,6 +221,12 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   if (b.active_mode !== undefined) s.active_mode = !!b.active_mode;
   if (b.away_pause !== undefined) s.away_pause = !!b.away_pause;
   if (b.notes !== undefined) { if (!Array.isArray(b.notes)) throw new Error("Notes are a list."); s.notes = b.notes.map((x) => String(x).replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean).slice(0, 8); }
+  if (b.moves !== undefined) {
+    const m = (b.moves && typeof b.moves === "object" ? b.moves : {}) as any, cur = { ...DEFAULT_MOVES, ...(base.moves ?? {}) };
+    s.moves = { on: m.on === undefined ? cur.on : !!m.on, own: m.own === undefined ? cur.own : !!m.own,
+      share_pct: m.share_pct === undefined ? cur.share_pct : [25, 50, 75, 100].includes(Number(m.share_pct)) ? Number(m.share_pct) : (() => { throw new Error("Protect 25, 50, 75 or 100%."); })(),
+      trail_pct: m.trail_pct === undefined ? cur.trail_pct : [2, 3, 5, 8].includes(Number(m.trail_pct)) ? Number(m.trail_pct) : (() => { throw new Error("Trail 2, 3, 5 or 8%."); })() };
+  }
   if (b.pace !== undefined) { if (b.pace !== "steady" && b.pace !== "active" && b.pace !== "max" && b.pace !== "adaptive") throw new Error("Pace is steady, active, max or adaptive."); s.pace = b.pace; }
   if (s.per_trade_usd > s.budget_usd) throw new Error("The per-trade cap can't be more than the budget.");
   if (s.tokens.some((t) => !s.chains.includes(t.chain))) throw new Error("Every token's network must be turned on.");
@@ -362,9 +381,19 @@ export class SuperBot {
     if (!this.adaptive()) return null;
     return this.market[`${chain}:${token.toLowerCase()}`]?.state ?? null;
   }
+  private mv(s: State = this.load()) { return { ...DEFAULT_MOVES, ...(s.settings.moves ?? {}) }; }
+  /** Nov 5: the coins whose market Autopilot reads: its own, plus the owner's running bots' coins under Big moves. */
+  private watched(s: State) {
+    const out = [...s.settings.tokens], seen = new Set(out.map((x) => `${x.chain}:${x.token.toLowerCase()}`)), m = this.mv(s);
+    if (m.on && m.own) for (const r of this.w.rules().list()) {
+      if (r.by === "superbot" || r.status !== "active" || !["grid", "infinity_grid", "smart_dca"].includes(r.kind)) continue;
+      const k = `${r.chain}:${r.token.toLowerCase()}`; if (seen.has(k) || out.length >= 16) continue; seen.add(k); out.push({ chain: r.chain, token: r.token });
+    }
+    return out;
+  }
   private async readMarket(s: State) {
     if (!this.d.closes) return;
-    for (const x of s.settings.tokens) {
+    for (const x of this.watched(s)) {
       const m = marketState(await this.d.closes(x.chain, x.token).catch(() => []));
       const k = `${x.chain}:${x.token.toLowerCase()}`;
       if (m) this.market[k] = { ...m, at: nowIso(this.now()) }; else delete this.market[k];
@@ -374,11 +403,20 @@ export class SuperBot {
    * 0.9.12: why an Autopilot grid or dip buy waits right now (its coin is falling on Adaptive pace), or null. The
    * rules engine asks before every buy; sells and the owner's own rules never wait.
    */
-  holdBuy(r: Pick<Rule, "chain" | "token" | "template" | "by">): string | null {
-    if (r.by !== "superbot" || (r.template !== "grid" && r.template !== "dip")) return null;
-    if (this.marketOf(r.chain, r.token) !== "falling") return null;
-    const m = this.market[`${r.chain}:${r.token.toLowerCase()}`]!;
-    return `${r.token.length > 12 ? "This coin" : r.token} is falling (${m.d1}% in 24 hours, ${m.d3}% in 3 days): Adaptive pace holds grid and dip buys until it steadies.`;
+  holdBuy(r: Pick<Rule, "chain" | "token" | "template" | "by" | "kind">): string | null {
+    const s = this.load(), mv = this.mv(s), m = this.market[`${r.chain}:${r.token.toLowerCase()}`], coin = r.token.length > 12 ? "This coin" : r.token;
+    if (!m) return null;
+    if (r.by === "superbot") {
+      if ((r.template === "grid" || r.template === "dip") && m.state === "falling" && (this.adaptive(s) || mv.on))
+        return `${coin} is falling (${m.d1}% in 24 hours, ${m.d3}% in 3 days): ${this.adaptive(s) ? "Adaptive pace" : "Big moves"} holds grid and dip buys until it steadies.`;
+      // Nov 5: easy on buys near the top: a DCA-style buy waits while the coin is up 8% or more in a day.
+      if (mv.on && m.d1 >= MOVES.bigPct && (r.template === "dca" || r.template === "smart_dca"))
+        return `${coin} jumped ${m.d1}% in 24 hours: Big moves holds new buys near the top until it settles.`;
+      return null;
+    }
+    if (mv.on && mv.own && ["grid", "infinity_grid", "smart_dca"].includes(r.kind) && m.state === "falling")
+      return `${coin} is falling (${m.d1}% in 24 hours): Big moves holds your bot's buys until it steadies. Its sells keep going.`;
+    return null;
   }
 
   // ─── state ───────────────────────────────────────────────────────────────
@@ -427,7 +465,8 @@ export class SuperBot {
     const strategies = s.strategies.filter((st) => !st.removed).map((st) => { const sum = this.summaryOf(st, all); return { ...st, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, earned_usd: sum?.earned_usd ?? 0, trades: sum?.trades_ok ?? 0, failed: sum?.trades_failed ?? 0, status: sum?.status ?? (st.stage === "retired" ? "stopped" : "waiting"), last_trade: sum?.last_trade ?? null, days_in_stage: r2((this.now() - Date.parse(st.stage_since)) / 86_400_000) }; });
     const live = strategies.filter((x) => x.stage === "live");
     return {
-      enabled: s.enabled, since: s.since, settings: s.settings, halted: s.halted, stats: s.stats,
+      enabled: s.enabled, since: s.since, settings: { ...s.settings, moves: this.mv(s) }, halted: s.halted, stats: s.stats,
+      moves: Object.entries(s.moves_seen ?? {}).filter(([, a]) => !a.seen && this.now() - Date.parse(a.at) < MOVES.alertMs).map(([key, a]) => ({ key, ...a })),
       // 0.9.12: each coin's market while the pace is Adaptive (the Autopilot screen shows it).
       market: this.adaptive(s) ? s.settings.tokens.map((x) => { const m = this.market[`${x.chain}:${x.token.toLowerCase()}`]; return { chain: x.chain, token: x.token, state: m?.state ?? null, d1: m?.d1 ?? null, d3: m?.d3 ?? null, at: m?.at ?? null }; }) : null,
       strategies, decisions: s.decisions.slice().sort((x, y) => x.ts.localeCompare(y.ts)).slice(-40).reverse(), reports: s.reports.slice(-7).reverse(),
@@ -582,7 +621,7 @@ export class SuperBot {
         await this.update((x) => { x.settings.pace = "adaptive"; x.adaptive_moved = 1; });
         await this.log("rule", "Pace changed from Max to Adaptive: Max when a coin is quiet, wider targets when it's rising, and no new buys on a coin that's falling.", [{ type: "keep", reason: "Adaptive pace", sources: ["0.9.12 update"], applied: true, outcome: "pace: adaptive" }]);
       }
-      if (this.adaptive()) await this.readMarket(this.load());
+      if (this.adaptive() || this.mv().on) await this.readMarket(this.load());
       const all = this.w.rules().list();
       await this.checkLosses(s, all);
       await this.promoteDemote(all);
@@ -610,6 +649,7 @@ export class SuperBot {
       await this.stopLeftovers(this.w.rules().list());
       if (active) await this.tightenIdle(this.w.rules().list());
       if (this.adaptive(after)) await this.rideRising(this.w.rules().list());
+      if (this.mv(after).on) await this.bigMoves(this.w.rules().list());
       if (force || moved || stale || active) { await this.step(snap); await this.endRangeIdeas(); }
     } catch (e) {
       await this.update((x) => { x.stats.last_error = (e as Error).message.slice(0, 300); });
@@ -737,6 +777,108 @@ export class SuperBot {
       await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.tightened_at = nowIso(t); });
       await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, template: st.template, chain: st.chain, token: st.token, params: params.params, reason: why, sources: ["pace: active", `no trade for ${SUPERBOT.idleHours}h`], applied: res.applied, outcome: res.outcome }]);
     }
+  }
+
+  /**
+   * Nov 5: Big moves (8% or more in 24 hours, up or down). Live strategies holding the coin get a trailing stop on part
+   * of what they hold (one per move; it shares the take-profit's group, so only one of them sells). Grids are left to
+   * their own sells, but one that broke out above its range is rebuilt around the price within the hour. When the coin
+   * calms down (under 4% in a day), an unfilled trailing stop is cancelled. Each move raises one alert.
+   */
+  private async bigMoves(all: Rule[]) {
+    const s = this.load(), mv = this.mv(s), t = this.now();
+    const kindOf = (k: string) => { const m = this.market[k]; return m && m.d1 >= MOVES.bigPct ? "rising" as const : m && m.d1 <= -MOVES.bigPct ? "falling" as const : null; };
+    const did: Record<string, string[]> = {};
+    const note = (k: string, x: string) => { (did[k] ??= []).push(x); };
+    for (const st of s.strategies.filter((x) => x.stage === "live" && !x.owner_paused && !x.stopped_by_owner)) {
+      const k = `${st.chain}:${st.token.toLowerCase()}`, kind = kindOf(k), m = this.market[k], coin = st.token.length > 12 ? "the coin" : st.token;
+      const rules = this.rulesOf(s, st, all), g = st.guard ? all.find((r) => r.id === st.guard!.rule) : undefined;
+      if (!kind) {
+        // Calm again: an unfilled trailing stop from the move is cancelled.
+        if (st.guard && m && Math.abs(m.d1) < 4) {
+          if (g && g.status === "active") { await this.w.rules().setStatus(g.id, "cancelled").catch(() => {}); if (this.ao(g).isOn(g.id)) this.ao(g).set(g.id, false); }
+          await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.guard = null; });
+          this.d.onRulesChanged?.();
+        }
+        continue;
+      }
+      if (st.template === "grid") {
+        if (kind === "rising") {
+          const grid = rules.find((r) => r.kind === "grid" && r.status === "active"), held = this.summaryOf(st, all)?.units_held ?? 0;
+          const price = await this.d.price(st.chain, st.token).catch(() => undefined);
+          if (grid?.upper_price && price && price > grid.upper_price && held <= 1e-9 && (!st.followed_at || t - Date.parse(st.followed_at) >= MOVES.followMs)) {
+            const why = `${coin} broke out above ${st.name}'s range ($${grid.upper_price}) and is up ${m!.d1}% today: Big moves rebuilt the grid around $${r2(price)} so it keeps trading.`;
+            const res = await this.restage(st, "live", why, all, st.params, true);
+            await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.followed_at = nowIso(t); y.history.push({ ts: nowIso(t), note: why }); } });
+            await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, reason: why, sources: ["big moves", `${coin} +${m!.d1}%`], applied: res.applied, outcome: res.outcome }]);
+            if (res.applied) note(k, `rebuilt ${st.name} around the new price`);
+          }
+        }
+        continue;
+      }
+      if (st.guard && st.guard.kind === kind && g && g.status === "active") continue; // already guarded for this move
+      const held = this.summaryOf(st, all)?.units_held ?? 0;
+      if (held <= 1e-9) continue;
+      const amt = Math.floor(held * (mv.share_pct / 100) * 1e6) / 1e6;
+      if (!(amt > 0)) continue;
+      const tp = rules.find((r) => (r.kind === "take_profit" || r.kind === "limit_sell") && r.status === "active");
+      const group = tp?.group ?? `guard-${st.id}`;
+      if (tp && !tp.group) await this.w.rules().mutate((rs) => { const x = rs.find((y) => y.id === tp.id); if (x) x.group = group; });
+      const why = kind === "rising"
+        ? `${coin} jumped ${m!.d1}% in 24 hours: Big moves locks in the gain. ${mv.share_pct}% of what ${st.name} holds sells if ${coin} falls ${mv.trail_pct}% from its new high.`
+        : `${coin} fell ${Math.abs(m!.d1)}% in 24 hours: Big moves protects ${mv.share_pct}% of what ${st.name} holds. It sells if ${coin} falls another ${mv.trail_pct}% from here (or from any bounce).`;
+      let made: Rule;
+      try { made = await this.w.rules().add({ kind: "trailing_stop", chain: st.chain, token: st.token, trail_pct: mv.trail_pct, sell_amount: String(amt), bot: st.bot ?? undefined, bot_name: `Autopilot · ${st.name}`, group, reason: why.slice(0, 400) } as any, "agent", true, "superbot"); }
+      catch (e) { await this.log("rule", `Big moves couldn't protect ${st.name}: ${(e as Error).message}`, []); continue; }
+      if (g && g.status === "active") await this.w.rules().setStatus(g.id, "cancelled").catch(() => {});
+      // 24/7: the trailing stop runs on TOLLkit's server too when the strategy's rules do.
+      if (rules.some((r) => this.ao(r).isOn(r.id))) this.ao(made).set(made.id, true);
+      await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.guard = { rule: made.id, kind, at: nowIso(t) }; y.history.push({ ts: nowIso(t), note: why }); } });
+      await this.log("rule", why, [{ type: "adjust", strategy_id: st.id, reason: why, sources: ["big moves", `${coin} ${m!.d1}%`], applied: true, outcome: `trailing stop ${mv.trail_pct}% on ${amt} ${st.token.length > 12 ? "" : st.token}`.trim() }]);
+      note(k, kind === "rising" ? `set a ${mv.trail_pct}% trailing stop to lock in ${st.name}'s gain` : `set a ${mv.trail_pct}% trailing stop on ${mv.share_pct}% of ${st.name}`);
+      this.d.onRulesChanged?.();
+    }
+    // The owner's own bots whose buys now wait (Big moves "own").
+    if (mv.own) for (const r of all) {
+      if (r.by === "superbot" || r.status !== "active" || !["grid", "infinity_grid", "smart_dca"].includes(r.kind)) continue;
+      const k = `${r.chain}:${r.token.toLowerCase()}`;
+      if (kindOf(k) === "falling") note(k, `held buys on your ${r.bot_name ?? (r.kind === "grid" ? "grid bot" : "bot")}`);
+    }
+    // One alert per coin per move.
+    for (const x of this.watched(s)) {
+      const k = `${x.chain}:${x.token.toLowerCase()}`, kind = kindOf(k), m = this.market[k];
+      if (!kind || !m) continue;
+      const prev = (this.load().moves_seen ?? {})[k];
+      if (prev && prev.kind === kind && t - Date.parse(prev.at) < MOVES.alertMs) { if (did[k]?.length) await this.update((y) => { const a = y.moves_seen?.[k]; if (a) a.did = [...new Set([...a.did, ...did[k]!])].slice(0, 6); }); continue; }
+      if (kind === "falling" && !did[k]?.length && s.strategies.every((st) => `${st.chain}:${st.token.toLowerCase()}` !== k)) note(k, "watching it; nothing of yours was buying it");
+      const a: MoveAlert = { chain: x.chain, token: x.token, kind, d1: m.d1, at: nowIso(t), did: (did[k] ?? []).slice(0, 6) };
+      await this.update((y) => { y.moves_seen = { ...(y.moves_seen ?? {}), [k]: a }; });
+      const coin = x.token.length > 12 ? "A coin you hold" : x.token;
+      await this.d.notify?.(`${coin} is ${kind === "rising" ? "up" : "down"} ${Math.abs(m.d1)}% in 24 hours. ${a.did.length ? `Autopilot ${a.did.join("; ")}.` : "Autopilot is watching it."} Open TOLLkit to lock it in now or keep going.`).catch(() => {});
+    }
+  }
+  /** Nov 5: the Big moves card on Home: Sell now (the protected share, at the market) or Keep going. */
+  async moveAct(key: string, act: "sell_now" | "keep") {
+    const s = this.load(), a = (s.moves_seen ?? {})[key];
+    if (!a) throw new Error("That alert is gone.");
+    let sold = 0;
+    if (act === "sell_now") {
+      const all = this.w.rules().list();
+      for (const st of s.strategies.filter((x) => x.stage === "live" && `${x.chain}:${x.token.toLowerCase()}` === key && x.guard)) {
+        const g = all.find((r) => r.id === st.guard!.rule);
+        if (!g || g.status !== "active" || !g.sell_amount) continue;
+        const price = await this.d.price(st.chain, st.token).catch(() => undefined);
+        if (!price) continue;
+        // A limit sell just under today's price fills at the next check; it shares the group, so the trailing stop ends.
+        const made = await this.w.rules().add({ kind: "limit_sell", chain: st.chain, token: st.token, trigger_price: r2(price * 0.995) || price * 0.995, sell_amount: g.sell_amount, bot: st.bot ?? undefined, bot_name: g.bot_name, group: g.group, reason: "The owner tapped Sell now on the Big moves alert." } as any, "agent", true, "superbot");
+        if (this.ao(g).isOn(g.id)) this.ao(made).set(made.id, true);
+        sold++;
+      }
+      await this.log("rule", sold ? `Selling the protected share of ${sold} strateg${sold === 1 ? "y" : "ies"} now (the owner tapped Sell now).` : "Sell now: nothing protected to sell.", []);
+      this.d.onRulesChanged?.();
+    }
+    await this.update((x) => { const y = x.moves_seen?.[key]; if (y) y.seen = true; });
+    return { ...this.view(), sold };
   }
 
   /**
