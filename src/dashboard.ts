@@ -232,6 +232,14 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!out.applied) throw new Error(`Autopilot couldn't add it: ${out.outcome}.`);
         return { ok: true, note: `Autopilot added it (${out.outcome}).` };
       }
+      case "autopilot_action": {
+        if (!superbot) throw new Error("Autopilot isn't running here.");
+        const a = q.action, id = q.strategy_id;
+        if ((a === "stop_strategy" || a === "go_live") && !id) throw new Error("Which strategy?");
+        if (a === "stop_strategy") await superbot.stopStrategy(id); else if (a === "go_live") await superbot.goLive(id);
+        else if (a === "turn_on") await superbot.enable({}); else if (a === "turn_off") await superbot.disable(); else await superbot.resume();
+        return { ok: true, note: a === "stop_strategy" ? "Strategy stopped." : a === "go_live" ? "Strategy is live." : a === "turn_on" ? "Autopilot is on." : a === "turn_off" ? "Autopilot is off." : "Autopilot resumed." };
+      }
       case "autopilot_settings": {
         if (!superbot) throw new Error("Autopilot isn't running here.");
         await superbot.setSettings(q); return { ok: true, note: "Autopilot's settings changed." };

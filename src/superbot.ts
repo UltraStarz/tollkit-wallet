@@ -48,7 +48,7 @@ export const SUPERBOT = {
   signalsPath: "/signals",
   snapRetryMs: 2 * 60_000,
   stepPriceUsd: 0.005,
-  keepDecisions: 200,
+  keepDecisions: 500,
   keepReports: 30,
   /** Without a "moved" snapshot, a decision is still taken this often. */
   forceStepMinutes: 60,
@@ -317,6 +317,32 @@ export function sizeToShare(template: string, params: Record<string, unknown>, s
  * settings and limits, each strategy with its stage, settings, results and money earned, its recent decisions with
  * their reasons and outcomes, and its daily reports. The chat explains Autopilot; it never changes it.
  */
+/**
+ * Nov 5: Autopilot's full decision log for the AI chat, newest first, with everything each decision did: the
+ * strategist's view and confidence, the model and its cost, and each action's template, coin, settings, sources and
+ * outcome. Filters: a strategy, a coin, only what was applied, and paging back with `before` (an ISO time).
+ */
+export function autopilotLog(w: { dir: string }, o: { limit?: number; before?: string; strategy?: string; token?: string; applied_only?: boolean; by?: "strategist" | "rule" } = {}) {
+  let s: Partial<State> | null = null;
+  try { const f = path.join(walletHome(w.dir), SUPERBOT.file); if (existsSync(f)) s = JSON.parse(readFileSync(f, "utf8")); } catch { s = null; }
+  if (!s) return { on: false, note: "Autopilot hasn't been turned on in this wallet.", decisions: [] };
+  const names = new Map((s.strategies ?? []).map((x) => [x.id, x.name] as const));
+  const tok = o.token?.toLowerCase();
+  let ds = (s.decisions ?? []).slice().sort((a, b) => b.ts.localeCompare(a.ts));
+  const total = ds.length;
+  if (o.before) ds = ds.filter((d) => d.ts < o.before!);
+  if (o.by) ds = ds.filter((d) => d.by === o.by);
+  if (o.strategy) ds = ds.filter((d) => (d.actions ?? []).some((a) => a.strategy_id === o.strategy || (a.strategy_id && names.get(a.strategy_id)?.toLowerCase().includes(o.strategy!.toLowerCase()))));
+  if (tok) ds = ds.filter((d) => (d.actions ?? []).some((a) => a.token?.toLowerCase() === tok) || d.assessment.toLowerCase().includes(tok));
+  if (o.applied_only) ds = ds.filter((d) => (d.actions ?? []).some((a) => a.applied));
+  const limit = Math.min(200, Math.max(1, o.limit ?? 50)), page = ds.slice(0, limit);
+  return {
+    kept: total, oldest: (s.decisions ?? []).reduce((m, d) => (!m || d.ts < m ? d.ts : m), "" as string) || null, matching: ds.length, returned: page.length,
+    next_before: ds.length > limit ? page.at(-1)!.ts : null,
+    decisions: page.map((d) => ({ ts: d.ts, by: d.by, market_view: d.market_view, assessment: d.assessment, confidence: d.confidence, model: d.model, cost_usd: d.cost_usd,
+      actions: (d.actions ?? []).map((a) => ({ type: a.type, ...(a.strategy_id ? { strategy_id: a.strategy_id, strategy: names.get(a.strategy_id) ?? null } : {}), ...(a.template ? { template: a.template } : {}), ...(a.chain ? { chain: a.chain } : {}), ...(a.token ? { token: a.token } : {}), ...(a.params ? { params: a.params } : {}), reason: a.reason, sources: a.sources, applied: a.applied, outcome: a.outcome })) })),
+  };
+}
 export function autopilotReport(w: { dir: string; rules(): { list(): Rule[] } }, o: { decisions?: number } = {}) {
   let s: Partial<State> | null = null;
   try { const f = path.join(walletHome(w.dir), SUPERBOT.file); if (existsSync(f)) s = JSON.parse(readFileSync(f, "utf8")); } catch { s = null; }
@@ -334,6 +360,8 @@ export function autopilotReport(w: { dir: string; rules(): { list(): Rule[] } },
   const live = strategies.filter((x) => x.stage === "live");
   return {
     on: !!s.enabled, since: s.since ?? null, halted: s.halted ?? null, notes: st.notes ?? [],
+    big_moves: { ...DEFAULT_MOVES, ...(st.moves ?? {}), alerts: Object.entries(s.moves_seen ?? {}).map(([key, a]) => ({ key, ...a })).slice(-8) },
+    decisions_kept: (s.decisions ?? []).length,
     settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_strategies: st.max_strategies, max_token_pct: st.max_token_pct, daily_loss_pct: st.daily_loss_pct, weekly_loss_pct: st.weekly_loss_pct,
       pace: st.pace, active_mode: st.active_mode, run_24_7: st.always_on, think_24_7: st.think_24_7, rethink_minutes: st.rethink_minutes, chains: st.chains, tokens: st.tokens, sources: st.sources, paper_days: st.paper_days, paper_trades: st.paper_trades },
     totals: { live: live.length, practice: strategies.filter((x) => x.stage === "paper").length, earned_live_usd: Math.round(live.reduce((a, x) => a + (x.earned_usd ?? 0), 0) * 100) / 100, result_live_usd: Math.round(live.reduce((a, x) => a + (x.result_usd ?? 0), 0) * 100) / 100 },

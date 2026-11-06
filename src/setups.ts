@@ -42,7 +42,12 @@ export const SetupKinds = {
     max_token_pct: z.number().min(5).max(100).optional(), daily_loss_pct: z.number().min(1).max(50).optional(), weekly_loss_pct: z.number().min(1).max(90).optional(),
     pace: z.enum(["steady", "active", "max", "adaptive"]).optional(), active_mode: z.boolean().optional(), always_on: z.boolean().optional(),
     tokens: z.array(z.object({ chain: z.enum(CHAIN_ENUM), token: z.string().min(2).max(64) })).min(1).max(12).optional(),
+    // Nov 5: Big moves.
+    moves: z.object({ on: z.boolean().optional(), own: z.boolean().optional(), share_pct: z.union([z.literal(25), z.literal(50), z.literal(75), z.literal(100)]).optional(), trail_pct: z.union([z.literal(2), z.literal(3), z.literal(5), z.literal(8)]).optional() }).strict().optional(),
   }).strict(),
+  // Nov 5: the AI asks the owner to act on Autopilot itself: stop or put live one strategy, turn Autopilot on or off,
+  // or resume it after a loss stop. Nothing happens until the owner taps Apply.
+  autopilot_action: z.object({ action: z.enum(["stop_strategy", "go_live", "turn_on", "turn_off", "resume"]), strategy_id: z.string().min(2).max(40).optional() }).strict(),
 } as const;
 export type SetupKind = keyof typeof SetupKinds;
 export const SETUP_KIND_NAMES = Object.keys(SetupKinds) as SetupKind[];
@@ -81,6 +86,7 @@ export function describeSetup(kind: SetupKind, p: Record<string, any>): string {
     case "app_budget": return p.weekly_usd === null ? `Remove ${p.app}'s weekly budget.` : `Give ${p.app} a weekly budget of ${usd(p.weekly_usd)}.`;
     case "always_budget": return `Let Tollkit's server spend up to ${usd(p.budget_usd)} of USDC in total for rules that keep running when the app is closed.`;
     case "autopilot_strategy": return `Have Autopilot run ${TPL[p.template] ? `a ${TPL[p.template]} bot` : `a ${String(p.template).replace(/_/g, " ")}`} on ${String(p.token).length > 12 ? "this coin" : p.token} (${chainName(p.chain)}). It starts on paper and fits inside Autopilot's budget.`;
+    case "autopilot_action": return p.action === "stop_strategy" ? `Stop the Autopilot strategy ${p.strategy_id} for good.` : p.action === "go_live" ? `Put the Autopilot strategy ${p.strategy_id} live with real money.` : p.action === "turn_on" ? "Turn Autopilot on." : p.action === "turn_off" ? "Turn Autopilot off (every strategy stops)." : "Resume Autopilot after its loss stop.";
     case "autopilot_settings": {
       const parts: string[] = [], L: Record<string, string> = { budget_usd: "budget", per_trade_usd: "most per trade", max_token_pct: "most in one token", daily_loss_pct: "daily loss stop", weekly_loss_pct: "weekly loss stop" };
       for (const [k, l] of Object.entries(L)) if (p[k] !== undefined) parts.push(`set Autopilot's ${l} to ${k.endsWith("_pct") ? p[k] + "%" : usd(p[k])}`);
@@ -89,6 +95,7 @@ export function describeSetup(kind: SetupKind, p: Record<string, any>): string {
       if (p.active_mode !== undefined) parts.push(p.active_mode ? "let strategies that pass on paper go live by themselves" : "wait for your Go live on each strategy");
       if (p.always_on !== undefined) parts.push(p.always_on ? "keep it running 24/7" : "stop it while your devices are off");
       if (p.tokens) parts.push(`trade only ${p.tokens.map((t: any) => t.token.length > 12 ? "a coin" : t.token).join(", ")}`);
+      if (p.moves) { const m = p.moves; if (m.on === false) parts.push("turn off Big moves"); else { if (m.on) parts.push("turn on Big moves"); if (m.share_pct) parts.push(`protect ${m.share_pct}% of a strategy's coins on big moves`); if (m.trail_pct) parts.push(`use a ${m.trail_pct}% trailing stop on big moves`); if (m.own !== undefined) parts.push(m.own ? "guard your own bots on big moves too" : "leave your own bots alone on big moves"); } }
       return parts.length ? cap(parts.join(", ")) + "." : "Change Autopilot's settings.";
     }
   }
@@ -97,7 +104,7 @@ const TPL: Record<string, string> = { dip: "Buy the dip", grid: "Grid trader", d
 const cap = (s: string) => s[0]!.toUpperCase() + s.slice(1);
 
 /** True for the kinds the dashboard asks the password for before applying. */
-export const needsPassword = (k: SetupKind) => !["app_budget", "cash_out", "always_budget", "autopilot_strategy", "autopilot_settings"].includes(k);
+export const needsPassword = (k: SetupKind) => !["app_budget", "cash_out", "always_budget", "autopilot_strategy", "autopilot_settings", "autopilot_action"].includes(k);
 
 const DAY = 24 * 3600_000, KEEP = 7 * DAY, MAX_WAITING = 20;
 const fileOf = (dir?: string) => path.join(walletHome(dir), "setups.json");

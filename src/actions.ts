@@ -22,7 +22,7 @@ import { checkToken, isCoreToken, loadExtraLists, searchEvm, searchSolana } from
 import { serverRunnable } from "./alwayson.js";
 import { isBotKind } from "./botlogic.js";
 import { buyLink } from "./buy.js";
-import { autopilotReport, suggestedSizes } from "./superbot.js";
+import { autopilotLog, autopilotReport, suggestedSizes } from "./superbot.js";
 import { budgetView } from "./appbudget.js";
 import { SETUP_KIND_NAMES, Setups, showSetup, type SetupKind } from "./setups.js";
 
@@ -154,9 +154,13 @@ export const ACTIONS = [
       return { ok: true, notes };
     } }),
   // 0.9.13: what Autopilot (the strategy feature that runs on its own) is doing and why, read-only.
-  def({ name: "autopilot_status", spends: false, schema: z.object({ decisions: z.number().int().min(1).max(40).optional().describe("How many recent decisions to include (default 15)") }),
+  def({ name: "autopilot_status", spends: false, schema: z.object({ decisions: z.number().int().min(1).max(100).optional().describe("How many recent decisions to include (default 15; the full log is autopilot_log)") }),
     description: "Everything Autopilot is doing, read-only: whether it's on or stopped by a loss limit, its settings and limits (budget, per-trade cap, pace, Active mode, Run 24/7), each strategy (stage: practice on paper or live with real money, its settings, trades, money earned, result, its rules and recent changes), the strategies it retired and why, its recent decisions with the reasons and what happened, and its daily reports. Use it to explain Autopilot to the owner; Autopilot changes its own strategies, so never try to change them.",
     run: async (w, a) => autopilotReport(w, { decisions: a.decisions }) }),
+  // Nov 5: the whole decision log (up to 500 kept), with filters and paging.
+  def({ name: "autopilot_log", spends: false, schema: z.object({ limit: z.number().int().min(1).max(200).optional().describe("How many (default 50)"), before: z.string().max(40).optional().describe("Only decisions before this ISO time (next_before from the last page)"), strategy: z.string().max(60).optional().describe("A strategy id or part of its name"), token: z.string().max(64).optional(), applied_only: z.boolean().optional(), by: z.enum(["strategist", "rule"]).optional().describe("strategist: the AI's decisions; rule: automatic ones (loss stops, Big moves, pace)") }),
+    description: "Autopilot's full decision log, newest first: every decision the strategist AI and the automatic rules made (loss stops, Big moves, pace changes, paper trials), with its market view, confidence, model and cost, and each action's strategy, coin, settings, sources, whether it was applied and what happened. Up to 500 are kept; page back with `before`. Read-only.",
+    run: async (w, a) => autopilotLog(w, a) }),
   def({ name: "autopilot_rules", spends: false, schema: RulesListArgs,
     description: "The autopilot's rules with a plain description of each, status, last price seen, fills and any error.",
     run: async (w, a) => w.rules().list().filter((r) => !a.status || r.status === a.status).map(showRule) }),
@@ -283,7 +287,8 @@ export const ACTIONS = [
       + "cash_out {chain, asset, amount}; connect_app {app: claude|claude-code|cursor|vscode|codex|gemini}; "
       + "app_budget {app, weekly_usd (null removes)}; always_budget {budget_usd}; "
       + "autopilot_strategy {template (bot_templates id), chain, token, params?}: Autopilot runs it as one of its own strategies (paper first, inside its budget and slots, no doubles); "
-      + "autopilot_settings {budget_usd?, per_trade_usd?, max_strategies?, max_token_pct?, daily_loss_pct?, weekly_loss_pct?, pace?: steady|active|max|adaptive, active_mode?, always_on?, tokens?: [{chain, token}]}. Requests expire after a day.",
+      + "autopilot_settings {budget_usd?, per_trade_usd?, max_strategies?, max_token_pct?, daily_loss_pct?, weekly_loss_pct?, pace?: steady|active|max|adaptive, active_mode?, always_on?, tokens?: [{chain, token}], moves?: {on?, own?, share_pct?: 25|50|75|100, trail_pct?: 2|3|5|8} (Big moves)}. "
+      + "autopilot_action {action: stop_strategy|go_live|turn_on|turn_off|resume, strategy_id? (from autopilot_status)}: stop one strategy for good, put one that passed its paper trial live, turn Autopilot on or off, or resume it after a loss stop. Requests expire after a day.",
     run: async (w, a, ctx) => { try { return { ok: true, request: showSetup(await new Setups(w.dir).add(a.kind, a.params, a.reason, ctx?.app ?? "An AI app")), note: "The owner will see this on the wallet's Approvals screen. Check setup_requests for what happened." }; } catch (e) { return bad(e); } } }),
   def({ name: "setup_requests", spends: false, schema: z.object({ status: z.enum(["waiting", "applied", "dismissed", "expired"]).optional() }),
     description: "Setup requests and what the owner did with them.",
