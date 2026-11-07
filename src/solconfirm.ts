@@ -73,7 +73,7 @@ export async function pollSolana(conn: Connection, sig: string, lastValidBlockHe
       }
       let seen: any = null; try { seen = await conn.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }); } catch { /* unknown: dropped */ }
       if (seen) { if (seen.meta?.err) throw new Error(`Solana ${what} ${sig} failed: ${JSON.stringify(seen.meta.err)}`); return sig; }
-      throw new Error(`The Solana network dropped this ${what} (${short}), so nothing changed in your wallet. It's safe to try again.`);
+      throw Object.assign(new Error(`The Solana network dropped this ${what} (${short}), so nothing changed in your wallet. It's safe to try again.`), { sig });
     }
     if (Date.now() > until) throw new Error(`Solana ${what} ${sig} is still waiting for the network. Check it on an explorer before trying again.`);
     if (o.resend && !st) try { await o.resend(Date.now() - t0 >= JITO_ALONE_MS); } catch { /* the next check tries again */ }

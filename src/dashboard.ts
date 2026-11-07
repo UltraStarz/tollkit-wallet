@@ -167,10 +167,16 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // Every token held, priced (refreshes each minute). Off in tests unless one is passed in.
   const holdings = o.holdings === false || (o.holdings === undefined && o.watch === false) ? null : o.holdings ?? new Holdings({ evm: w.addresses.evm, solana: w.addresses.solana, chains: () => w.policy.chains, dir: w.dir });
   holdings?.start();
+  // Nov 7 (data audit): swaps recorded as dropped that landed are corrected from the chain, at start and every half hour.
+  const recon = () => { void w.reconcileDropped().then((n) => { if (n) { void autopilot?.tick(); } }).catch(() => {}); };
+  setTimeout(recon, 20_000); setInterval(recon, 30 * 60_000).unref?.();
   const coins = Object.fromEntries(Object.entries(KNOWN).map(([c, t]) => [c, Object.fromEntries(Object.values(t).map((x) => [x.symbol, coinId(c as Chain, x.address)]))]));
   const priceOf = (t: string) => prices?.snapshot().prices[t.toUpperCase()]?.usd;
   // 0.9.13: a bot's price for its results: the feed (SOL, ETH), else the last one this wallet saw for the coin.
-  const livePrice = (chain: Chain, token: string) => priceOf(token) ?? tape.series(chain, token).at(-1)?.[1];
+  // Nov 7 (data audit): a stopped bot's coin isn't watched any more, so its last price went stale (USELESS showed $0.128
+  // while it was $0.133). The Home list's own price for the coin comes before that.
+  const heldPrice = (chain: Chain, token: string) => holdings?.snapshot().tokens.find((t) => t.chain === chain && t.address.toLowerCase() === token.toLowerCase())?.price;
+  const livePrice = (chain: Chain, token: string) => priceOf(token) ?? heldPrice(chain, token) ?? tape.series(chain, token).at(-1)?.[1];
   // 0.9.0: the Autopilot (src/superbot.ts). Same token rule as the Bots screen: core tokens, or ones added on Home.
   const knownToken = async (chain: Chain, token: string) => {
     if (!w.policy.chains.includes(chain)) return false;

@@ -71,5 +71,16 @@ check(/still waiting/.test(e4) && !/nothing changed/.test(e4), "not expired yet 
   let e5 = ""; try { await sendAndConfirm(m.c, tx(), [kp], { pollMs: 1, settleMs: 1 } as any); } catch (e) { e5 = (e as Error).message; }
   check(/dropped/.test(e5), "nowhere to be found: still says dropped", e5);
 }
+// Nov 7 (data audit): a "dropped" error carries the full signature, so the record can be re-checked on the chain later.
+{
+  const m = conn([null], 101); (m.c as any).getTransaction = async () => null;
+  let err: any = null; try { await sendAndConfirm(m.c, tx(), [kp], { pollMs: 1, settleMs: 1 } as any); } catch (e) { err = e; }
+  check(err?.sig === "SIG", "the dropped error carries the signature", err?.sig);
+  const { describeDeltas } = await import("../src/onchain.js");
+  const name = (m: string) => (m.startsWith("EPj") ? "USDC" : m.slice(0, 4) + "…");
+  check(describeDeltas({ sol: -0.000015, tokens: { Dz9mQ9: 25.2088, EPjFWdd5: -3.26 } }, name) === "3.26 USDC -> 25.2088 Dz9m…", "a swap's line is what actually moved", describeDeltas({ sol: -0.000015, tokens: { Dz9mQ9: 25.2088, EPjFWdd5: -3.26 } }, name));
+  check(describeDeltas({ sol: -1.6985, tokens: { EPjFWdd5: 152.333651 } }, name) === "1.6985 SOL -> 152.3337 USDC", "selling SOL reads as SOL out, USDC in");
+  check(describeDeltas({ sol: -0.00001, tokens: {} }, name) === null, "nothing traded: no line");
+}
 console.log(`\nsolconfirm: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

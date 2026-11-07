@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { createCloseAccountInstruction } from "@solana/spl-token";
 import { sendAndConfirm } from "./solconfirm.js";
+import { describeDeltas, findSig, txDeltas } from "./onchain.js";
 import { PriceFeed } from "./prices.js";
 import { Contract, JsonRpcProvider, formatUnits, parseUnits } from "ethers";
 import { CHAIN_INFO, DEFAULT_RPC, EVM_CHAIN_ID, STABLES, SWAP_FEE_BPS, WSOL, NATIVE_EVM, chainName, type Chain } from "./chains.js";
@@ -103,6 +104,11 @@ export function balanceWarning(q: SwapQuote): string | undefined {
   return undefined;
 }
 
+/** Nov 7: a Solana mint's symbol when known, else its short address. */
+export function mintName(mint: string): string {
+  const t = Object.values(KNOWN.solana).find((k) => k.address === mint);
+  return t ? t.symbol : `${mint.slice(0, 4)}…`;
+}
 /** "30 USDC" / "0.0118 WETH" for known tokens; shortened address + raw units otherwise. */
 export function describeAmount(chain: Chain, token: string, atomic: string): string {
   const t = Object.values(KNOWN[chain]).find((k) => k.address.toLowerCase() === token.toLowerCase());
@@ -367,14 +373,68 @@ export class TollkitWallet {
         try { feeNote = { fee_tx: await this.sendSolFee(fee) }; }
         catch (e) { feeNote = { reason: `The swap went through, but Tollkit's fee wasn't sent: ${(e as Error).message.slice(0, 200)}` }; }
       }
-      settle(id, { status: "done", tx, ...feeNote }, this.o.dir);
+      settle(id, { status: "done", tx, ...feeNote, ...(q.fee_usd ? {} : { fee_usd: Math.round(usd * (Number((q as any).fee_bps) || 50)) / 1e4 }) }, this.o.dir);
+      // Nov 7 (data audit): the line says what actually moved ("3.26 USDC -> 25.47 Dz9m…"), not the quote's minimum.
+      if (q.chain === "solana") void this.realLine(id, tx);
       if (q.chain !== "solana" && q.buy_token !== NATIVE_EVM) try { new TokenList(this.o.dir).add(q.chain, q.buy_token); } catch { /* display only */ }
       return { ok: true, quote: strip(q), tx, receipt_id: id };
     } catch (e) {
-      const why = plainError(e, q.chain);
-      settle(id, { status: "failed", reason: why }, this.o.dir);
+      const why = plainError(e, q.chain), sig = (e as any)?.sig as string | undefined;
+      settle(id, { status: "failed", reason: why, ...(sig ? { tx: sig } : {}) }, this.o.dir); // Nov 7: kept, so reconcileDropped can re-check it
       return { ok: false, quote: strip(q), receipt_id: id, refused: { code: "swap_failed", reason: why } };
     }
+  }
+
+  /** Nov 7: a receipt's line from the chain once its Solana swap has landed. */
+  private async realLine(id: string, sig: string) {
+    try {
+      const conn = new Connection(this.rpc("solana"), "confirmed");
+      for (let i = 0; i < 3; i++) {
+        const d = await txDeltas(conn, this.addresses.solana, sig);
+        if (d) { const line = describeDeltas(d, (m) => mintName(m)); if (line) settle(id, { status: "done", detail: line }, this.o.dir); return; }
+        await new Promise((r) => setTimeout(r, 4000));
+      }
+    } catch { /* the quote's line stays */ }
+  }
+
+  /**
+   * Nov 7 (data audit): a Solana swap recorded as "the network dropped this swap" is checked against the chain. One that
+   * landed becomes done, with what actually moved, and the bot rule that made it gets the fill, so its coins are its again.
+   * Looks back a week; run at start and every half hour.
+   */
+  async reconcileDropped(): Promise<number> {
+    const week = Date.now() - 7 * 86_400_000, owner = this.addresses.solana;
+    const todo = entries(this.o.dir).filter((e) => e.kind === "trade" && e.chain === "solana" && e.status === "failed" && /network dropped this swap/.test(e.reason ?? "") && Date.parse(e.ts) >= week);
+    if (!todo.length) return 0;
+    const conn = new Connection(this.rpc("solana"), "confirmed");
+    let fixed = 0;
+    for (const e of todo) {
+      const short = /\(([1-9A-HJ-NP-Za-km-z]{4,}…[1-9A-HJ-NP-Za-km-z]{3,})\)/.exec(e.reason ?? "")?.[1];
+      const sig = e.tx ?? (short ? await findSig(conn, owner, short) : null);
+      if (!sig) continue;
+      const st = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true }).catch(() => null))?.value?.[0];
+      if (!st || st.err || st.confirmationStatus === "processed") continue;
+      const d = await txDeltas(conn, owner, sig);
+      if (!d) continue;
+      const line = describeDeltas(d, (m) => mintName(m));
+      settle(e.id, { status: "done", tx: sig, reason: "Rechecked on the chain: this swap went through.", ...(line ? { detail: line } : {}) }, this.o.dir);
+      // The bot's side: its failed fill with this signature becomes the trade it was.
+      const shortOf = `${sig.slice(0, 6)}…${sig.slice(-4)}`, usdc = KNOWN.solana.USDC!.address;
+      const spent = -(d.tokens[usdc] ?? 0), got = d.tokens[usdc] ?? 0;
+      await this.rules().mutate((rs) => {
+        for (const r of rs) for (const f of r.state.fills) {
+          if (f.ok || !(f.reason ?? "").includes(shortOf)) continue;
+          const units = Math.abs(d.tokens[r.token] ?? (r.token === "SOL" ? d.sol : 0));
+          const buy = spent > 0;
+          Object.assign(f, { ok: true, tx: sig, side: buy ? "buy" : "sell", usd: Math.round((buy ? spent : got) * 100) / 100, units, reason: undefined });
+          if (buy) { r.state.spent_usd = (r.state.spent_usd ?? 0) + spent; r.state.bought_units = (r.state.bought_units ?? 0) + units; }
+          else { r.state.received_usd = (r.state.received_usd ?? 0) + got; r.state.sold_units = (r.state.sold_units ?? 0) + units; }
+          r.state.failures = Math.max(0, (r.state.failures ?? 1) - 1);
+        }
+      });
+      fixed++;
+    }
+    return fixed;
   }
 
   /** Fetch a URL, paying through x402 or MPP if it asks, within the owner's rules. */
