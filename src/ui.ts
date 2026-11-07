@@ -2055,7 +2055,8 @@ function sbMove(k,v){SB.f=SB.f||{};var cm=Object.assign({},(S.superbot.settings|
 function sbNoteRm(i){SB.f=SB.f||{};var N=(SB.f.notes!=null?SB.f.notes:((S.superbot||{}).settings||{}).notes||[]).slice();N.splice(i,1);SB.f.notes=N;render()}
 function sbPaceNow(){var f=SB.f||{},st=(S.superbot||{}).settings||{};return f.pace||st.pace||"adaptive"}
 function sbSave(){var f=SB.f||{},st=S.superbot.settings,body={};if(f.pace)body.pace=f.pace;["budget_usd","per_trade_usd","max_token_pct","daily_share_pct","slippage_bps","daily_loss_pct","weekly_loss_pct","paper_days","paper_trades","max_strategies","rethink_minutes"].forEach(function(k){if(f[k]!=null)body[k]=Number(f[k])});
-if(f.chains)body.chains=f.chains;if(f.notes)body.notes=f.notes;if(f.sources)body.sources=f.sources;if(f.always_on!=null)body.always_on=f.always_on;if(f.think_24_7!=null)body.think_24_7=f.think_24_7;if(f.active_mode!=null)body.active_mode=f.active_mode;
+if(f.chains)body.chains=f.chains;if(f.notes)body.notes=f.notes;if(f.moves)body.moves=f.moves; // Nov 7 (Joe: "big moves isn't saving"): it was never sent
+if(f.sources)body.sources=f.sources;if(f.always_on!=null)body.always_on=f.always_on;if(f.think_24_7!=null)body.think_24_7=f.think_24_7;if(f.active_mode!=null)body.active_mode=f.active_mode;
 if(Array.isArray(f.tokens))body.tokens=f.tokens.filter(function(x){return (f.chains||st.chains).indexOf(x.chain)>=0});
 SB.busy=true;SB.err=null;render();api("/superbot",{action:S.superbot.enabled?"settings":"on",settings:body}).then(function(r){SB.busy=false;SB.edit=false;SB.f=null;S.superbot=r.superbot;flash=[1,S.superbot.enabled?"Autopilot is on. New strategies start on paper.":"Saved."];render()}).catch(function(e){SB.busy=false;SB.err=e.message;render()})}
 // 0.9.6: the app's own confirm sheet instead of the browser's "chrome-extension://… says" dialog.
