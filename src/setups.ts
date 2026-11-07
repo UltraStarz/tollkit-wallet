@@ -47,7 +47,7 @@ export const SetupKinds = {
   }).strict(),
   // Nov 5: the AI asks the owner to act on Autopilot itself: stop or put live one strategy, turn Autopilot on or off,
   // or resume it after a loss stop. Nothing happens until the owner taps Apply.
-  autopilot_action: z.object({ action: z.enum(["stop_strategy", "go_live", "turn_on", "turn_off", "resume", "set_sizing"]), strategy_id: z.string().min(2).max(40).optional(), sizing: z.enum(["fixed", "compound", "step_up"]).optional() }).strict(),
+  autopilot_action: z.object({ action: z.enum(["stop_strategy", "go_live", "turn_on", "turn_off", "resume", "set_sizing"]), strategy_id: z.string().min(2).max(40).optional(), sizing: z.enum(["fixed", "compound"]).optional() }).strict(),
 } as const;
 export type SetupKind = keyof typeof SetupKinds;
 export const SETUP_KIND_NAMES = Object.keys(SetupKinds) as SetupKind[];
