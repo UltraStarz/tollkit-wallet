@@ -1359,7 +1359,7 @@ export class SuperBot {
       const want = Math.min(s.settings.per_trade_usd, nextSize(st.sizing, base, cur, made, seen));
       const next = { ...st.params, amount_usd: want };
       const why = oneShot
-        ? `Sold; buying again at $${r2(want)}${want !== cur ? ` (was $${r2(cur)}, ${st.sizing === "compound" ? "growing with what it made" : st.sizing === "step_up" ? (made > seen ? "sized up after a win" : "back to the start after a loss") : "same size"})` : ""}.`
+        ? `Sold; buying again at $${r2(want)}${want !== cur ? ` (was $${r2(cur)}, ${st.sizing === "compound" ? "adding what it made" : st.sizing === "step_up" ? (made > seen ? "25% bigger after a win" : "back to the start after a loss") : "same size"})` : ""}.`
         : `${made >= seen ? "Made" : "Lost"} $${r2(Math.abs(made - seen))} since the last size: next trades $${r2(want)} (was $${r2(cur)}).`;
       const ok = await this.restage(st, st.stage, why, all, next, true);
       if (ok.applied) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.sizing_seen = made; });
@@ -1372,7 +1372,7 @@ export class SuperBot {
     const st = this.load().strategies.find((x) => x.id === id && x.stage !== "retired");
     if (!st) throw new Error("No such running strategy.");
     const sum = this.summaryOf(st, this.w.rules().list());
-    await this.update((x) => { const y = x.strategies.find((z) => z.id === id); if (y) { y.sizing = mode; y.sizing_base ??= Number(y.params.amount_usd) || undefined; y.sizing_seen = r2(sum?.result_usd ?? 0); y.history.push({ ts: nowIso(this.now()), note: `You set its trade size to ${mode === "compound" ? "grow with profit" : mode === "step_up" ? "size up on wins" : "stay the same"}.` }); } });
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === id); if (y) { y.sizing = mode; y.sizing_base ??= Number(y.params.amount_usd) || undefined; y.sizing_seen = r2(sum?.result_usd ?? 0); y.history.push({ ts: nowIso(this.now()), note: `You set its trade size to ${mode === "compound" ? "add profits" : mode === "step_up" ? "bet bigger on wins" : "stay the same"}.` }); } });
   }
 
   /** Last share per network, for Think 24/7 (brainInfo is synchronous). */

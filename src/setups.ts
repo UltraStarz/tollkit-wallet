@@ -68,7 +68,7 @@ const LIMIT_LABELS: Record<string, string> = {
 };
 
 /** Plain English for the card, e.g. "Raise the per-swap limit to $100 and the daily swap limit to $500." */
-const SZ: Record<string, string> = { fixed: "the same size every trade", compound: "growing with what it makes", step_up: "25% bigger after each win, back to the start after a loss" };
+const SZ: Record<string, string> = { fixed: "the same size every trade", compound: "adding its profits to the next trade (Add profits)", step_up: "25% bigger after each win, back to the start after a loss (Bet bigger on wins)" };
 export function describeSetup(kind: SetupKind, p: Record<string, any>): string {
   switch (kind) {
     case "limits": {

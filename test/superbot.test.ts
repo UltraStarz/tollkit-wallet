@@ -702,7 +702,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(nextSize("compound", 100, 100, 6, 0) === 106 && nextSize("compound", 100, 106, 2, 6) === 102, "compound: start plus what it has made, less what it lost");
   check(nextSize("step_up", 100, 100, 3, 0) === 125 && nextSize("step_up", 100, 125, 7, 3) === 156.25 && nextSize("step_up", 100, 156.25, 5, 7) === 100, "step up: 25% bigger after each win, back to the start after a loss");
   const { describeSetup, SetupKinds } = await import("../src/setups.js");
-  check(/\$100(\.00)? a trade, growing with what it makes/.test(describeSetup("autopilot_strategy", { template: "dip", chain: "solana", token: "SOL", params: { amount_usd: 100, sizing: "compound" } })), "the Approvals card says the amount and the sizing", describeSetup("autopilot_strategy", { template: "dip", chain: "solana", token: "SOL", params: { amount_usd: 100, sizing: "compound" } }));
+  check(/\$100(\.00)? a trade, adding its profits/.test(describeSetup("autopilot_strategy", { template: "dip", chain: "solana", token: "SOL", params: { amount_usd: 100, sizing: "compound" } })), "the Approvals card says the amount and the sizing", describeSetup("autopilot_strategy", { template: "dip", chain: "solana", token: "SOL", params: { amount_usd: 100, sizing: "compound" } }));
   check(SetupKinds.autopilot_action.safeParse({ action: "set_sizing", strategy_id: "abcd1234", sizing: "step_up" }).success && !SetupKinds.autopilot_action.safeParse({ action: "set_sizing", strategy_id: "abcd1234", sizing: "double" }).success, "a sizing card only takes the three choices");
   const W = world();
   await W.bot.enable({ budget_usd: 100, tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
