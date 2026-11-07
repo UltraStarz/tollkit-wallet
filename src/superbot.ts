@@ -129,7 +129,7 @@ export interface Strategy {
   /** 0.9.13: when Autopilot last rebuilt it with new settings (an AI tweak, tightening, a resize). At most once in REBUILD_MS. */
   rebuilt_at?: string;
   /** 0.9.9: the owner stopped it (never rebuilt), paused its bot (Autopilot leaves it alone), or removed it from the list. */
-  stopped_by_owner?: boolean; owner_paused?: boolean; removed?: boolean;
+  stopped_by_owner?: boolean; owner_paused?: boolean; /** Nov 7: the owner asked for it with their own settings: Autopilot doesn't resize, adjust or retire it. */ owner_set?: boolean; removed?: boolean;
   /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
    * money on its own. */
   ready?: { at: string; result_pct: number; trades: number } | null;
@@ -735,7 +735,7 @@ export class SuperBot {
         // A trending meme also needs the coin added on Home before it can go live (checked again on Go live).
         if (pct !== null && pct > 0) {
           // 0.9.10 Active mode: it goes live by itself when it fits the budget (never a Trending-on-X coin: those need the owner).
-          if (s.settings.active_mode && !st.paper_only) {
+          if (s.settings.active_mode && !st.paper_only && !st.owner_set) { // Nov 7: one the owner set up waits for their Go live
             const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC. Active mode is on, so it went live with real money.`;
             const ok = await this.restage(st, "live", why, all);
             if (ok.applied) {
@@ -751,7 +751,7 @@ export class SuperBot {
             await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = { at: nowIso(t), result_pct: pct, trades }; y.history.push({ ts: nowIso(t), note: why }); } });
             await this.log("rule", why, [{ type: "keep", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`], applied: true, outcome: "ready to go live" }]);
             await this.d.notify?.(`Autopilot: ${st.paper_only ? st.name.replace(/ · [^·]*$/, ` · ${sym}`) : st.name} passed its paper trial (+${pct}%). Open Autopilot and tap Go live to use real money.`).catch(() => {});
-          } else if (t - Date.parse(st.ready.at) >= SUPERBOT.readyDays * 86_400_000) {
+          } else if (!st.owner_set && t - Date.parse(st.ready.at) >= SUPERBOT.readyDays * 86_400_000) {
             // 0.9.8: nobody tapped Go live in time: it's retired so it stops holding a strategy slot.
             const why = `Passed its paper trial (+${st.ready.result_pct}%) but Go live wasn't tapped within ${SUPERBOT.readyDays} days; dismissed. It never used real money.`;
             await this.retire(st, why, all);
@@ -760,7 +760,7 @@ export class SuperBot {
           continue;
         }
         if (st.ready) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
-        if (days >= 2 * s.settings.paper_days || (trades >= s.settings.paper_trades && pct !== null && pct <= 0)) {
+        if (!st.owner_set && (days >= 2 * s.settings.paper_days || (trades >= s.settings.paper_trades && pct !== null && pct <= 0))) {
           const why = st.paper_only
             ? `Paper test of ${st.symbol ? `$${st.symbol}` : "this meme"} from Trending on X finished (${pct === null ? "no trades" : `${pct}%`}) without beating holding USDC; retired.`
             : `Paper result ${pct === null ? "no trades" : `${pct}%`} after ${r2(days)} days did not beat holding USDC; retired.`;
@@ -1235,11 +1235,13 @@ export class SuperBot {
       }
       case "retire": {
         if (!st || st.stage === "retired") return { applied: false, outcome: "no such running strategy" };
+        if (st.owner_set) return { applied: false, outcome: "the owner set this one up; only they stop it" };
         await this.retire(st, `AI: ${a.reason}`, all);
         return { applied: true, outcome: "retired" };
       }
       case "adjust": {
         if (!st || st.stage === "retired") return { applied: false, outcome: "no such running strategy" };
+        if (st.owner_set) return { applied: false, outcome: "the owner set this one up; Autopilot leaves its settings alone" };
         if (st.owner_paused) return { applied: false, outcome: "the owner paused it; Autopilot leaves it alone" };
         const params = this.clampParams(s, st.template, { ...st.params, ...(a.params ?? {}) });
         if (params.note) return { applied: false, outcome: params.note };
@@ -1274,7 +1276,8 @@ export class SuperBot {
         if (params.note) return { applied: false, outcome: params.note };
         // 0.9.12 Adaptive pace: nothing new that buys a coin while it's falling.
         if (this.marketOf(chain, tok.token) === "falling" && committedUsd(a.template, params.params) > 0) return { applied: false, outcome: `not started: ${tok.token.length > 12 ? "the coin" : tok.token} is falling, and Adaptive pace starts no new buys on it` };
-        params.params = await this.sized(s, chain, a.template, params.params, undefined, a.owner && Number(a.params?.amount_usd) > 0 ? Number(a.params.amount_usd) : undefined);
+        try { params.params = await this.sized(s, chain, a.template, params.params, undefined, a.owner && Number(a.params?.amount_usd) > 0 ? Number(a.params.amount_usd) : undefined); }
+        catch (e) { return { applied: false, outcome: `not started: ${(e as Error).message}` }; }
         if (meme && typeof params.params.amount_usd === "number") params.params.amount_usd = Math.min(10, params.params.amount_usd as number);
         const price = await this.d.price(chain, tok.token).catch(() => undefined);
         // 0.9.9: never against the owner's own rules on this coin (src/conflict.ts).
@@ -1289,7 +1292,7 @@ export class SuperBot {
           const sym = String(meme?.symbol ?? "").slice(0, 16).toUpperCase();
           const name = !meme ? built.name : built.name.includes(tok!.token) ? built.name.split(tok!.token).join(sym) : built.name.replace(/ · [^·]*$/, ` · ${sym}`);
           x.strategies.push({ id, name, template: a.template, chain, token: tok!.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t,
-            history: [{ ts: t, note: meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }], ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}) });
+            history: [{ ts: t, note: a.owner ? `You asked for it: ${a.reason}` : meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }], ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}), ...(a.owner ? { owner_set: true } : {}) });
           x.paper_rules.push(...made.map((r) => r.id));
         });
         return { applied: true, outcome: `started on paper (${made.length} rule${made.length === 1 ? "" : "s"})` };
@@ -1309,7 +1312,7 @@ export class SuperBot {
     if ((s.sized ?? 0) >= 2 || s.halted) return; // Nov 7: 2 = sized again with free cash over open slots
     let waiting = false;
     for (const st of s.strategies) {
-      if (st.stage === "retired" || st.owner_paused || st.params.amount_usd === undefined) continue;
+      if (st.stage === "retired" || st.owner_paused || st.owner_set || st.params.amount_usd === undefined) continue;
       let next = await this.sized(this.load(), st.chain, st.template, st.params, st.id); // fresh: earlier ones in this pass may have grown
       if (st.paper_only && typeof next.amount_usd === "number") next = { ...next, amount_usd: Math.min(10, next.amount_usd) };
       const a0 = Number(st.params.amount_usd), a1 = Number(next.amount_usd);
@@ -1336,8 +1339,10 @@ export class SuperBot {
     if (ownerAmount !== undefined && ownerAmount > 0) {
       const free = Math.max(0, Math.min(s.settings.budget_usd - o.committed, (stable ?? s.settings.budget_usd) - o.live_committed));
       const want = { ...params, amount_usd: ownerAmount };
-      const fits = committedUsd(template, want) <= free + 0.005 ? want : sizeToShare(template, params, free);
-      const out = this.clampParams(s, template, fits);
+      const need = committedUsd(template, want);
+      if (ownerAmount > s.settings.per_trade_usd) throw new Error(`$${r2(ownerAmount)} is over Autopilot's per-trade cap of $${r2(s.settings.per_trade_usd)}`);
+      if (need > free + 0.005) throw new Error(`that needs $${r2(need)} and Autopilot has $${r2(free)} free on this network`);
+      const out = this.clampParams(s, template, want);
       return out.note ? params : out.params;
     }
     const out = this.clampParams(s, template, sizeToShare(template, params, share));

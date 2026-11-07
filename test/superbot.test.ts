@@ -650,6 +650,16 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const res = await W.bot.ownerAsk({ template: "dip", chain: "base", token: "ETH", params: { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, reason: "You asked for a dip buyer." });
   const v = W.bot.view();
   check(res.applied && v.strategies.some((x: any) => x.template === "dip" && x.stage === "paper"), "0.9.13: a strategy the owner asked for becomes one of Autopilot's, on paper", res);
+  {
+    const mine: any = W.bot.view().strategies.find((x: any) => x.template === "dip");
+    const raw: any = (W.bot as any).load().strategies.find((x: any) => x.template === "dip");
+    check(mine?.params?.amount_usd === 15 && raw?.owner_set === true, "Nov 7: the owner's own amount is kept ($15, not the equal share), and it's marked as theirs", mine?.params);
+    const adj = await (W.bot as any).apply({ type: "adjust", strategy_id: raw.id, params: { amount_usd: 3 }, reason: "smaller" });
+    const ret = await (W.bot as any).apply({ type: "retire", strategy_id: raw.id, reason: "weak" });
+    check(!adj.applied && !ret.applied && /owner/.test(adj.outcome + ret.outcome), "Nov 7: Autopilot can't change or stop a strategy the owner set up", [adj, ret]);
+  }
+  const big = await W.bot.ownerAsk({ template: "grid", chain: "base", token: "ETH", params: { amount_usd: 90, levels: 5 } });
+  check(!big.applied && /needs \$|per-trade cap/.test(big.outcome), "Nov 7: a size that doesn't fit is refused with the number, not shrunk", big);
   const again = await W.bot.ownerAsk({ template: "dip", chain: "base", token: "ETH", params: {} });
   check(!again.applied && /already running/.test(again.outcome), "0.9.13: and asking twice doesn't make a double", again);
   check(v.decisions.some((d: any) => /You asked for a dip/.test(d.assessment)), "0.9.13: the log says the owner asked for it");
