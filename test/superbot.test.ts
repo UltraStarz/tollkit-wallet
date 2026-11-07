@@ -661,7 +661,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const big = await W.bot.ownerAsk({ template: "grid", chain: "base", token: "ETH", params: { amount_usd: 90, levels: 5 } });
   check(!big.applied && /needs \$|per-trade cap/.test(big.outcome), "Nov 7: a size that doesn't fit is refused with the number, not shrunk", big);
   const again = await W.bot.ownerAsk({ template: "dip", chain: "base", token: "ETH", params: {} });
-  check(!again.applied && /already running/.test(again.outcome), "0.9.13: and asking twice doesn't make a double", again);
+  check(again.applied, "Nov 7: the owner may run a second one of the same kind (the no-doubles rule is for Autopilot's own picks)", again);
   check(v.decisions.some((d: any) => /You asked for a dip/.test(d.assessment)), "0.9.13: the log says the owner asked for it");
   const n1 = await W.bot.setNote("add", "Be careful this week"); await W.bot.setNote("add", "be careful this week"); const n2 = await W.bot.setNote("add", "No meme coins");
   check(n1.length === 1 && n2.length === 2, "0.9.13: notes are kept once each", n2);

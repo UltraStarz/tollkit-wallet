@@ -1283,9 +1283,11 @@ export class SuperBot {
         }
         if (!tok) return { applied: false, outcome: `${a.token} is not on the allowed list for ${chainName(chain)}` };
         if (a.template === "alert" || a.template === "twap" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
-        if (running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
+        // Nov 7 (Joe: "but nothing is running"): the no-doubles rules are for Autopilot's own picks. The owner may run a
+        // second dip on SOL next to one Autopilot started, or next to a paused leftover it can't see.
+        if (!a.owner && running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
         // 0.9.13: and never a second copy of a bot that is still running, even one no strategy tracks any more.
-        if (all.some((r) => r.by === "superbot" && !r.archived && ["active", "paused", "proposed"].includes(r.status) && r.template === a.template && r.chain === chain && r.token.toLowerCase() === tok.token.toLowerCase())) return { applied: false, outcome: `a ${a.template} on ${tok.token.length > 12 ? "this coin" : tok.token} is already running` };
+        if (!a.owner && all.some((r) => r.by === "superbot" && !r.archived && ["active", "paused", "proposed"].includes(r.status) && r.template === a.template && r.chain === chain && r.token.toLowerCase() === tok.token.toLowerCase())) return { applied: false, outcome: `a ${a.template} on ${tok.token.length > 12 ? "this coin" : tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
         // 0.9.12 Adaptive pace: nothing new that buys a coin while it's falling.
