@@ -47,7 +47,7 @@ export const SetupKinds = {
   }).strict(),
   // Nov 5: the AI asks the owner to act on Autopilot itself: stop or put live one strategy, turn Autopilot on or off,
   // or resume it after a loss stop. Nothing happens until the owner taps Apply.
-  autopilot_action: z.object({ action: z.enum(["stop_strategy", "go_live", "turn_on", "turn_off", "resume"]), strategy_id: z.string().min(2).max(40).optional() }).strict(),
+  autopilot_action: z.object({ action: z.enum(["stop_strategy", "go_live", "turn_on", "turn_off", "resume", "set_sizing"]), strategy_id: z.string().min(2).max(40).optional(), sizing: z.enum(["fixed", "compound", "step_up"]).optional() }).strict(),
 } as const;
 export type SetupKind = keyof typeof SetupKinds;
 export const SETUP_KIND_NAMES = Object.keys(SetupKinds) as SetupKind[];
@@ -68,6 +68,7 @@ const LIMIT_LABELS: Record<string, string> = {
 };
 
 /** Plain English for the card, e.g. "Raise the per-swap limit to $100 and the daily swap limit to $500." */
+const SZ: Record<string, string> = { fixed: "the same size every trade", compound: "growing with what it makes", step_up: "25% bigger after each win, back to the start after a loss" };
 export function describeSetup(kind: SetupKind, p: Record<string, any>): string {
   switch (kind) {
     case "limits": {
@@ -85,8 +86,13 @@ export function describeSetup(kind: SetupKind, p: Record<string, any>): string {
     case "connect_app": return `Connect ${p.app} to this wallet.`;
     case "app_budget": return p.weekly_usd === null ? `Remove ${p.app}'s weekly budget.` : `Give ${p.app} a weekly budget of ${usd(p.weekly_usd)}.`;
     case "always_budget": return `Let Tollkit's server spend up to ${usd(p.budget_usd)} of USDC in total for rules that keep running when the app is closed.`;
-    case "autopilot_strategy": return `Have Autopilot run ${TPL[p.template] ? `a ${TPL[p.template]} bot` : `a ${String(p.template).replace(/_/g, " ")}`} on ${String(p.token).length > 12 ? "this coin" : p.token} (${chainName(p.chain)}). It starts on paper and fits inside Autopilot's budget.`;
-    case "autopilot_action": return p.action === "stop_strategy" ? `Stop the Autopilot strategy ${p.strategy_id} for good.` : p.action === "go_live" ? `Put the Autopilot strategy ${p.strategy_id} live with real money.` : p.action === "turn_on" ? "Turn Autopilot on." : p.action === "turn_off" ? "Turn Autopilot off (every strategy stops)." : "Resume Autopilot after its loss stop.";
+    case "autopilot_strategy": {
+      // Nov 7: the card says exactly what will run: the amount and how it sizes, so nothing different can slip through.
+      const amt = p.params?.amount_usd !== undefined ? ` with ${usd(Number(p.params.amount_usd))} a trade` : "";
+      const sz = p.params?.sizing && SZ[p.params.sizing] ? `, ${SZ[p.params.sizing]}` : "";
+      return `Have Autopilot run ${TPL[p.template] ? `a ${TPL[p.template]} bot` : `a ${String(p.template).replace(/_/g, " ")}`} on ${String(p.token).length > 12 ? "this coin" : p.token} (${chainName(p.chain)})${amt}${sz}. It starts on paper and waits for your Go live; Autopilot keeps your settings.`;
+    }
+    case "autopilot_action": return p.action === "set_sizing" ? `Set the Autopilot strategy ${p.strategy_id}'s trade size to ${SZ[p.sizing] ?? p.sizing}.` : p.action === "stop_strategy" ? `Stop the Autopilot strategy ${p.strategy_id} for good.` : p.action === "go_live" ? `Put the Autopilot strategy ${p.strategy_id} live with real money.` : p.action === "turn_on" ? "Turn Autopilot on." : p.action === "turn_off" ? "Turn Autopilot off (every strategy stops)." : "Resume Autopilot after its loss stop.";
     case "autopilot_settings": {
       const parts: string[] = [], L: Record<string, string> = { budget_usd: "budget", per_trade_usd: "most per trade", max_token_pct: "most in one token", daily_loss_pct: "daily loss stop", weekly_loss_pct: "weekly loss stop" };
       for (const [k, l] of Object.entries(L)) if (p[k] !== undefined) parts.push(`set Autopilot's ${l} to ${k.endsWith("_pct") ? p[k] + "%" : usd(p[k])}`);

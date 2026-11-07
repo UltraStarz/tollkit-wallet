@@ -129,7 +129,9 @@ export interface Strategy {
   /** 0.9.13: when Autopilot last rebuilt it with new settings (an AI tweak, tightening, a resize). At most once in REBUILD_MS. */
   rebuilt_at?: string;
   /** 0.9.9: the owner stopped it (never rebuilt), paused its bot (Autopilot leaves it alone), or removed it from the list. */
-  stopped_by_owner?: boolean; owner_paused?: boolean; /** Nov 7: the owner asked for it with their own settings: Autopilot doesn't resize, adjust or retire it. */ owner_set?: boolean; removed?: boolean;
+  stopped_by_owner?: boolean; owner_paused?: boolean; /** Nov 7: the owner asked for it with their own settings: Autopilot doesn't resize, adjust or retire it. */ owner_set?: boolean; /** Nov 7 (Joe: "trade $100 of SOL and scale from there"): how the trade size moves. fixed: always the start
+   * amount; compound: the start plus everything it has made (or less what it lost); step_up: 25% bigger after each
+   * win, back to the start after a loss. A one-shot bot (a dip) is re-armed after each sale. */ sizing?: Sizing; sizing_base?: number; sizing_seen?: number; removed?: boolean;
   /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
    * money on its own. */
   ready?: { at: string; result_pct: number; trades: number } | null;
@@ -292,6 +294,15 @@ export function committedUsd(template: string, params: Record<string, unknown>):
  * by the maximum number of strategies. The amount is then spread the way each template spends it (a grid over its
  * levels, a steady buyer over its buys), so committedUsd() comes out at the share. Per-trade cap still applies after.
  */
+export type Sizing = "fixed" | "compound" | "step_up";
+export const SIZINGS: Sizing[] = ["fixed", "compound", "step_up"];
+/** The next trade size for a sizing mode. `made`: everything the strategy has made so far (realized), `seen`: at the last resize. */
+export function nextSize(mode: Sizing, base: number, cur: number, made: number, seen: number): number {
+  const r = (n: number) => Math.floor(n * 100) / 100;
+  if (mode === "compound") return r(Math.max(1, base + made));
+  if (mode === "step_up") return made > seen + 0.005 ? r(cur * 1.25) : made < seen - 0.005 ? r(base) : r(cur);
+  return r(base);
+}
 export function shareUsd(budget: number, stable: number | undefined, maxStrategies: number,
   others?: { committed: number; live_committed: number; count: number }): number {
   const cash = stable !== undefined && Number.isFinite(stable) && stable >= 0 ? stable : budget;
@@ -684,6 +695,7 @@ export class SuperBot {
       const active = (after.settings.pace ?? "steady") !== "steady"; // "active", "max" or "adaptive"
       await this.noticeOwnerStops(this.w.rules().list());
       await this.stopLeftovers(this.w.rules().list());
+      await this.sizePass(this.w.rules().list());
       if (active) await this.tightenIdle(this.w.rules().list());
       if (this.adaptive(after)) await this.rideRising(this.w.rules().list());
       if (this.mv(after).on) await this.bigMoves(this.w.rules().list());
@@ -1078,7 +1090,7 @@ export class SuperBot {
       const y = x.strategies.find((z) => z.id === st.id); if (!y) return;
       if (!keepClock) y.past = [...(y.past ?? []), { stage: y.stage, result_pct: sum?.result_pct ?? null, trades: sum?.trades_ok ?? 0 }].slice(-6);
       // 0.9.10: same stage, clock kept: the old bot's results stay with the strategy; a new stage starts clean.
-      y.prev_bots = keepClock && y.stage === stage && y.bot ? [...(y.prev_bots ?? []), y.bot].slice(-20) : [];
+      y.prev_bots = keepClock && y.stage === stage && y.bot ? [...(y.prev_bots ?? []), y.bot].slice(-200) : []; // Nov 7: 200, so a re-armed dip keeps its whole record
       if (y.bot) y.old_bots = [...(y.old_bots ?? []).filter((b) => b !== y.bot), y.bot].slice(-40);
       if (keepClock) y.rebuilt_at = nowIso(this.now());
       y.stage = stage; if (!keepClock) y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
@@ -1205,7 +1217,9 @@ export class SuperBot {
   async ownerAsk(a: { template: string; chain: string; token: string; params?: Record<string, unknown>; reason?: string }) {
     if (!this.load().enabled) throw new Error("Turn Autopilot on first.");
     const why = String(a.reason ?? "You asked for it from the AI chat.").slice(0, 200);
-    const res = await this.apply({ type: "propose", template: a.template, chain: a.chain, token: a.token, params: a.params ?? {}, reason: why, sources: ["you asked"], owner: true });
+    const { sizing, ...params } = (a.params ?? {}) as Record<string, unknown>;
+    const mode = SIZINGS.includes(sizing as Sizing) ? (sizing as Sizing) : undefined;
+    const res = await this.apply({ type: "propose", template: a.template, chain: a.chain, token: a.token, params, reason: why, sources: ["you asked"], owner: true, sizing: mode });
     await this.log("rule", res.applied ? `You asked for a ${a.template} on ${a.token}; Autopilot added it.` : `You asked for a ${a.template} on ${a.token}; Autopilot couldn't add it: ${res.outcome}.`, [{ type: "propose", reason: why, sources: ["you asked"], ...res }]);
     this.d.onRulesChanged?.();
     return res;
@@ -1292,7 +1306,7 @@ export class SuperBot {
           const sym = String(meme?.symbol ?? "").slice(0, 16).toUpperCase();
           const name = !meme ? built.name : built.name.includes(tok!.token) ? built.name.split(tok!.token).join(sym) : built.name.replace(/ · [^·]*$/, ` · ${sym}`);
           x.strategies.push({ id, name, template: a.template, chain, token: tok!.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t,
-            history: [{ ts: t, note: a.owner ? `You asked for it: ${a.reason}` : meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }], ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}), ...(a.owner ? { owner_set: true } : {}) });
+            history: [{ ts: t, note: a.owner ? `You asked for it: ${a.reason}` : meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }], ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}), ...(a.owner ? { owner_set: true } : {}), ...(a.sizing ? { sizing: a.sizing, sizing_base: Number(params.params.amount_usd) || undefined, sizing_seen: 0 } : {}) });
           x.paper_rules.push(...made.map((r) => r.id));
         });
         return { applied: true, outcome: `started on paper (${made.length} rule${made.length === 1 ? "" : "s"})` };
@@ -1323,6 +1337,42 @@ export class SuperBot {
       await this.restage(st, st.stage, `Resized from your balance: $${r2(a0)} → $${r2(a1)}${st.template === "grid" ? " a level" : st.template === "dca" ? " a buy" : ""}.`, this.w.rules().list(), next, true);
     }
     if (!waiting) await this.update((x) => { x.sized = 2; });
+  }
+
+  /**
+   * Nov 7: owner-picked sizing (see Strategy.sizing). Only between trades (holding nothing it bought), so no coins are
+   * left without their sell. A one-shot dip is re-armed at today's price once it has sold; a repeating bot (grid,
+   * Smart DCA) is rebuilt at the new size once it has made or lost money since the last time. Inside the per-trade cap.
+   */
+  private async sizePass(all: Rule[]) {
+    const s = this.load();
+    if (s.halted) return;
+    for (const st of s.strategies) {
+      if (!st.sizing || st.stage === "retired" || st.owner_paused || st.params.amount_usd === undefined) continue;
+      const sum = this.summaryOf(st, all);
+      if (!sum || (sum.units_held ?? 0) > 1e-9) continue;
+      const rules = this.rulesOf(s, st, all), oneShot = st.template === "dip";
+      const finished = rules.length > 0 && !rules.some((r) => ["active", "paused", "proposed"].includes(r.status));
+      const made = r2(sum.result_usd ?? 0), seen = st.sizing_seen ?? 0, cur = Number(st.params.amount_usd);
+      if (oneShot ? !finished : Math.abs(made - seen) < 0.005) continue;
+      const base = st.sizing_base ?? cur;
+      const want = Math.min(s.settings.per_trade_usd, nextSize(st.sizing, base, cur, made, seen));
+      const next = { ...st.params, amount_usd: want };
+      const why = oneShot
+        ? `Sold; buying again at $${r2(want)}${want !== cur ? ` (was $${r2(cur)}, ${st.sizing === "compound" ? "growing with what it made" : st.sizing === "step_up" ? (made > seen ? "sized up after a win" : "back to the start after a loss") : "same size"})` : ""}.`
+        : `${made >= seen ? "Made" : "Lost"} $${r2(Math.abs(made - seen))} since the last size: next trades $${r2(want)} (was $${r2(cur)}).`;
+      const ok = await this.restage(st, st.stage, why, all, next, true);
+      if (ok.applied) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.sizing_seen = made; });
+    }
+  }
+
+  /** Nov 7: the owner picks how a strategy's trade size moves (from the app or the AI chat's Approvals card). */
+  async setSizing(id: string, mode: Sizing) {
+    if (!SIZINGS.includes(mode)) throw new Error("Pick fixed, compound or step_up.");
+    const st = this.load().strategies.find((x) => x.id === id && x.stage !== "retired");
+    if (!st) throw new Error("No such running strategy.");
+    const sum = this.summaryOf(st, this.w.rules().list());
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === id); if (y) { y.sizing = mode; y.sizing_base ??= Number(y.params.amount_usd) || undefined; y.sizing_seen = r2(sum?.result_usd ?? 0); y.history.push({ ts: nowIso(this.now()), note: `You set its trade size to ${mode === "compound" ? "grow with profit" : mode === "step_up" ? "size up on wins" : "stay the same"}.` }); } });
   }
 
   /** Last share per network, for Think 24/7 (brainInfo is synchronous). */

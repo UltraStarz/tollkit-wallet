@@ -235,7 +235,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
       case "autopilot_action": {
         if (!superbot) throw new Error("Autopilot isn't running here.");
         const a = q.action, id = q.strategy_id;
-        if ((a === "stop_strategy" || a === "go_live") && !id) throw new Error("Which strategy?");
+        if ((a === "stop_strategy" || a === "go_live" || a === "set_sizing") && !id) throw new Error("Which strategy?");
+        if (a === "set_sizing") { await superbot.setSizing(id, q.sizing ?? "fixed"); return { ok: true, note: "Trade size set." }; }
         if (a === "stop_strategy") await superbot.stopStrategy(id); else if (a === "go_live") await superbot.goLive(id);
         else if (a === "turn_on") await superbot.enable({}); else if (a === "turn_off") await superbot.disable(); else await superbot.resume();
         return { ok: true, note: a === "stop_strategy" ? "Strategy stopped." : a === "go_live" ? "Strategy is live." : a === "turn_on" ? "Autopilot is on." : a === "turn_off" ? "Autopilot is off." : "Autopilot resumed." };
@@ -531,6 +532,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           // 0.9.8: the owner's Go live on a strategy that passed its paper trial.
           if (action === "go_live") return send(res, 200, { superbot: await superbot.goLive(b.id) });
           if (action === "dismiss") return send(res, 200, { superbot: await superbot.dismiss(b.id) });
+          // Nov 7: the owner picks how a strategy's trade size moves.
+          if (action === "sizing") { await superbot.setSizing(b.id, b.sizing); return send(res, 200, { superbot: superbot.view() }); }
           // 0.9.9: Stop any strategy for good, or Remove it from the list.
           if (action === "stop") return send(res, 200, { superbot: await superbot.stopStrategy(b.id) });
           if (action === "remove") return send(res, 200, { superbot: await superbot.removeStrategy(b.id) });

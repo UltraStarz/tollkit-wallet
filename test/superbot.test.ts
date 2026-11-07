@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RuleStore } from "../src/rules.js";
-import { committedUsd, shareUsd, DEFAULT_SETTINGS, parseSettings, raisedTarget, SUPERBOT, SuperBot, tightened, widened } from "../src/superbot.js";
+import { committedUsd, shareUsd, nextSize, DEFAULT_SETTINGS, parseSettings, raisedTarget, SUPERBOT, SuperBot, tightened, widened } from "../src/superbot.js";
 import { marketState } from "../src/botlogic.js";
 
 let pass = 0, fail = 0;
@@ -694,6 +694,24 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(shareUsd(400, 116, 5, { committed: 75.5, live_committed: 15.78, count: 4 }) === 100.22, "4 of 5 slots taken, $15.78 held back by live ones: the last slot gets the free $100.22", shareUsd(400, 116, 5, { committed: 75.5, live_committed: 15.78, count: 4 }));
   check(shareUsd(100, 500, 4, { committed: 90, live_committed: 0, count: 2 }) === 5, "the budget still caps it: $10 of budget left over 2 slots");
   check(shareUsd(400, 10, 4, { committed: 0, live_committed: 30, count: 1 }) === 0, "live ones already need more than the cash: nothing new");
+}
+
+// Nov 7: the owner's sizing choices.
+{
+  check(nextSize("fixed", 100, 100, 6, 0) === 100, "fixed: always the start amount");
+  check(nextSize("compound", 100, 100, 6, 0) === 106 && nextSize("compound", 100, 106, 2, 6) === 102, "compound: start plus what it has made, less what it lost");
+  check(nextSize("step_up", 100, 100, 3, 0) === 125 && nextSize("step_up", 100, 125, 7, 3) === 156.25 && nextSize("step_up", 100, 156.25, 5, 7) === 100, "step up: 25% bigger after each win, back to the start after a loss");
+  const { describeSetup, SetupKinds } = await import("../src/setups.js");
+  check(/\$100(\.00)? a trade, growing with what it makes/.test(describeSetup("autopilot_strategy", { template: "dip", chain: "solana", token: "SOL", params: { amount_usd: 100, sizing: "compound" } })), "the Approvals card says the amount and the sizing", describeSetup("autopilot_strategy", { template: "dip", chain: "solana", token: "SOL", params: { amount_usd: 100, sizing: "compound" } }));
+  check(SetupKinds.autopilot_action.safeParse({ action: "set_sizing", strategy_id: "abcd1234", sizing: "step_up" }).success && !SetupKinds.autopilot_action.safeParse({ action: "set_sizing", strategy_id: "abcd1234", sizing: "double" }).success, "a sizing card only takes the three choices");
+  const W = world();
+  await W.bot.enable({ budget_usd: 100, tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
+  await new Promise((r) => setTimeout(r, 30));
+  const res = await W.bot.ownerAsk({ template: "dip", chain: "base", token: "ETH", params: { amount_usd: 15, drop_pct: 5, profit_pct: 4, sizing: "compound" } });
+  const raw: any = (W.bot as any).load().strategies.find((x: any) => x.template === "dip");
+  check(res.applied && raw?.sizing === "compound" && raw?.sizing_base === 15 && raw?.params?.sizing === undefined, "the owner's sizing is kept on the strategy, not passed to the bot", raw);
+  await W.bot.setSizing(raw.id, "step_up");
+  check((W.bot as any).load().strategies.find((x: any) => x.id === raw.id)?.sizing === "step_up", "and can be changed later");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
