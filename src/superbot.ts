@@ -292,9 +292,18 @@ export function committedUsd(template: string, params: Record<string, unknown>):
  * by the maximum number of strategies. The amount is then spread the way each template spends it (a grid over its
  * levels, a steady buyer over its buys), so committedUsd() comes out at the share. Per-trade cap still applies after.
  */
-export function shareUsd(budget: number, stable: number | undefined, maxStrategies: number): number {
-  const base = Math.min(budget, stable !== undefined && Number.isFinite(stable) && stable >= 0 ? stable : budget);
-  return Math.floor((base / Math.max(1, maxStrategies)) * 100) / 100;
+export function shareUsd(budget: number, stable: number | undefined, maxStrategies: number,
+  others?: { committed: number; live_committed: number; count: number }): number {
+  const cash = stable !== undefined && Number.isFinite(stable) && stable >= 0 ? stable : budget;
+  // Nov 7 (Joe: "it just doesn't want to trade anything other than measly trades"): the money still free, not the whole
+  // balance, shared over the slots still open, not all of them. Before, $116 of USDC over 5 slots was $23 a strategy
+  // even with 4 slots taken and most of the cash idle. Free budget: the budget less what the other strategies are
+  // sized at; free cash: the USDC less what the other live ones may still spend (paper ones spend none).
+  if (others) {
+    const base = Math.max(0, Math.min(budget - others.committed, cash - others.live_committed));
+    return Math.floor((base / Math.max(1, maxStrategies - others.count)) * 100) / 100;
+  }
+  return Math.floor((Math.min(budget, cash) / Math.max(1, maxStrategies)) * 100) / 100;
 }
 export function sizeToShare(template: string, params: Record<string, unknown>, share: number): Record<string, unknown> {
   if (!(share > 0) || params.amount_usd === undefined) return params;
@@ -1196,7 +1205,7 @@ export class SuperBot {
   async ownerAsk(a: { template: string; chain: string; token: string; params?: Record<string, unknown>; reason?: string }) {
     if (!this.load().enabled) throw new Error("Turn Autopilot on first.");
     const why = String(a.reason ?? "You asked for it from the AI chat.").slice(0, 200);
-    const res = await this.apply({ type: "propose", template: a.template, chain: a.chain, token: a.token, params: a.params ?? {}, reason: why, sources: ["you asked"] });
+    const res = await this.apply({ type: "propose", template: a.template, chain: a.chain, token: a.token, params: a.params ?? {}, reason: why, sources: ["you asked"], owner: true });
     await this.log("rule", res.applied ? `You asked for a ${a.template} on ${a.token}; Autopilot added it.` : `You asked for a ${a.template} on ${a.token}; Autopilot couldn't add it: ${res.outcome}.`, [{ type: "propose", reason: why, sources: ["you asked"], ...res }]);
     this.d.onRulesChanged?.();
     return res;
@@ -1235,7 +1244,7 @@ export class SuperBot {
         const params = this.clampParams(s, st.template, { ...st.params, ...(a.params ?? {}) });
         if (params.note) return { applied: false, outcome: params.note };
         // 0.9.11: on paper the wallet re-sizes it to the equal share; a live one keeps its amount (budget checked at go-live).
-        if (st.stage === "paper") params.params = await this.sized(s, st.chain, st.template, params.params);
+        if (st.stage === "paper") params.params = await this.sized(s, st.chain, st.template, params.params, st.id);
         const clash = clashWithOwner(st.template, params.params, all, st.chain, st.token, await this.d.price(st.chain, st.token).catch(() => undefined));
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
@@ -1265,7 +1274,7 @@ export class SuperBot {
         if (params.note) return { applied: false, outcome: params.note };
         // 0.9.12 Adaptive pace: nothing new that buys a coin while it's falling.
         if (this.marketOf(chain, tok.token) === "falling" && committedUsd(a.template, params.params) > 0) return { applied: false, outcome: `not started: ${tok.token.length > 12 ? "the coin" : tok.token} is falling, and Adaptive pace starts no new buys on it` };
-        params.params = await this.sized(s, chain, a.template, params.params);
+        params.params = await this.sized(s, chain, a.template, params.params, undefined, a.owner && Number(a.params?.amount_usd) > 0 ? Number(a.params.amount_usd) : undefined);
         if (meme && typeof params.params.amount_usd === "number") params.params.amount_usd = Math.min(10, params.params.amount_usd as number);
         const price = await this.d.price(chain, tok.token).catch(() => undefined);
         // 0.9.9: never against the owner's own rules on this coin (src/conflict.ts).
@@ -1297,11 +1306,11 @@ export class SuperBot {
    */
   private async resizeToBalance(all: Rule[]) {
     const s = this.load();
-    if ((s.sized ?? 0) >= 1 || s.halted) return;
+    if ((s.sized ?? 0) >= 2 || s.halted) return; // Nov 7: 2 = sized again with free cash over open slots
     let waiting = false;
     for (const st of s.strategies) {
       if (st.stage === "retired" || st.owner_paused || st.params.amount_usd === undefined) continue;
-      let next = await this.sized(s, st.chain, st.template, st.params);
+      let next = await this.sized(this.load(), st.chain, st.template, st.params, st.id); // fresh: earlier ones in this pass may have grown
       if (st.paper_only && typeof next.amount_usd === "number") next = { ...next, amount_usd: Math.min(10, next.amount_usd) };
       const a0 = Number(st.params.amount_usd), a1 = Number(next.amount_usd);
       if (!(a1 > 0) || Math.abs(a1 - a0) < Math.max(0.5, a0 * 0.1)) continue;
@@ -1310,16 +1319,27 @@ export class SuperBot {
       if (this.rebuiltLately(st)) continue;
       await this.restage(st, st.stage, `Resized from your balance: $${r2(a0)} → $${r2(a1)}${st.template === "grid" ? " a level" : st.template === "dca" ? " a buy" : ""}.`, this.w.rules().list(), next, true);
     }
-    if (!waiting) await this.update((x) => { x.sized = 1; });
+    if (!waiting) await this.update((x) => { x.sized = 2; });
   }
 
   /** Last share per network, for Think 24/7 (brainInfo is synchronous). */
   private shares: Partial<Record<Chain, number>> = {};
   /** This network's equal share (see shareUsd), sized into the template's fields and clamped again. */
-  private async sized(s: State, chain: Chain, template: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async sized(s: State, chain: Chain, template: string, params: Record<string, unknown>, self?: string, ownerAmount?: number): Promise<Record<string, unknown>> {
     const stable = await this.d.stableUsd?.(chain).catch(() => undefined);
-    const share = shareUsd(s.settings.budget_usd, stable, s.settings.max_strategies);
+    const others = s.strategies.filter((x) => x.stage !== "retired" && x.id !== self);
+    const o = { committed: others.reduce((a, x) => a + committedUsd(x.template, x.params), 0), live_committed: others.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0), count: others.length };
+    const share = shareUsd(s.settings.budget_usd, stable, s.settings.max_strategies, o);
     this.shares[chain] = share;
+    // Nov 7: a size the owner named in the AI chat ("a $100 first buy") is kept, inside the per-trade cap and the cash
+    // still free; before, it was always replaced by the equal share ($1.81).
+    if (ownerAmount !== undefined && ownerAmount > 0) {
+      const free = Math.max(0, Math.min(s.settings.budget_usd - o.committed, (stable ?? s.settings.budget_usd) - o.live_committed));
+      const want = { ...params, amount_usd: ownerAmount };
+      const fits = committedUsd(template, want) <= free + 0.005 ? want : sizeToShare(template, params, free);
+      const out = this.clampParams(s, template, fits);
+      return out.note ? params : out.params;
+    }
     const out = this.clampParams(s, template, sizeToShare(template, params, share));
     return out.note ? params : out.params;
   }

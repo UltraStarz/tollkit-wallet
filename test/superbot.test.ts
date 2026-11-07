@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RuleStore } from "../src/rules.js";
-import { committedUsd, DEFAULT_SETTINGS, parseSettings, raisedTarget, SUPERBOT, SuperBot, tightened, widened } from "../src/superbot.js";
+import { committedUsd, shareUsd, DEFAULT_SETTINGS, parseSettings, raisedTarget, SUPERBOT, SuperBot, tightened, widened } from "../src/superbot.js";
 import { marketState } from "../src/botlogic.js";
 
 let pass = 0, fail = 0;
@@ -675,6 +675,15 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   await W.bot.disable();
   const rs = W.store.list();
   check(rs.filter((r) => r.by === "superbot").every((r) => r.status === "cancelled") && rs.find((r) => r.id === mine.id)!.status === "active", "0.9.13: Turn off cancels every Autopilot rule, tracked or not, and leaves the owner's own rules alone", rs.map((r) => [r.by, r.status]));
+}
+
+// Nov 7: sizing from the money still free, over the slots still open.
+{
+  check(shareUsd(400, 116, 5) === 23.2, "old way kept when no other strategies are given: $116 over 5 slots");
+  check(shareUsd(400, 116, 5, { committed: 0, live_committed: 0, count: 0 }) === 23.2, "nothing running: the same equal share");
+  check(shareUsd(400, 116, 5, { committed: 75.5, live_committed: 15.78, count: 4 }) === 100.22, "4 of 5 slots taken, $15.78 held back by live ones: the last slot gets the free $100.22", shareUsd(400, 116, 5, { committed: 75.5, live_committed: 15.78, count: 4 }));
+  check(shareUsd(100, 500, 4, { committed: 90, live_committed: 0, count: 2 }) === 5, "the budget still caps it: $10 of budget left over 2 slots");
+  check(shareUsd(400, 10, 4, { committed: 0, live_committed: 30, count: 1 }) === 0, "live ones already need more than the cash: nothing new");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
