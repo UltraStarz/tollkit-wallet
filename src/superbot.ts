@@ -131,7 +131,7 @@ export interface Strategy {
   /** 0.9.9: the owner stopped it (never rebuilt), paused its bot (Autopilot leaves it alone), or removed it from the list. */
   stopped_by_owner?: boolean; owner_paused?: boolean; /** Nov 7: the owner asked for it with their own settings: Autopilot doesn't resize, adjust or retire it. */ owner_set?: boolean; /** Nov 7 (Joe: "trade $100 of SOL and scale from there"): how the trade size moves. fixed: always the start
    * amount; compound: the start plus everything it has made (or less what it lost); step_up: 25% bigger after each
-   * win, back to the start after a loss. A one-shot bot (a dip) is re-armed after each sale. */ sizing?: Sizing; sizing_base?: number; sizing_seen?: number; removed?: boolean;
+   * win, back to the start after a loss. A one-shot bot (a dip) is re-armed after each sale. */ sizing?: Sizing; sizing_base?: number; sizing_seen?: number; /** Nov 7: when it stopped for lack of cash. */ sizing_wait?: string; removed?: boolean;
   /** 0.9.8: passed its paper trial (beat holding USDC) and waits for the owner to tap Go live. Nothing moves to real
    * money on its own. */
   ready?: { at: string; result_pct: number; trades: number } | null;
@@ -1356,7 +1356,24 @@ export class SuperBot {
       const made = r2(sum.result_usd ?? 0), seen = st.sizing_seen ?? 0, cur = Number(st.params.amount_usd);
       if (oneShot ? !finished : Math.abs(made - seen) < 0.005) continue;
       const base = st.sizing_base ?? cur;
-      const want = Math.min(s.settings.per_trade_usd, nextSize(st.sizing, base, cur, made, seen));
+      let want = Math.min(s.settings.per_trade_usd, nextSize(st.sizing, base, cur, made, seen));
+      // Nov 7 (Joe: "what happens when it runs out of money to trade?"): never bigger than the cash still free on this
+      // network (its USDC less what the other live strategies may still spend). A live one sizes down to what's
+      // there; with under $1 free it waits, holding nothing, and says so once, instead of failing a buy at every check.
+      if (st.stage === "live") {
+        const stable = await this.d.stableUsd?.(st.chain).catch(() => undefined);
+        if (stable !== undefined) {
+          const others = s.strategies.filter((x) => x.stage === "live" && x.id !== st.id).reduce((a, x) => a + committedUsd(x.template, x.params), 0);
+          const per = committedUsd(st.template, { ...st.params, amount_usd: 1 }) || 1; // dollars committed per $1 of amount
+          const room = Math.floor(((stable - others) / per) * 100) / 100;
+          if (room < 1) {
+            if (!st.sizing_wait) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.sizing_wait = nowIso(this.now()); y.history.push({ ts: nowIso(this.now()), note: `Out of cash to trade: $${r2(Math.max(0, stable - others))} of USDC is free on ${st.chain}. It waits and starts again when there's at least $1.` }); } });
+            continue;
+          }
+          if (want > room) want = room;
+        }
+      }
+      if (st.sizing_wait) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) delete y.sizing_wait; });
       const next = { ...st.params, amount_usd: want };
       const why = oneShot
         ? `Sold; buying again at $${r2(want)}${want !== cur ? ` (was $${r2(cur)}, ${st.sizing === "compound" ? "adding what it made" : st.sizing === "step_up" ? (made > seen ? "25% bigger after a win" : "back to the start after a loss") : "same size"})` : ""}.`
