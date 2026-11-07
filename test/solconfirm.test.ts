@@ -61,5 +61,15 @@ check(/still waiting/.test(e4) && !/nothing changed/.test(e4), "not expired yet 
   try { await pollSolana(c2, "SIG", 100, "swap", { pollMs: 1, resend: () => { throw new Error("no route"); } }); } catch { thrown = true; }
   check(!thrown, "a resend that fails doesn't stop the wait");
 }
+// Nov 7: a landed transaction isn't called dropped because one look didn't find it.
+{
+  const h = conn([null, null, { confirmationStatus: "finalized" }], 101);
+  check(await sendAndConfirm(h.c, tx(), [kp], { pollMs: 1, settleMs: 1 } as any) === "SIG" && h.sent.length === 1, "unknown on the first history look, found on the second: done, not sent again", h.sent.length);
+  const k = conn([null], 101); (k.c as any).getTransaction = async () => ({ slot: 5, meta: { err: null } });
+  check(await sendAndConfirm(k.c, tx(), [kp], { pollMs: 1, settleMs: 1 } as any) === "SIG" && k.sent.length === 1, "history never shows it but the transaction is there: done, not sent again");
+  const m = conn([null], 101); (m.c as any).getTransaction = async () => null;
+  let e5 = ""; try { await sendAndConfirm(m.c, tx(), [kp], { pollMs: 1, settleMs: 1 } as any); } catch (e) { e5 = (e as Error).message; }
+  check(/dropped/.test(e5), "nowhere to be found: still says dropped", e5);
+}
 console.log(`\nsolconfirm: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

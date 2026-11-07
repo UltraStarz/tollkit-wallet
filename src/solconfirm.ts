@@ -26,7 +26,7 @@ export async function priorityPrice(conn: Connection, tx: Transaction): Promise<
   } catch { return PRIO_MIN * 5; }
 }
 
-export async function sendAndConfirm(conn: Connection, tx: Transaction, signers: Keypair[], o: { pollMs?: number; maxMs?: number } = {}): Promise<string> {
+export async function sendAndConfirm(conn: Connection, tx: Transaction, signers: Keypair[], o: { pollMs?: number; maxMs?: number; settleMs?: number } = {}): Promise<string> {
   if (!tx.instructions.some((i) => i.programId.equals(ComputeBudgetProgram.programId))) {
     const price = await priorityPrice(conn, tx);
     tx.instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units: PRIO_UNITS }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: price }));
@@ -52,7 +52,7 @@ export const JITO_ALONE_MS = 10_000;
  * check once more, so the wallet can say for certain that nothing happened instead of "check an explorer".
  */
 export async function pollSolana(conn: Connection, sig: string, lastValidBlockHeight: number, what: string,
-  o: { pollMs?: number; maxMs?: number; resend?: (direct: boolean) => Promise<unknown> } = {}): Promise<string> {
+  o: { pollMs?: number; maxMs?: number; settleMs?: number; resend?: (direct: boolean) => Promise<unknown> } = {}): Promise<string> {
   // 0.9.12: `resend` sends the same signed transaction again at every check until it lands or its blockhash expires
   // (a single send was dropped about 1 in 3 times on Nov 3); `direct` turns true once JITO_ALONE_MS has passed.
   const t0 = Date.now(), until = t0 + (o.maxMs ?? 150_000), short = `${sig.slice(0, 6)}…${sig.slice(-4)}`;
@@ -63,9 +63,16 @@ export async function pollSolana(conn: Connection, sig: string, lastValidBlockHe
     if (done(st)) return sig;
     const expired = (await conn.getBlockHeight("confirmed")) > lastValidBlockHeight;
     if (expired) {
-      const last = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
-      if (last?.err) throw new Error(`Solana ${what} ${sig} failed: ${JSON.stringify(last.err)}`);
-      if (done(last)) return sig;
+      // Nov 7: one node's "unknown" isn't proof. Run 24/7's allowance was called dropped on Nov 6 while it had landed
+      // (2iooii…xzHC), so the history is asked twice, a few seconds apart, and the transaction itself once, before saying so.
+      for (let i = 0; i < 2; i++) {
+        if (i) await new Promise((r) => setTimeout(r, o.settleMs ?? 3000));
+        const last = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+        if (last?.err) throw new Error(`Solana ${what} ${sig} failed: ${JSON.stringify(last.err)}`);
+        if (last && last.confirmationStatus !== "processed") return sig;
+      }
+      let seen: any = null; try { seen = await conn.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }); } catch { /* unknown: dropped */ }
+      if (seen) { if (seen.meta?.err) throw new Error(`Solana ${what} ${sig} failed: ${JSON.stringify(seen.meta.err)}`); return sig; }
       throw new Error(`The Solana network dropped this ${what} (${short}), so nothing changed in your wallet. It's safe to try again.`);
     }
     if (Date.now() > until) throw new Error(`Solana ${what} ${sig} is still waiting for the network. Check it on an explorer before trying again.`);
