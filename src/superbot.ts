@@ -795,8 +795,9 @@ export class SuperBot {
   private async stopRules(st: Strategy, all: Rule[], note: string) {
     for (const r of this.openRules(this.rulesOf(this.load(), st, all))) {
       if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false);
-      await this.w.rules().setStatus(r.id, "cancelled").catch(() => {});
-      await this.w.rules().mutate((rules) => { const x = rules.find((y) => y.id === r.id); if (x) x.state.note = note.slice(0, 120); }).catch(() => {});
+      // Nov 7 (Joe: "2 bots keep starting and finishing immediately"): status and note in one write. Cancelled with no
+      // note reads as the owner's own Stop (noticeOwnerStops), so a check landing between two writes retired the strategy.
+      await this.w.rules().mutate((rules) => { const x = rules.find((y) => y.id === r.id); if (x && ["active", "paused", "proposed"].includes(x.status)) { x.status = "cancelled"; x.state.note = note.slice(0, 120); } }).catch(() => {});
     }
     await this.update((s) => { s.paper_rules = s.paper_rules.filter((id) => !all.some((r) => r.id === id && r.bot === st.bot)); });
   }

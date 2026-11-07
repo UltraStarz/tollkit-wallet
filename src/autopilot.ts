@@ -297,7 +297,7 @@ export class Autopilot {
         if (x.state.runs >= (x.times ?? 1)) x.status = "done";
       } else x.status = "done";
       if (x.group && x.status === "done") for (const s of rs) if (s.id !== x.id && s.group === x.group && (s.status === "active" || s.status === "paused" || s.status === "proposed")) {
-        s.status = "cancelled"; s.state.last_error = `Cancelled because rule ${x.id} in the same group filled.`;
+        s.status = "cancelled"; s.state.last_error = `Cancelled because rule ${x.id} in the same group filled.`; s.state.note = "Its partner filled."; // Nov 7: not an owner Stop
       }
       return { ...x };
     });
