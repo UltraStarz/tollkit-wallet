@@ -116,6 +116,10 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   // 0.9.12: one nudge per thing, kept across restarts (Telegram, when it's set up).
   const warnedFile = path.join(w.dir, "always-warned.json");
   const uiPrefsFile = path.join(w.dir, "ui-prefs.json");
+  const valueFile = path.join(w.dir, "value-history.json");
+  const valueHist = (): [number, number][] => { try { const j = JSON.parse(readFileSync(valueFile, "utf8")); return Array.isArray(j) ? j : []; } catch { return []; } };
+  // At most ~240 points to the page: the last day in full, older days thinned.
+  const valueThin = () => { const L = valueHist(), t = Date.now(); const day = L.filter((x) => t - x[0] < 86_400_000), old = L.filter((x) => t - x[0] >= 86_400_000); const k = Math.max(1, Math.ceil(old.length / 96)); return [...old.filter((_, i) => i % k === 0), ...day.filter((_, i, a) => a.length <= 144 || i % Math.ceil(a.length / 144) === 0)]; };
   const uiPrefs = (): Record<string, string> => { try { const j = JSON.parse(readFileSync(uiPrefsFile, "utf8")); return j && typeof j === "object" ? j : {}; } catch { return {}; } };
   const warnOnce = (key: string) => { let m: Record<string, string> = {}; try { m = JSON.parse(readFileSync(warnedFile, "utf8")); } catch { /* none yet */ } if (m[key]) return false; m[key] = new Date().toISOString(); try { writeFileSync(warnedFile, JSON.stringify(m), { mode: 0o600 }); } catch { /* best effort */ } return true; };
   let lastAlways = 0;
@@ -338,13 +342,15 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           setups: setups.waiting().map(showSetup), app_budgets: budgetView(w.dir), tollkit_tools: catalogView(w.dir),
           backup: { kind: backupKind(w.dir), done: backupDone(w.dir) },
           ext: { paired: w.dapps().paired(), sites: w.dapps().sites() },
-          holdings: holdings ? holdings.snapshot() : null, coins, superbot: superbot?.view() ?? null, ui_prefs: uiPrefs() });
+          holdings: holdings ? holdings.snapshot() : null, coins, superbot: superbot?.view() ?? null, ui_prefs: uiPrefs(), value_history: valueThin() });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
       // 0.8.5: a price chart for a bot (its levels and trades on it) or for a token being set up.
       if (req.method === "GET" && p === "/api/bots/chart") {
         const id = url.searchParams.get("bot");
         const rs = id ? w.rules().list().filter((r) => (r.bot ?? `rule-${r.id}`) === id) : [];
+        // Nov 7: a coin's chart (no bot) shows every live trade any bot made on it (the Trades card).
+        const tokRs = !id && url.searchParams.get("token") ? w.rules().list().filter((r) => r.token.toLowerCase() === String(url.searchParams.get("token")).toLowerCase() && r.chain === (url.searchParams.get("chain") ?? r.chain) && !r.paper) : [];
         const chain = (rs[0]?.chain ?? url.searchParams.get("chain") ?? "base") as Chain, token = rs[0]?.token ?? String(url.searchParams.get("token") ?? "");
         if (!token) return send(res, 400, { error: "Which bot or token?" });
         const days = Math.min(30, Math.max(1, Number(url.searchParams.get("days")) || 7));
@@ -355,7 +361,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (product) { try { const hc = await hourlyCandles(product, days * 24); series = hc.map((k) => [k.t, k.c]); candles = toCandles(hc, csize); source = "Coinbase"; } catch { /* fall back to the tape */ } }
         if (!series.length) { series = tape.series(chain, token, Date.now() - days * 86_400_000); source = series.length ? "Prices this wallet saw" : null; }
         const price = rs.map((r) => r.state.last_price).find((x) => typeof x === "number") ?? series.at(-1)?.[1] ?? null;
-        return send(res, 200, { token, chain, source, series, candles, price, levels: botLevels(rs), trades: botTrades(rs, 50).filter((t) => t.ok && t.price), next: rs.length ? botNext(rs, price) : null, started: rs.map((r) => r.created_at).sort()[0] ?? null });
+        return send(res, 200, { token, chain, source, series, candles, price, levels: botLevels(rs), trades: botTrades(rs.length ? rs : tokRs, 80).filter((t) => t.ok && t.price), next: rs.length ? botNext(rs, price) : null, started: rs.map((r) => r.created_at).sort()[0] ?? null });
       }
       // Receive: this wallet's own addresses, each with a QR code to scan from another wallet or an exchange.
       if (req.method === "GET" && p === "/api/receive") {
@@ -740,6 +746,14 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         return send(res, 200, { ok: true });
       }
       // 0.9.13: small view choices kept in the wallet (the extension's sandboxed page has no localStorage).
+      // Nov 7: the wallet's value over time, for the Value card (one point per 10 minutes, kept 120 days).
+      if (p === "/api/value") {
+        const v = Number(b.usd);
+        if (!(v >= 0 && v < 1e9)) return send(res, 400, { error: "Bad value." });
+        const L = valueHist(), t = Date.now();
+        if (!L.length || t - L[L.length - 1]![0] >= 600_000) { L.push([t, Math.round(v * 100) / 100]); writeFileSync(valueFile, JSON.stringify(L.filter((x) => t - x[0] < 120 * 86_400_000)), { mode: 0o600 }); }
+        return send(res, 200, { ok: true });
+      }
       if (p === "/api/ui/pref") {
         const k = String(b.key ?? ""), v = String(b.value ?? "").slice(0, 64);
         if (!/^[a-z_]{2,32}$/.test(k)) return send(res, 400, { error: "Bad key." });

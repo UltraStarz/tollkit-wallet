@@ -525,6 +525,10 @@ export class SuperBot {
       next_cycle: s.enabled && s.stats.last_cycle ? nowIso(Date.parse(s.stats.last_cycle) + s.settings.rethink_minutes * 60_000) : null,
       // 0.33.0: X through Grok, from Tollkit's shared snapshot: the mood per coin and the trending memes (paper only).
       x: this.xView(),
+      // Nov 7: the market numbers Autopilot reads, for the Market card on Home (from the shared snapshot).
+      pulse: (() => { const p = this.lastSnap?.pulse; if (!p) return null; const fg = p.fear_greed;
+        return { at: this.lastSnap.at ?? null, fear_greed: fg ? { value: fg.value, label: fg.classification, yesterday: fg.yesterday?.value ?? null } : null,
+          majors: (p.majors ?? []).slice(0, 4).map((m: any) => ({ coin: m.coin, d1: m.change_24h_pct, funding: m.funding_hourly_pct })) }; })(),
       range_idea: this.rangeIdea(s, all),
       server: this.d.serverBrain?.() ?? null,
       ...(this.d.decide ? { brain: { own: true, label: this.d.decide.label() } } : {}),
