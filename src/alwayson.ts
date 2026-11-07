@@ -152,13 +152,18 @@ export class AlwaysOn {
   }
 
   /** Signed request to Tollkit's server: the signature covers the route, the time and this exact body. */
-  private async call(route: string, body: unknown): Promise<any> {
+  // Nov 7 (Joe saw "rate_limited" on Run 24/7): Tollkit's server allows so many calls a minute from one connection,
+  // shared by every device at home. One busy answer is waited out once (a few seconds) before it counts as an error,
+  // and a second one says so in plain words; the next check tries again either way.
+  private async call(route: string, body: unknown, again = true): Promise<any> {
     // A fresh nonce in every body: two requests in the same second must never look like a replay.
     const text = JSON.stringify({ ...(body as object), _n: randomUUID() }), ts = Math.floor(this.now() / 1000);
     const msg = `Tollkit Always On\n${route}\n${getAddress(this.o.address)}\n${ts}\n${createHash("sha256").update(text).digest("hex")}`;
     const sig = await this.o.key().signMessage(msg);
     const r = await this.f(`${this.o.proxy}/always/${route}`, { method: "POST", headers: { "content-type": "application/json", "x-tk-address": getAddress(this.o.address), "x-tk-ts": String(ts), "x-tk-sig": sig }, body: text, signal: AbortSignal.timeout(240_000) });
     const j: any = await r.json().catch(() => ({}));
+    if (r.status === 429 && again) { await new Promise((res) => setTimeout(res, 3000 + Math.floor(Math.random() * 5000))); return this.call(route, body, false); }
+    if (r.status === 429) throw Object.assign(new Error("Tollkit's server is busy right now (too many requests from this connection); it tries again on the next check."), { status: 429 });
     if (!r.ok) throw Object.assign(new Error(j?.error ?? `Tollkit's server answered HTTP ${r.status}`), { status: r.status });
     return j;
   }

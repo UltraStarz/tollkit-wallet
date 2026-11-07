@@ -452,7 +452,10 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         const all = w.rules().list().filter((r) => !r.archived && r.status !== "proposed");
         const groups = new Map<string, typeof all>();
         for (const r of all) { const k = r.bot ?? `rule-${r.id}`; groups.set(k, [...(groups.get(k) ?? []), r]); }
-        const ids = b.finished === true ? [...groups.keys()].filter((k) => groups.get(k)!.every(done)) : [String(b.bot ?? "")];
+        // Nov 7 (Joe: "can't remove it"): an Autopilot strategy's older bots show folded under one row (superbot.botFold),
+        // so the row's id can have no rules of its own; removing it removes the bots folded into it.
+        const one = String(b.bot ?? ""), folded = Object.entries(superbot?.botFold().fold ?? {}).filter(([, to]) => to === one).map(([k]) => k);
+        const ids = b.finished === true ? [...groups.keys()].filter((k) => groups.get(k)!.every(done)) : [one, ...folded].filter((k) => groups.has(k));
         const rs = ids.flatMap((k) => groups.get(k) ?? []);
         if (!rs.length) return send(res, 400, { error: b.finished === true ? "There are no stopped or finished bots to remove." : "That bot isn't in your list." });
         if (!rs.every(done)) return send(res, 400, { error: "Stop it first; only stopped or finished bots can be removed." });
