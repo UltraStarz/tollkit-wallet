@@ -369,7 +369,8 @@ export class SolAlwaysOn {
 
     // 2. Which rules, and what each needs allowed.
     const l = this.load();
-    const want = store.list().filter((r) => l.rules[r.id] && (r.status === "active" || r.status === "paused"));
+    // Nov 9: never a practice (paper) rule: Tollkit's server trades real money.
+    const want = store.list().filter((r) => l.rules[r.id] && !r.paper && (r.status === "active" || r.status === "paused"));
     // 0.9.9: switches left on for rules that were cancelled, finished or deleted are dropped, so "nothing left" below
     // really means nothing: the SOL is unwrapped and every allowance ends without a trip to Settings.
     const gone = Object.keys(l.rules).filter((id) => !want.some((r) => r.id === id));

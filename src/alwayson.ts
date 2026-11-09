@@ -242,7 +242,8 @@ export class AlwaysOn {
     });
     // 2. Each network: set up once, re-sign when needed, send the rules.
     const l = this.load();
-    const want = store.list().filter((r) => l.rules[r.id] && (r.status === "active" || r.status === "paused"));
+    // Nov 9: never a practice (paper) rule: Tollkit's server trades real money.
+    const want = store.list().filter((r) => l.rules[r.id] && !r.paper && (r.status === "active" || r.status === "paused"));
     const byChain = new Map<EvmChain, Rule[]>();
     for (const r of want) {
       const why = serverRunnable(r, cfg.chains, cfg.kinds);
