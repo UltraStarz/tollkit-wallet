@@ -14,7 +14,7 @@ const tmp = () => mkdtempSync(path.join(os.tmpdir(), "twb-"));
 const err = (f: () => unknown) => { try { f(); return ""; } catch (e) { return (e as Error).message; } };
 
 function market() {
-  const state = { price: { ETH: 2500 } as Record<string, number>, bal: { ETH: 10n ** 18n } as Record<string, bigint>, swaps: [] as SwapRequest[], refuse: null as null | { code: string; reason: string } };
+  const state = { price: { ETH: 2500 } as Record<string, number>, bal: { ETH: 10n ** 18n, USDC: 10_000n * 1_000_000n } as Record<string, bigint>, swaps: [] as SwapRequest[], refuse: null as null | { code: string; reason: string } };
   const sym = (addr: string) => Object.values(KNOWN.base).find((t) => t.address.toLowerCase() === addr.toLowerCase())?.symbol ?? "?";
   const quote = async (req: SwapRequest) => {
     const sell = sym(req.sell_token), buy = sym(req.buy_token), p = state.price.ETH!;

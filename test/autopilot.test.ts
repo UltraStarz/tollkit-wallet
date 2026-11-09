@@ -60,7 +60,7 @@ const tryErr = async (f: () => Promise<unknown>) => { try { await f(); return ""
 
 // --- autopilot with a fake market
 function market() {
-  const state = { price: { ETH: 2500, SOL: 100 } as Record<string, number>, bal: { ETH: 10n ** 18n, SOL: 5n * 10n ** 9n } as Record<string, bigint>, swaps: [] as SwapRequest[], refuse: null as null | { code: string; reason: string } };
+  const state = { price: { ETH: 2500, SOL: 100 } as Record<string, number>, bal: { ETH: 10n ** 18n, SOL: 5n * 10n ** 9n, USDC: 10_000n * 1_000_000n } as Record<string, bigint>, swaps: [] as SwapRequest[], refuse: null as null | { code: string; reason: string } };
   const sym = (addr: string) => [...Object.values(KNOWN.base), ...Object.values(KNOWN.solana)].find((t) => t.address.toLowerCase() === addr.toLowerCase())?.symbol ?? "?";
   const quote = async (req: SwapRequest) => {
     const sell = sym(req.sell_token), buy = sym(req.buy_token);
@@ -157,6 +157,23 @@ function market() {
   ap.stop(); await other.tick();
   check(other.holdsLease && m.state.swaps.length === before + 1, "it takes over when the first stops");
   check(Autopilot.status(dir, clock).running === true, "status shows the autopilot running");
+}
+
+// --- Nov 9: cash check for all bots
+{
+  const dir = tmp(), m = market(), s = new RuleStore(dir);
+  let clock = Date.now();
+  const ap = new Autopilot(s, m.exec, m.prices, { dir, now: () => clock });
+  m.state.bal.USDC = 12_000_000n; // $12 free
+  const buy = await s.add({ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 20, trigger_price: 2600 }, "owner", false);
+  const grid = await s.add({ kind: "grid", chain: "base", token: "ETH", amount_usd: 25, lower_price: 2300, upper_price: 2700, levels: 5 }, "owner", false);
+  await ap.tick();
+  const b = s.get(buy.id)!, g = s.get(grid.id)!;
+  check(m.state.swaps.length === 0, "no swap when the USDC isn't there");
+  check(b.status === "active" && b.state.fills.length === 0 && !b.state.fail_count && /Waiting for cash: this buy needs \$20\.00 of USDC and \$12\.00 is free on Base/.test(b.state.last_error ?? ""), "a buy short of cash waits with a note, not a Failed trade", b.state);
+  check(g.status === "active" && !g.state.fail_count && /Waiting for cash/.test(g.state.last_error ?? ""), "a grid's buy waits the same way", g.state);
+  m.state.bal.USDC = 100_000_000n; clock += 6 * 60_000; await ap.tick();
+  check(s.get(buy.id)!.status === "done" && m.state.swaps.length >= 1, "it buys once the cash is there");
 }
 
 // --- paper trading

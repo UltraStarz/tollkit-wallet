@@ -275,6 +275,7 @@ export class Autopilot {
       if (r.kind === "limit_buy" ? eff > r.trigger_price! * 1.01 : eff < r.trigger_price! * 0.99) return; // the market moved back; keep waiting
     }
     if (await this.overShare(r, BUY_KINDS.includes(r.kind) ? r.amount_usd! : (Number(req.sell_amount) / 10 ** t.decimals) * price)) return;
+    if (BUY_KINDS.includes(r.kind) && await this.cashShort(r, r.amount_usd!)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
     const usd = res.quote?.usd_value ?? undefined;
@@ -350,6 +351,7 @@ export class Autopilot {
       req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps, ...bot };
     }
     if (await this.overShare(r, a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p)) return;
+    if (a.side === "buy" && await this.cashShort(r, a.usd)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
     const usd0 = res.quote?.usd_value ?? (a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p);
@@ -511,6 +513,23 @@ export class Autopilot {
   private async hold(r: Rule, until: number, note: string) {
     const updated = await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id)!; x.state.hold_until = new Date(until).toISOString(); x.state.last_error = note; return { ...x }; });
     this.o.onEvent?.({ type: "skipped", rule: updated, detail: note });
+  }
+
+  /**
+   * Nov 9 (cash check for all bots): before any buy, the USDC has to be there. Short of it, the rule waits and checks
+   * again in 5 minutes, with a note, instead of failing the swap and counting a Failed trade. Practice (paper) rules
+   * spend pretend money, so they're left alone; a balance that can't be read lets the buy go ahead as before.
+   */
+  private async cashShort(r: Rule, usd: number): Promise<boolean> {
+    if (isPaperRule(r) || !(usd > 0)) return false;
+    const usdc = KNOWN[r.chain].USDC!;
+    let bal: bigint;
+    try { bal = await this.exec.balance(r.chain, usdc); } catch { return false; }
+    const need = BigInt(toAtomic(usd.toFixed(6), 6));
+    if (bal >= need) return false;
+    const free = Number(bal) / 1e6, net = r.chain[0]!.toUpperCase() + r.chain.slice(1);
+    await this.hold(r, this.now() + 5 * 60_000, `Waiting for cash: this buy needs $${usd.toFixed(2)} of USDC and $${free.toFixed(2)} is free on ${net}. It buys once there's enough.`);
+    return true;
   }
 
   /** 0.9.1: Autopilot's live trades stop for the day once they reach its share of the daily trading limit. */

@@ -254,7 +254,8 @@ export async function replay(o: { template: string; chain: Chain; token: string;
     mode: "paper", slippageBps: 100,
     swap: async (req) => fill(req, true),
     quote: async (req) => fill(req, false),
-    balance: async () => BigInt(Math.floor(units * ONE)),
+    // Nov 9: the replay's pretend wallet always has the cash for a buy (bots now check the USDC before buying).
+    balance: async (_c, t) => t.symbol === "USDC" && t.address !== tok.address ? 10n ** 15n : BigInt(Math.floor(units * ONE)),
   };
   const store = new MemoryRules();
   await store.addBot(built.rules, "owner", true);
