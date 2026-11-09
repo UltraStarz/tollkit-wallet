@@ -352,7 +352,10 @@ export class Autopilot {
     if (await this.overShare(r, a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
-    const usd = res.quote?.usd_value ?? (a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p);
+    const usd0 = res.quote?.usd_value ?? (a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p);
+    // Nov 8 (money audit): on Solana Tollkit's fee is paid in SOL beside the swap, so it never reached the bot's money.
+    const qf: any = res.quote, feeX = qf && (qf.fee_separate || qf.fee_inline) ? (Number(qf.fee_usd) || usd0 * (Number(qf.fee_bps) || 0) / 10_000) : 0;
+    const usd = Math.round((a.side === "buy" ? usd0 + feeX : usd0 - feeX) * 1e6) / 1e6;
     const got = a.side === "buy" ? BigInt(String(res.quote?.buy_amount ?? "0")) : BigInt(req.sell_amount);
     const units = Number(got) / 10 ** t.decimals;
     const out = applyFill(r as any, st, a, { usd, got }, p, now, t.decimals);

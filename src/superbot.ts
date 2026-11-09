@@ -150,6 +150,9 @@ interface State {
   moves_seen?: Record<string, MoveAlert>;
   halted: { reason: string; at: string; until: string | null } | null;
   marks: { day: string; day_start: number; week: string; week_start: number } | null;
+  /** Nov 8 (money audit): what strategies made or lost live before they left live (retired, back to paper), so the live
+   * total and the loss stops don't jump when one leaves. */
+  live_banked?: { result: number; earned: number };
   /** 0.9.8: Trending on X coins the owner hid (lowercased addresses): not shown, never paper-tested. */
   x_hidden?: string[];
   /** 0.9.11: strategies made before balance sizing were resized (1 when done). */
@@ -519,9 +522,9 @@ export class SuperBot {
       market: this.adaptive(s) ? s.settings.tokens.map((x) => { const m = this.market[`${x.chain}:${x.token.toLowerCase()}`]; return { chain: x.chain, token: x.token, state: m?.state ?? null, d1: m?.d1 ?? null, d3: m?.d3 ?? null, at: m?.at ?? null }; }) : null,
       strategies, decisions: s.decisions.slice().sort((x, y) => x.ts.localeCompare(y.ts)).slice(-40).reverse(), reports: s.reports.slice(-7).reverse(),
       totals: { live: live.length, paper: strategies.filter((x) => x.stage === "paper").length, retired: strategies.filter((x) => x.stage === "retired").length,
-        live_result_usd: r2(live.reduce((a, x) => a + (x.result_usd ?? 0), 0)),
+        live_result_usd: r2((s.live_banked?.result ?? 0) + live.reduce((a, x) => a + (x.result_usd ?? 0), 0)), // Nov 8: + what left live
         // 0.9.13: what live strategies have made on what they sold, the Autopilot screen's headline.
-        live_earned_usd: r2(live.reduce((a, x) => a + (x.earned_usd ?? 0), 0)), paper_earned_usd: r2(strategies.filter((x) => x.stage === "paper").reduce((a, x) => a + (x.earned_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
+        live_earned_usd: r2((s.live_banked?.earned ?? 0) + live.reduce((a, x) => a + (x.earned_usd ?? 0), 0)), paper_earned_usd: r2(strategies.filter((x) => x.stage === "paper").reduce((a, x) => a + (x.earned_usd ?? 0), 0)), committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)) },
       next_cycle: s.enabled && s.stats.last_cycle ? nowIso(Date.parse(s.stats.last_cycle) + s.settings.rethink_minutes * 60_000) : null,
       // 0.33.0: X through Grok, from Tollkit's shared snapshot: the mood per coin and the trending memes (paper only).
       x: this.xView(),
@@ -717,7 +720,7 @@ export class SuperBot {
   /** Daily and weekly loss stops, measured on live strategies' result against marks set at the start of each day and week. */
   private async checkLosses(s: State, all: Rule[]) {
     const t = this.now(), today = day(t), week = weekOf(t);
-    const liveResult = r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + (this.summaryOf(x, all)?.result_usd ?? 0), 0));
+    const liveResult = r2((s.live_banked?.result ?? 0) + s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + (this.summaryOf(x, all)?.result_usd ?? 0), 0));
     if (s.halted && s.halted.until && t >= Date.parse(s.halted.until)) { await this.resume(); s = this.load(); }
     if (!s.marks || s.marks.day !== today || s.marks.week !== week) {
       await this.update((x) => { x.marks = { day: today, day_start: x.marks?.day === today ? x.marks.day_start : liveResult, week, week_start: x.marks?.week === week ? x.marks.week_start : liveResult }; });
@@ -801,7 +804,13 @@ export class SuperBot {
     }
     await this.update((s) => { s.paper_rules = s.paper_rules.filter((id) => !all.some((r) => r.id === id && r.bot === st.bot)); });
   }
+  /** Nov 8 (money audit): keep a strategy's live result when it leaves live. */
+  private async bank(sum: { result_usd: number | null; earned_usd: number } | null) {
+    if (!sum) return;
+    await this.update((x) => { const b = x.live_banked ?? { result: 0, earned: 0 }; x.live_banked = { result: r2(b.result + (sum.result_usd ?? 0)), earned: r2(b.earned + (sum.earned_usd ?? 0)) }; });
+  }
   private async retire(st: Strategy, why: string, all: Rule[]) {
+    if (st.stage === "live") await this.bank(this.summaryOf(st, all)); // Nov 8: its live record stays in the live total
     await this.stopRules(st, all, why);
     await this.update((s) => { const x = s.strategies.find((y) => y.id === st.id); if (x) { x.stage = "retired"; x.stage_since = nowIso(this.now()); x.history.push({ ts: nowIso(this.now()), note: why }); } });
     this.d.onRulesChanged?.();
@@ -1089,6 +1098,7 @@ export class SuperBot {
     let built;
     try { built = buildBot(st.template, st.token, st.chain, params, price); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
     const sum = this.summaryOf(st, all);
+    if (st.stage === "live" && stage !== "live") await this.bank(sum); // Nov 8: its live record stays in the live total
     await this.stopRules(st, all, why);
     const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: why.slice(0, 200), ...(stage === "paper" ? { paper: true } : {}) })), "agent", true, "superbot");
     await this.update((x) => {
@@ -1533,21 +1543,23 @@ export class SuperBot {
     if (!s.stats.last_report) { await this.update((x) => { x.stats.last_report = today; }); return; }
     const yday = day(t - 86_400_000);
     const live = s.strategies.filter((x) => x.stage === "live"), paper = s.strategies.filter((x) => x.stage === "paper");
-    const liveResult = r2(live.reduce((a, x) => a + (this.summaryOf(x, all)?.result_usd ?? 0), 0));
+    const liveResult = r2((s.live_banked?.result ?? 0) + live.reduce((a, x) => a + (this.summaryOf(x, all)?.result_usd ?? 0), 0));
+    // Nov 8 (money audit): the day's change is against yesterday's report (the day mark has already moved by now).
+    const prevRep = s.reports.at(-1), dayChange = r2(liveResult - (prevRep?.live_result_usd ?? s.marks?.day_start ?? liveResult));
     const fills = all.filter((r) => r.by === "superbot").flatMap((r) => r.state.fills.filter((f) => f.ts.startsWith(yday)));
     const trades = fills.filter((f) => f.ok && !f.paper).length, paperTrades = fills.filter((f) => f.ok && f.paper).length;
     const decisions = s.decisions.filter((d) => d.ts.startsWith(yday));
     const changes = decisions.flatMap((d) => d.actions.filter((a) => a.applied && a.type !== "keep").map((a) => `${a.type}${a.strategy_id ? ` ${s.strategies.find((x) => x.id === a.strategy_id)?.name ?? a.strategy_id}` : a.token ? ` ${a.template} on ${a.token}` : ""}: ${a.reason}`));
     const lines = [
       `Autopilot, ${yday}`,
-      `Live: ${live.length} strateg${live.length === 1 ? "y" : "ies"}, ${trades} trade${trades === 1 ? "" : "s"}, result so far $${liveResult}${s.marks ? ` (day change $${r2(liveResult - s.marks.day_start)})` : ""}.`,
+      `Live: ${live.length} strateg${live.length === 1 ? "y" : "ies"}, ${trades} trade${trades === 1 ? "" : "s"}, result so far $${liveResult} (day change $${dayChange}).`,
       `Paper: ${paper.length} strateg${paper.length === 1 ? "y" : "ies"}, ${paperTrades} pretend trade${paperTrades === 1 ? "" : "s"}.`,
       `AI: ${decisions.filter((d) => d.by === "strategist").length} decision${decisions.filter((d) => d.by === "strategist").length === 1 ? "" : "s"} ($${Math.round(decisions.reduce((a, d) => a + d.cost_usd, 0) * 1000) / 1000}).`,
       ...(changes.length ? ["Changes:", ...changes.slice(0, 8).map((c) => `- ${c}`)] : ["No changes."]),
       ...(s.halted ? [`Stopped: ${s.halted.reason}`] : []),
     ];
     const text = lines.join("\n");
-    await this.update((x) => { x.stats.last_report = today; x.reports.push({ date: yday, text, live_result_usd: liveResult, trades, decisions: decisions.length }); if (x.reports.length > SUPERBOT.keepReports) x.reports.splice(0, x.reports.length - SUPERBOT.keepReports); });
+    await this.update((x) => { x.stats.last_report = today; x.reports.push({ date: yday, text, live_result_usd: liveResult, day_change_usd: dayChange, trades, decisions: decisions.length } as any); if (x.reports.length > SUPERBOT.keepReports) x.reports.splice(0, x.reports.length - SUPERBOT.keepReports); });
     await this.d.notify?.(text).catch(() => {});
   }
 }

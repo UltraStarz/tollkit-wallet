@@ -131,6 +131,8 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
 export interface BotSummary {
   id: string; name: string; template: string | null; chain: Chain; token: string;
   status: "running" | "paused" | "waiting" | "done" | "stopped" | "error";
+  /** Nov 8 (money audit): a practice bot; its numbers aren't real money. */
+  paper?: boolean;
   rules: { id: string; description: string; status: string; last_error?: string }[];
   trades_ok: number; trades_failed: number; success_rate: number | null;
   spent_usd: number; received_usd: number; units_held: number; value_now_usd: number | null;
@@ -163,7 +165,8 @@ export function summarize(rules: Rule[], livePrice?: LivePrice): BotSummary[] {
     // 0.9.13: earned so far. Grids count each finished level; other bots count sales over the average buy price.
     const isGrid = rs.some((r) => r.kind === "grid" || r.kind === "infinity_grid" || r.state.grid_profit_usd !== undefined);
     const bought = s((r) => r.state.bought_units), sold = s((r) => r.state.sold_units);
-    const earned = isGrid ? s((r) => r.state.grid_profit_usd) : sold > 0 && bought > 0 ? got - Math.min(sold, bought) * (spent / bought) : 0;
+    // Nov 8 (money audit): only the share of sales that the bot's own buys cover counts (it may sell more than it bought).
+    const earned = isGrid ? s((r) => r.state.grid_profit_usd) : sold > 0 && bought > 0 ? got * (Math.min(sold, bought) / sold) - Math.min(sold, bought) * (spent / bought) : 0;
     const value = price !== null ? held * price : null;
     const st = rs.map((r) => r.status);
     const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => ["grid", "dca", "smart_dca", "rebalance", "infinity_grid", "twap", "range"].includes(r.kind)) ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
@@ -180,7 +183,7 @@ export function summarize(rules: Rule[], livePrice?: LivePrice): BotSummary[] {
       id, name: rs[0]!.bot_name ?? describeRule(rs[0]!), template: rs[0]!.template ?? null, chain: rs[0]!.chain, token: rs[0]!.token, status,
       rules: rs.map((r) => ({ id: r.id, description: describeRule(r), status: r.status, ...(r.state.last_error ? { last_error: r.state.last_error } : {}) })),
       trades_ok: ok, trades_failed: bad, success_rate: ok + bad ? Math.round((ok / (ok + bad)) * 1000) / 10 : null,
-      spent_usd: Math.round(spent * 100) / 100, received_usd: Math.round(got * 100) / 100, units_held: held, value_now_usd: value === null ? null : Math.round(value * 100) / 100,
+      paper: rs.every((r) => !!r.paper), spent_usd: Math.round(spent * 100) / 100, received_usd: Math.round(got * 100) / 100, units_held: held, value_now_usd: value === null ? null : Math.round(value * 100) / 100,
       result_usd: result === null ? null : Math.round(result * 100) / 100, earned_usd: Math.round(earned * 100) / 100, result_pct: result === null ? null : Math.round((result / (rg?.deposited_usd || spent)) * 1000) / 10,
       ...(rg ? { range: { in_range: rg.in_range ?? null, lower: rg.lower ?? null, upper: rg.upper ?? null, value_usd: rangeValue, fees_usd: rg.fees_usd ?? 0, fees_pending_usd: rg.fees_pending_usd ?? 0,
         recenters: rg.recenters ?? 0, out_since: rg.out_since ?? null, opened_at: rg.opened_at ?? null, open: !!rg.mint, deposited_usd: rg.deposited_usd ?? null, sol: rg.sol ?? null, usdc: rg.usdc ?? null,

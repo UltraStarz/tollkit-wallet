@@ -156,5 +156,13 @@ check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group &
   check(priced.result_usd === 0.9 && priced.value_now_usd === 10.5 && priced.last_price === 105, "with today's price: 10.40 + 0.1 SOL at $105 − 20 = +$0.90", priced);
 }
 
+// Nov 8 (money audit): a bot that sold more than it bought counts only what its own buys cover; paper bots are flagged.
+{
+  const mk = (paper: boolean) => ({ id: "m" + paper, kind: "limit_sell", chain: "solana", token: "SOL", bot: "mb" + paper, status: "done", paper, created_by: "agent", created_at: "2026-11-01T00:00:00Z",
+    state: { runs: 1, failures: 0, fills: [], spent_usd: 100, received_usd: 220, bought_units: 1, sold_units: 2, last_price: 110 } } as any);
+  const [b] = summarize([mk(false)]);
+  check(Math.abs((b!.earned_usd ?? 0) - 10) < 0.01, "sold 2 for $220 after buying 1 for $100: earned $10, not $120", b!.earned_usd);
+  check(summarize([mk(true)])[0]!.paper === true && b!.paper === false, "practice bots carry a paper flag");
+}
 console.log(`\nbots: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
