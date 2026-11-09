@@ -2150,7 +2150,7 @@ function tkValue(tot,chg,shown,full){if(full)tkValPost(tot);var now=Date.now(),H
  // than 12% away from both neighbours (or from its one neighbour at the ends) is left out.
  var off=function(a,b){return b>0&&Math.abs(a-b)/b>0.12},H=H0.filter(function(p,i){var a=H0[i-1],b=H0[i+1];if(!a&&!b)return true;if(!a)return !off(p[1],b[1]);if(!b)return !off(p[1],a[1]);return !(off(p[1],a[1])&&off(p[1],b[1]))});var span={"1D":864e5,"1W":6048e5,"1M":2592e6,"All":1e15}[VR],P=H.filter(function(p){return now-p[0]<=span});
  var seg='<div class="tk-seg">'+["1D","1W","1M","All"].map(function(r){return '<button class="'+(VR===r?"on":"")+'" onclick="VR=\''+r+'\';render()">'+r+'</button>'}).join("")+'</div>',tv='<span id="tot" data-v="'+tot+'">'+fmtUsd(shown==null?tot:shown)+'</span>';
- if(P.length<3)return tkc("read","◉","Balance","",tv+' <span class="'+(chg>=0?"ok":"bad")+'">'+tkS(chg)+' today</span>','<div class="tk-empty">The chart fills in as the app runs.</div>',"");
+ if(P.length<3)return tkc("read","◉","Balance","",tv+' <span class="'+(chg>=0?"ok":"bad")+'">'+tkS(chg)+' today</span>','',"");
  /* Nov 8 (money audit): money added or taken out isn't a gain or a loss */var fl=(S.value_flows||[]).filter(function(f){return f.t>P[0][0]&&f.t<=now}).reduce(function(a,f){return a+f.usd},0);
  var d=P[P.length-1][1]-P[0][1]-fl,pc=P[0][1]>0?d/P[0][1]*100:0,col=d>=0?"#2fcf8f":"#ff6b6b";
  var mk=tkTrades().map(function(x){return {t:Date.parse(x.ts),side:x.side}}).filter(function(x){return now-x.t<=span});
