@@ -696,8 +696,17 @@ input:where([type=text],[type=number],[type=password],[type=email],[type=search]
 .askb input,.kf input,.sbn-in input,.sbtok input{border-color:transparent!important;box-shadow:none!important}
 .sbf .sbs+.sbs,.sbf .sbw+.sbw,.lgrp+.lgrp,.setp-h~.row+.row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
 .sbf .sbs+.sbs,.sbf .sbw+.sbw{padding-top:14px;margin-top:14px}
+/* Nov 9 (Joe: "separation lines inside the autopilot settings"): a line before each part inside a section too
+   (each choice row, switch and set of boxes), and between Pace and the first section. */
+.sbf .sbp+.sbs{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);padding-top:14px;margin-top:14px}
+.sbf .sbs>.sbpl,.sbf .sbs>.sbsw,.sbf .sbs>.sbsent,.sbf .sbs>.sbnote+.sbg,.sbf .sbs>.sbw-off{border-top:1px solid color-mix(in srgb,var(--line) 45%,transparent);padding-top:12px;margin-top:12px}
 .sbf .sbn{border:1px solid var(--line)!important;background:var(--card)!important;border-radius:12px!important;padding:10px 12px!important}
 .sbf .sbn:focus-within{border-color:var(--acc)!important;box-shadow:0 0 0 3px rgba(var(--glow),.18)}
+/* Nov 9 (Joe: "take the running green background card out"): the Run 24/7 row and a bot's Running pill keep their green
+   text, dot and switch, with no green box behind them. */
+.apao.on{background:none!important;border-color:transparent!important}
+.apao.on .apao-ic{box-shadow:none!important}
+.chip.botpill{background:none!important;box-shadow:none!important;padding-right:0}
 /* Nov 9 (Joe: "change the fonts on the various cards to the same font as token font"): the cards (Balance, trader cards,
    Pipeline, reports, While you were away) use the app's own type, like the token list, instead of the code-style font.
    Numbers keep even widths so columns still line up. Addresses, codes and keys stay in the code font. */
