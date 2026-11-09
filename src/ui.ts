@@ -665,26 +665,28 @@ button.b,a.b,.b,.botcta,.go,.tk-btn{text-align:center;justify-content:center}
    glass; Stop, Remove, Cancel, Deny are a soft red; Pause amber; Resume, Approve, Go live a soft green; the rest gray glass.
    Each has a bright rim and light catching its top edge; pressed, it dims a touch and shrinks a hair, like iOS. */
 :root{--tkblue:#1d4fc4;--tkblue-hi:#2559d6}
-button.b,a.b,.aib,.ap-acts .b{background:linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.10) 46%,rgba(255,255,255,0) 52%),linear-gradient(180deg,#3d73ea 0%,#1d4fc4 100%)!important;color:#fff!important;border:0!important;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1px 0 rgba(255,255,255,.16),inset 1px 0 0 rgba(255,255,255,.12),inset -1px 0 0 rgba(255,255,255,.12),0 4px 14px rgba(0,0,0,.30)!important}
-button.b.g,button.b.sbtn.g{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(120,124,140,.24)!important;color:var(--tx)!important}
-button.b.no,button.b.g.no{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(255,107,107,.17)!important;color:#ff8a8a!important}
-button.b.ok{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(60,207,145,.17)!important;color:#5fe0a8!important}
-button.b.warn{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(245,166,35,.17)!important;color:#ffc266!important}
-button.b:hover,.aib:hover{filter:brightness(1.14)}
-button.b:active,.aib:active{transform:scale(.97);opacity:.82}
+/* Nov 9 (Joe: "go back to flat buttons", then "try a bit raised"): flat color, no shine; a thin darker edge underneath
+   lifts each one a little, and pressed it sinks onto the page.
+   The main action is solid TOLLkit blue; Stop/Remove a soft red, Pause amber, Resume/Approve a soft green, the rest gray. */
+button.b,a.b,.aib,.ap-acts .b{background:var(--tkblue)!important;color:#fff!important;border:0!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 3px 0 #12348a,0 5px 10px rgba(0,0,0,.4)!important;text-shadow:none!important;transition:transform .12s ease,box-shadow .12s ease,filter .15s ease}
+button.b.g,button.b.sbtn.g{background:rgba(120,124,140,.24)!important;color:var(--tx)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 3px 0 rgba(120,124,140,.14),0 5px 10px rgba(0,0,0,.4)!important}
+button.b.no,button.b.g.no{background:rgba(255,107,107,.17)!important;color:#ff8a8a!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 3px 0 rgba(255,107,107,.10),0 5px 10px rgba(0,0,0,.4)!important}
+button.b.ok{background:rgba(60,207,145,.17)!important;color:#5fe0a8!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 3px 0 rgba(60,207,145,.10),0 5px 10px rgba(0,0,0,.4)!important}
+button.b.warn{background:rgba(245,166,35,.17)!important;color:#ffc266!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 3px 0 rgba(245,166,35,.10),0 5px 10px rgba(0,0,0,.4)!important}
+button.b:hover,.aib:hover{filter:brightness(1.1)}
+button.b:active,.aib:active,.botcta:active{transform:translateY(2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 0 0 rgba(0,0,0,0)!important;opacity:.9}
 button.b[disabled]{opacity:.5;filter:none}
-/* The action circles: blue glass. */
-.wtile i{background:linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.10) 46%,rgba(255,255,255,0) 52%),linear-gradient(180deg,#3d73ea 0%,#1d4fc4 100%);color:#fff;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1px 0 rgba(255,255,255,.16),inset 1px 0 0 rgba(255,255,255,.12),inset -1px 0 0 rgba(255,255,255,.12),0 6px 16px rgba(0,0,0,.40)}
-.wtile:hover i{filter:brightness(1.14)}
-.botcta{background:linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.10) 46%,rgba(255,255,255,0) 52%),linear-gradient(180deg,#3d73ea 0%,#1d4fc4 100%);color:#fff;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1px 0 rgba(255,255,255,.16),0 4px 14px rgba(0,0,0,.30)}
-/* The tab bar floats as frosted glass, the open tab raised in its own pill; pages scroll underneath it. */
-@media (max-width:760px){
- #nav{position:fixed!important;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:50;border-radius:30px;padding:6px;background:rgba(28,31,40,.62)!important;-webkit-backdrop-filter:blur(16px) saturate(190%);backdrop-filter:blur(16px) saturate(190%) brightness(1.05);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1.5px 0 rgba(255,255,255,.16),inset 1.5px 0 0 rgba(255,255,255,.24),inset -1.5px 0 0 rgba(255,255,255,.24),0 10px 30px rgba(0,0,0,.55);overflow:hidden}
- #nav button{border-radius:24px;padding:9px 0 10px;color:#e8eaf0}
- #nav button.on{background:rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.42);color:#fff}
- #nav .ind{display:none!important}
- #main{padding-bottom:calc(110px + env(safe-area-inset-bottom,0px))!important}
-}
+/* The action circles: flat blue. */
+.wtile i{background:var(--tkblue);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 3px 0 #12348a,0 5px 10px rgba(0,0,0,.4);transition:transform .12s ease,box-shadow .12s ease}
+.wtile:active i{transform:translateY(2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.wtile:hover i{filter:brightness(1.1)}
+.bottpl:hover .botcta,.botcta:hover,.botcta:active{background:var(--tkblue);filter:brightness(1.1)}
+.botcta{background:var(--tkblue);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 3px 0 #12348a,0 5px 10px rgba(0,0,0,.4);text-shadow:none;transition:transform .12s ease,box-shadow .12s ease}
+/* Nov 9 (Joe: "separation lines where needed"): a thin line between the rows of every list (tokens, trades, activity,
+   strategies, order types, bots) so each item reads on its own; never above the first row. */
+.row+.row,.ap-c+.ap-c,.bottpl+.bottpl,.botc+.botc{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)!important}
+.botc+.botc{margin-top:0!important;padding-top:18px!important}
+.wact+*{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);padding-top:14px}
 /* The Balance card: straight stripes in TOLLkit's colors across its top-right corner, fading toward the number. */
 .tk .pp-card:has(#tot){background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20360%20220%22%20preserveAspectRatio%3D%22xMaxYMin%20slice%22%3E%3Cdefs%3E%3CradialGradient%20id%3D%22m%22%20cx%3D%221%22%20cy%3D%220%22%20r%3D%221.05%22%3E%3Cstop%20offset%3D%22.3%22%20stop-color%3D%22%23fff%22/%3E%3Cstop%20offset%3D%22.9%22%20stop-color%3D%22%23fff%22%20stop-opacity%3D%220%22/%3E%3C/radialGradient%3E%3Cmask%20id%3D%22k%22%3E%3Crect%20width%3D%22360%22%20height%3D%22220%22%20fill%3D%22url%28%23m%29%22/%3E%3C/mask%3E%3C/defs%3E%3Cg%20mask%3D%22url%28%23k%29%22%3E%3Cpath%20d%3D%22M270%20-10%20L370%2090%22%20fill%3D%22none%22%20stroke%3D%22%234a8eff%22%20stroke-width%3D%2222%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.90%22/%3E%3Cpath%20d%3D%22M240%20-10%20L370%20120%22%20fill%3D%22none%22%20stroke%3D%22%23a98bff%22%20stroke-width%3D%2222%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.78%22/%3E%3Cpath%20d%3D%22M210%20-10%20L370%20150%22%20fill%3D%22none%22%20stroke%3D%22%236fe0c8%22%20stroke-width%3D%2222%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.66%22/%3E%3Cpath%20d%3D%22M180%20-10%20L370%20180%22%20fill%3D%22none%22%20stroke%3D%22%233ccf91%22%20stroke-width%3D%2222%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.54%22/%3E%3C/g%3E%3C/svg%3E");background-repeat:no-repeat;background-position:top right;background-size:auto 100%}
 .card{box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;border-color:transparent}
