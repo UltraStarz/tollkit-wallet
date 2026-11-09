@@ -28,6 +28,7 @@ import path from "node:path";
 import { passwordFile } from "./paths.js";
 import { addApp, appStatus, launchConfig, removeApp, savePasswordFile, vscodeLink, type AppId } from "./connect.js";
 import { AiAssistant, setAiTier, IMAGE_TYPES, MAX_IMAGES, type ChatImage } from "./ai.js";
+import { entries } from "./ledger.js";
 import { Holdings, priceChart, coinId, erc20Info, toCandles, type ChartRange, type OHLC } from "./holdings.js";
 import { KNOWN } from "./tokens.js";
 import { checkToken, findListed, isCoreToken, loadExtraLists, searchEvm, searchSolana, solanaInfo } from "./tokenlist.js";
@@ -103,11 +104,37 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const paperPilot = prices && o.autopilot !== false ? new Autopilot(w.rules(), w.executor("paper"), prices, { dir: w.dir, holdBuy: (r) => superbot?.holdBuy(r) ?? null, skip: (id) => !runsHere() || !superbot?.isPaperRule(id), noLease: true, onPrice: (r, p) => tape.add(r.chain, r.token, p) }) : null;
   paperPilot?.start();
   // The Bots screen: each bot's summary plus its next move and latest trades (0.8.5).
+  // Nov 8 (money audit): what the wallet holds of a coin (wrapped SOL counts as SOL), to cap what bots say they hold.
+  const walletUnits = (chain: Chain, token: string): number | null => {
+    const L = watcher?.balances()?.[chain];
+    if (chain === "solana" && token === "SOL" && L) return L.filter((x) => x.token === "SOL" || x.token === "WSOL").reduce((a, x) => a + Number(x.amount), 0);
+    const h = holdings?.snapshot().tokens.find((t) => t.chain === chain && t.address.toLowerCase() === token.toLowerCase());
+    if (h) return Number(h.amount);
+    const x = L?.find((y) => y.token.toLowerCase() === token.toLowerCase());
+    return x ? Number(x.amount) : null;
+  };
+  // Live bots on one coin share what the wallet really has: if they count more, each one's held units (and value,
+  // result) shrink to its share, and the bot says so. A coin sold by hand stops counting as the bot's.
+  const capToWallet = <T extends { paper?: boolean; chain: Chain; token: string; units_held: number; spent_usd: number; received_usd: number; value_now_usd: number | null; result_usd: number | null; result_pct: number | null; held_short?: boolean }>(L: T[]): T[] => {
+    const tot = new Map<string, number>();
+    for (const b of L) if (!b.paper && b.units_held > 0) tot.set(`${b.chain}|${b.token.toLowerCase()}`, (tot.get(`${b.chain}|${b.token.toLowerCase()}`) ?? 0) + b.units_held);
+    return L.map((b) => {
+      const k = `${b.chain}|${b.token.toLowerCase()}`, t = tot.get(k);
+      if (b.paper || !t || b.units_held <= 0) return b;
+      const have = walletUnits(b.chain, b.token);
+      if (have === null || have >= t * 0.999) return b;
+      const units = b.units_held * Math.max(0, have) / t, price = b.units_held > 0 && b.value_now_usd !== null ? b.value_now_usd / b.units_held : null;
+      const value = price === null ? null : Math.round(units * price * 100) / 100;
+      const result = value === null ? b.result_usd : Math.round((b.received_usd + value - b.spent_usd) * 100) / 100;
+      const pct = b.result_pct !== null && b.result_usd ? Math.round((b.result_pct * ((result ?? 0) / b.result_usd)) * 10) / 10 : b.result_pct;
+      return { ...b, units_held: units, value_now_usd: value, result_usd: result, result_pct: pct, held_short: true };
+    });
+  };
   const botsView = () => {
     // 0.9.13: one bot per Autopilot strategy: copies it replaced fold into the current bot, or drop out once stopped.
     const fd = superbot?.botFold() ?? { fold: {}, hide: new Set<string>() };
     const live = w.rules().list().filter((r) => !r.archived).map((r) => (r.bot && fd.fold[r.bot] ? { ...r, bot: fd.fold[r.bot] } : r)), today = new Date().toISOString().slice(0, 10);
-    return summarize(live, livePrice).filter((b) => !(fd.hide.has(b.id) && (b.status === "stopped" || b.status === "done"))).map((b) => {
+    return capToWallet(summarize(live, livePrice)).filter((b) => !(fd.hide.has(b.id) && (b.status === "stopped" || b.status === "done"))).map((b) => {
       const rs = live.filter((r) => (r.bot ?? `rule-${r.id}`) === b.id), trades = botTrades(rs, 20);
       return { ...b, next: botNext(rs, b.last_price), trades, trades_today: trades.filter((t) => t.ok && t.ts.startsWith(today)).length, chartable: !!coinbaseProduct(b.token) || tape.series(b.chain, b.token).length > 1 };
     });
@@ -117,6 +144,24 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
   const warnedFile = path.join(w.dir, "always-warned.json");
   const uiPrefsFile = path.join(w.dir, "ui-prefs.json");
   const valueFile = path.join(w.dir, "value-history.json");
+  // Nov 8 (money audit): deposits and withdrawals, so the Balance card's change is what the money made, not what was added.
+  const flowsFile = path.join(w.dir, "value-flows.json");
+  const flowsList = (): { id: string; t: number; usd: number }[] => { try { const j = JSON.parse(readFileSync(flowsFile, "utf8")); return Array.isArray(j) ? j : []; } catch { return []; } };
+  const recordFlows = () => {
+    const have = flowsList(), seen = new Set(have.map((f) => f.id)), add: { id: string; t: number; usd: number }[] = [], now = Date.now();
+    const rec = entries(w.dir), moves = rec.filter((e: any) => e.kind === "move" && now - Date.parse(e.ts) < 3 * 86_400_000);
+    for (const e of watcher?.events() ?? []) {
+      if (e.direction !== "in" || e.status !== "confirmed" || seen.has(`in:${e.id}`)) continue;
+      const amt = Number(e.amount), sym = String(e.token).toUpperCase(), px = /^USD/.test(sym) ? 1 : priceOf(sym === "WSOL" ? "SOL" : sym) ?? 0;
+      const usd = amt * px, at = Date.parse(e.first_seen);
+      if (!(usd > 0.01)) continue;
+      // The arriving half of a move between your own networks isn't new money.
+      if (moves.some((m: any) => Math.abs(Date.parse(m.ts) - at) < 6 * 3_600_000 && Math.abs(m.usd - usd) <= Math.max(1, m.usd * 0.03))) continue;
+      add.push({ id: `in:${e.id}`, t: at, usd: Math.round(usd * 100) / 100 });
+    }
+    for (const e of rec) if (e.kind === "withdrawal" && e.status === "done" && !seen.has(`out:${e.id}`) && now - Date.parse(e.ts) < 120 * 86_400_000) add.push({ id: `out:${e.id}`, t: Date.parse(e.ts), usd: -Math.round(e.usd * 100) / 100 });
+    if (add.length) writeFileSync(flowsFile, JSON.stringify([...have, ...add].filter((f) => now - f.t < 120 * 86_400_000).slice(-2000)), { mode: 0o600 });
+  };
   const valueHist = (): [number, number][] => { try { const j = JSON.parse(readFileSync(valueFile, "utf8")); return Array.isArray(j) ? j : []; } catch { return []; } };
   // At most ~240 points to the page: the last day in full, older days thinned.
   const valueThin = () => { const L = valueHist(), t = Date.now(); const day = L.filter((x) => t - x[0] < 86_400_000), old = L.filter((x) => t - x[0] >= 86_400_000); const k = Math.max(1, Math.ceil(old.length / 96)); return [...old.filter((_, i) => i % k === 0), ...day.filter((_, i, a) => a.length <= 144 || i % Math.ceil(a.length / 144) === 0)]; };
@@ -348,7 +393,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           setups: setups.waiting().map(showSetup), app_budgets: budgetView(w.dir), tollkit_tools: catalogView(w.dir),
           backup: { kind: backupKind(w.dir), done: backupDone(w.dir) },
           ext: { paired: w.dapps().paired(), sites: w.dapps().sites() },
-          holdings: holdings ? holdings.snapshot() : null, coins, superbot: superbot?.view() ?? null, ui_prefs: uiPrefs(), value_history: valueThin() });
+          holdings: holdings ? holdings.snapshot() : null, coins, superbot: superbot?.view() ?? null, ui_prefs: uiPrefs(), value_history: valueThin(), value_flows: flowsList() });
       }
       if (req.method === "GET" && p === "/api/balances") return send(res, 200, await w.balances());
       // 0.8.5: a price chart for a bot (its levels and trades on it) or for a token being set up.
@@ -757,6 +802,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         const v = Number(b.usd);
         if (!(v >= 0 && v < 1e9)) return send(res, 400, { error: "Bad value." });
         const L = valueHist(), t = Date.now();
+        try { recordFlows(); } catch { /* the chart still works without */ }
         if (!L.length || t - L[L.length - 1]![0] >= 600_000) { L.push([t, Math.round(v * 100) / 100]); writeFileSync(valueFile, JSON.stringify(L.filter((x) => t - x[0] < 120 * 86_400_000)), { mode: 0o600 }); }
         return send(res, 200, { ok: true });
       }

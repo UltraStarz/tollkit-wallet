@@ -5,7 +5,7 @@ import path from "node:path";
 import { RuleStore } from "../src/rules.js";
 import { Autopilot, type Executor } from "../src/autopilot.js";
 import { KNOWN } from "../src/tokens.js";
-import { buildBot, maybeShare, setShare, shareReport, shareSettings, summarize, TEMPLATES } from "../src/bots.js";
+import { buildBot, maybeShare, pctBase, setShare, shareReport, shareSettings, summarize, TEMPLATES } from "../src/bots.js";
 import type { SwapRequest } from "../src/swap.js";
 
 let pass = 0, fail = 0;
@@ -163,6 +163,12 @@ check(prot.rules.length === 2 && prot.rules[0]!.group === prot.rules[1]!.group &
   const [b] = summarize([mk(false)]);
   check(Math.abs((b!.earned_usd ?? 0) - 10) < 0.01, "sold 2 for $220 after buying 1 for $100: earned $10, not $120", b!.earned_usd);
   check(summarize([mk(true)])[0]!.paper === true && b!.paper === false, "practice bots carry a paper flag");
+}
+// Nov 8 (money audit): % on the money a bot puts to work, not lifetime spending.
+{
+  check(pctBase([{ kind: "grid", amount_usd: 10, levels: 11 } as any], 1000) === 100, "a $10 x 10-level grid that cycled $1,000: % is on $100");
+  check(pctBase([{ kind: "grid", amount_usd: 10, levels: 11 } as any], 30) === 30, "a grid that has only spent $30 so far: % on $30");
+  check(pctBase([{ kind: "limit_buy", amount_usd: 50 } as any], 50) === 50, "anything else: % on what it spent");
 }
 console.log(`\nbots: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

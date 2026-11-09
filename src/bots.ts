@@ -133,6 +133,10 @@ export interface BotSummary {
   status: "running" | "paused" | "waiting" | "done" | "stopped" | "error";
   /** Nov 8 (money audit): a practice bot; its numbers aren't real money. */
   paper?: boolean;
+  /** Nov 8: what each unit it holds cost (spent over bought). */
+  avg_cost?: number | null;
+  /** Nov 8: the bot counts more coins than the wallet holds (some were sold or sent outside it); its numbers use the wallet's. */
+  held_short?: boolean;
   rules: { id: string; description: string; status: string; last_error?: string }[];
   trades_ok: number; trades_failed: number; success_rate: number | null;
   spent_usd: number; received_usd: number; units_held: number; value_now_usd: number | null;
@@ -149,6 +153,21 @@ export interface BotSummary {
 /** Status board: rules grouped into bots (a rule made by hand is a bot of one). */
 /** 0.9.13: today's price for a coin, when the rules themselves haven't seen one (e.g. they run on TOLLkit's server). */
 export type LivePrice = (chain: Chain, token: string) => number | null | undefined;
+
+/**
+ * Nov 8 (money audit): the base for a bot's %: the money it puts to work at most (a grid's levels, a Smart DCA's buys),
+ * not its lifetime spending, which keeps growing as a grid reuses the same dollars. Never more than it has spent.
+ */
+export function pctBase(rs: Rule[], spent: number): number {
+  let committed = 0;
+  for (const r of rs as any[]) {
+    const a = Number(r.amount_usd) || 0;
+    if (r.kind === "grid") committed += a * Math.max(1, (Number(r.levels) || 2) - 1);
+    else if (r.kind === "infinity_grid") committed += a * 1.5;
+    else if (r.kind === "smart_dca") { const k = Number(r.scale) || 1, n = Math.max(0, Number(r.safety ?? r.safety_orders) || 0); let t = 0; for (let i = 0; i <= n; i++) t += a * k ** i; committed += t; }
+  }
+  return committed > 0 ? Math.min(spent, committed) || spent : spent;
+}
 
 export function summarize(rules: Rule[], livePrice?: LivePrice): BotSummary[] {
   const groups = new Map<string, Rule[]>();
@@ -184,7 +203,7 @@ export function summarize(rules: Rule[], livePrice?: LivePrice): BotSummary[] {
       rules: rs.map((r) => ({ id: r.id, description: describeRule(r), status: r.status, ...(r.state.last_error ? { last_error: r.state.last_error } : {}) })),
       trades_ok: ok, trades_failed: bad, success_rate: ok + bad ? Math.round((ok / (ok + bad)) * 1000) / 10 : null,
       paper: rs.every((r) => !!r.paper), spent_usd: Math.round(spent * 100) / 100, received_usd: Math.round(got * 100) / 100, units_held: held, value_now_usd: value === null ? null : Math.round(value * 100) / 100,
-      result_usd: result === null ? null : Math.round(result * 100) / 100, earned_usd: Math.round(earned * 100) / 100, result_pct: result === null ? null : Math.round((result / (rg?.deposited_usd || spent)) * 1000) / 10,
+      result_usd: result === null ? null : Math.round(result * 100) / 100, earned_usd: Math.round(earned * 100) / 100, result_pct: result === null ? null : Math.round((result / (rg?.deposited_usd || pctBase(rs, spent))) * 1000) / 10, avg_cost: bought > 0 ? Math.round((spent / bought) * 1e6) / 1e6 : null,
       ...(rg ? { range: { in_range: rg.in_range ?? null, lower: rg.lower ?? null, upper: rg.upper ?? null, value_usd: rangeValue, fees_usd: rg.fees_usd ?? 0, fees_pending_usd: rg.fees_pending_usd ?? 0,
         recenters: rg.recenters ?? 0, out_since: rg.out_since ?? null, opened_at: rg.opened_at ?? null, open: !!rg.mint, deposited_usd: rg.deposited_usd ?? null, sol: rg.sol ?? null, usdc: rg.usdc ?? null,
         log: (rg.log ?? []).slice(-6).reverse(), ...(() => { const x = rs.find((r) => r.kind === "range")!; return { recenter_min: x.recenter_min ?? 30, by_autopilot: x.suggested_by === "autopilot", error: x.state.last_error ?? null, retry_at: x.state.failures ? x.state.next_run ?? null : null }; })() } } : {}),
