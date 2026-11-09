@@ -687,6 +687,11 @@ button.b[disabled]{opacity:.5;filter:none}
 .row+.row,.ap-c+.ap-c,.bottpl+.bottpl,.botc+.botc{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)!important}
 .botc+.botc{margin-top:0!important;padding-top:18px!important}
 .wact+*{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);padding-top:14px}
+/* Nov 9 (Joe: "change the fonts on the various cards to the same font as token font"): the cards (Balance, trader cards,
+   Pipeline, reports, While you were away) use the app's own type, like the token list, instead of the code-style font.
+   Numbers keep even widths so columns still line up. Addresses, codes and keys stay in the code font. */
+.pp,.pp *,.tk,.tk *,.rp-row,.rp-row *,.awy-s,.awy-s *{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif!important;font-variant-numeric:tabular-nums}
+.pp .addr,.tk .addr{font-family:var(--mono)!important}
 /* Nov 9 (Joe: "make the since (time) smaller so it doesn't get covered by the color, white, in the top right; take away
    the card"): the Balance sits straight on the page, no box; its SINCE / range tag is small white type on a dark chip so the
    corner stripes never swallow it. */
