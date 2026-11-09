@@ -665,18 +665,18 @@ button.b,a.b,.b,.botcta,.go,.tk-btn{text-align:center;justify-content:center}
    glass; Stop, Remove, Cancel, Deny are a soft red; Pause amber; Resume, Approve, Go live a soft green; the rest gray glass.
    Each has a bright rim and light catching its top edge; pressed, it dims a touch and shrinks a hair, like iOS. */
 :root{--tkblue:#1d4fc4;--tkblue-hi:#2559d6}
-button.b,a.b,.aib,.ap-acts .b{background:linear-gradient(180deg,rgba(255,255,255,.20),rgba(255,255,255,.02) 48%,rgba(255,255,255,0) 60%),rgba(29,79,196,.9)!important;color:#fff!important;border:0!important;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.42),inset 0 -1px 0 rgba(255,255,255,.10),inset 1px 0 0 rgba(255,255,255,.12),inset -1px 0 0 rgba(255,255,255,.12),0 4px 14px rgba(0,0,0,.30)!important}
-button.b.g,button.b.sbtn.g{background:linear-gradient(180deg,rgba(255,255,255,.20),rgba(255,255,255,.02) 48%,rgba(255,255,255,0) 60%),rgba(120,124,140,.24)!important;color:var(--tx)!important}
-button.b.no,button.b.g.no{background:linear-gradient(180deg,rgba(255,255,255,.20),rgba(255,255,255,.02) 48%,rgba(255,255,255,0) 60%),rgba(255,107,107,.17)!important;color:#ff8a8a!important}
-button.b.ok{background:linear-gradient(180deg,rgba(255,255,255,.20),rgba(255,255,255,.02) 48%,rgba(255,255,255,0) 60%),rgba(60,207,145,.17)!important;color:#5fe0a8!important}
-button.b.warn{background:linear-gradient(180deg,rgba(255,255,255,.20),rgba(255,255,255,.02) 48%,rgba(255,255,255,0) 60%),rgba(245,166,35,.17)!important;color:#ffc266!important}
+button.b,a.b,.aib,.ap-acts .b{background:linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.10) 46%,rgba(255,255,255,0) 52%),linear-gradient(180deg,#3d73ea 0%,#1d4fc4 100%)!important;color:#fff!important;border:0!important;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1px 0 rgba(255,255,255,.16),inset 1px 0 0 rgba(255,255,255,.12),inset -1px 0 0 rgba(255,255,255,.12),0 4px 14px rgba(0,0,0,.30)!important}
+button.b.g,button.b.sbtn.g{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(120,124,140,.24)!important;color:var(--tx)!important}
+button.b.no,button.b.g.no{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(255,107,107,.17)!important;color:#ff8a8a!important}
+button.b.ok{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(60,207,145,.17)!important;color:#5fe0a8!important}
+button.b.warn{background:linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.06) 46%,rgba(255,255,255,0) 52%),rgba(245,166,35,.17)!important;color:#ffc266!important}
 button.b:hover,.aib:hover{filter:brightness(1.14)}
 button.b:active,.aib:active{transform:scale(.97);opacity:.82}
 button.b[disabled]{opacity:.5;filter:none}
 /* The action circles: blue glass. */
-.wtile i{background:linear-gradient(180deg,rgba(255,255,255,.20),rgba(255,255,255,.02) 48%,rgba(255,255,255,0) 60%),rgba(29,79,196,.9);color:#fff;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.42),inset 0 -1px 0 rgba(255,255,255,.10),inset 1px 0 0 rgba(255,255,255,.12),inset -1px 0 0 rgba(255,255,255,.12),0 6px 16px rgba(0,0,0,.40)}
+.wtile i{background:linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.10) 46%,rgba(255,255,255,0) 52%),linear-gradient(180deg,#3d73ea 0%,#1d4fc4 100%);color:#fff;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1px 0 rgba(255,255,255,.16),inset 1px 0 0 rgba(255,255,255,.12),inset -1px 0 0 rgba(255,255,255,.12),0 6px 16px rgba(0,0,0,.40)}
 .wtile:hover i{filter:brightness(1.14)}
-.botcta{background:linear-gradient(180deg,rgba(255,255,255,.20),rgba(255,255,255,.02) 48%,rgba(255,255,255,0) 60%),rgba(29,79,196,.9);color:#fff;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.42),inset 0 -1px 0 rgba(255,255,255,.10),0 4px 14px rgba(0,0,0,.30)}
+.botcta{background:linear-gradient(180deg,rgba(255,255,255,.34) 0%,rgba(255,255,255,.10) 46%,rgba(255,255,255,0) 52%),linear-gradient(180deg,#3d73ea 0%,#1d4fc4 100%);color:#fff;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1px 0 rgba(255,255,255,.16),0 4px 14px rgba(0,0,0,.30)}
 /* The tab bar floats as frosted glass, the open tab raised in its own pill; pages scroll underneath it. */
 @media (max-width:760px){
  #nav{position:fixed!important;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:50;border-radius:30px;padding:6px;background:rgba(28,31,40,.62)!important;-webkit-backdrop-filter:blur(16px) saturate(190%);backdrop-filter:blur(16px) saturate(190%) brightness(1.05);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.62),inset 0 -1.5px 0 rgba(255,255,255,.16),inset 1.5px 0 0 rgba(255,255,255,.24),inset -1.5px 0 0 rgba(255,255,255,.24),0 10px 30px rgba(0,0,0,.55);overflow:hidden}
