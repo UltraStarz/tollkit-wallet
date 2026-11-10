@@ -62,7 +62,7 @@ await page.route("**/api/state", async (r) => {
   st.backup = { ...st.backup, done: true };
   st.ui_prefs = { ...(st.ui_prefs ?? {}), tour_done: "1" }; // no first-run card in the website shots
   // Stand-ins for the token-check and Connect your AI shots (the address is blurred in the picture).
-  st.holdings = st.holdings ?? { hidden: 0 };
+  st.holdings = st.holdings ?? { hidden: 0 }; st.holdings.at = st.holdings.at ?? new Date().toISOString();
   st.connect = { ...(st.connect ?? {}), remote: { on: true, online: true, url: "https://tollkit.dev/c/example-private-connector-address-0000000000" } };
   st.devices = { ...(st.devices ?? {}), on: true, devices: [{ id: "d1", name: "Chrome" }, { id: "d2", name: "iPhone" }], last_sync: new Date().toISOString(), last_error: null };
   const apIds = new Set([apLive, apPaper]), liveIds = st.rules.filter((r: any) => r.bot === apLive).map((r: any) => r.id);
