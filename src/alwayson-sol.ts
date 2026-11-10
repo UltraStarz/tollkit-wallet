@@ -584,7 +584,7 @@ export class SolAlwaysOn {
     // 0.9.9: what the server needs for "while you're away": Autopilot's rules and the price it last saw for each.
     const away = this.awayInfo?.() ?? null;
     const tok = (r: Rule) => (isSolRule(r) ? { token: "SOL" } : { token: coinMint(r)!, symbol: info.get(coinMint(r)!)?.symbol });
-    const apx = (r: Rule) => (isAutopilotRule(r) ? { ap: true, ref_price: r.state.last_price } : {});
+    const apx = (r: Rule) => ({ ...(isAutopilotRule(r) ? { ap: true, ref_price: r.state.last_price } : {}), ...(r.activated_at ? { activated_at: r.activated_at } : {}) }); // Nov 10 (audit, round 13): a restart clears a late-trade stop on the server
     const sellAmt = (r: Rule) => (isSolRule(r) ? Number(amounts[r.id] ?? 0n) / 1e9 : Number(coinAmounts[r.id] ?? 0n) / 10 ** (coinDec[coinMint(r)!] ?? 0));
     // 0.9.10: Think 24/7 (null: off), and the server strategies taken over here since the last sync.
     const brain = this.brainInfo?.() ?? null, adopted = this.load().adopted ?? [];
