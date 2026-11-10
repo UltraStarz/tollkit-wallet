@@ -29,7 +29,7 @@ import { balanceAtomic, checkDestination, sendTokens, type SendRequest } from ".
 import { dashboardOpen, requestLocal } from "./approvals.js";
 import { randomUUID } from "node:crypto";
 import { KNOWN, type Token } from "./tokens.js";
-import { RuleStore } from "./rules.js";
+import { RuleStore, nextRun, type Rule } from "./rules.js";
 import { IdeaStore } from "./ideas.js";
 import { AlwaysOn } from "./alwayson.js";
 import { SolAlwaysOn } from "./alwayson-sol.js";
@@ -400,43 +400,78 @@ export class TollkitWallet {
   /**
    * Nov 7 (data audit): a Solana swap recorded as "the network dropped this swap" is checked against the chain. One that
    * landed becomes done, with what actually moved, and the bot rule that made it gets the fill, so its coins are its again.
-   * Looks back a week; run at start and every half hour.
+   * Nov 10 (audit): swaps the network never confirmed, on Solana, Base or Ethereum, are settled the same way: one that
+   * landed brings its rule up to date (a one-shot rule is done and its partners cancelled); one that didn't starts its
+   * rule again. Looks back a week; run at start and every half hour.
    */
   async reconcileDropped(): Promise<number> {
     const week = Date.now() - 7 * 86_400_000, owner = this.addresses.solana;
-    const todo = entries(this.o.dir).filter((e) => e.kind === "trade" && e.chain === "solana" && e.status === "failed" && /network dropped this swap|hasn't confirmed this/.test(e.reason ?? "") && Date.parse(e.ts) >= week);
+    const todo = entries(this.o.dir).filter((e) => e.kind === "trade" && e.status === "failed" && Date.parse(e.ts) >= week
+      && (e.chain === "solana" ? /network dropped this swap|hasn't confirmed this/ : /wasn't included within/).test(e.reason ?? ""));
     if (!todo.length) return 0;
-    const conn = new Connection(this.rpc("solana"), "confirmed");
+    const conn = todo.some((e) => e.chain === "solana") ? new Connection(this.rpc("solana"), "confirmed") : null;
     let fixed = 0;
     for (const e of todo) {
+      if (e.chain !== "solana") {
+        // Base / Ethereum: the receipt says landed (1), failed (0), or not yet (null).
+        if (!e.tx) continue;
+        const rc = await new JsonRpcProvider(this.rpc(e.chain as Chain)).getTransactionReceipt(e.tx).catch(() => undefined);
+        if (rc === undefined || rc === null) continue;
+        const short = `${e.tx.slice(0, 6)}…${e.tx.slice(-4)}`;
+        if (rc.status === 1) { settle(e.id, { status: "done", reason: "Rechecked on the chain: this swap went through." }, this.o.dir); await this.settleRule(short, e.tx, true); fixed++; }
+        else await this.settleRule(short, e.tx, false);
+        continue;
+      }
       const short = /\(([1-9A-HJ-NP-Za-km-z]{4,}…[1-9A-HJ-NP-Za-km-z]{3,})\)/.exec(e.reason ?? "")?.[1];
-      const sig = e.tx ?? (short ? await findSig(conn, owner, short) : null);
+      const sig = e.tx ?? (short ? await findSig(conn!, owner, short) : null);
       if (!sig) continue;
-      const st = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true }).catch(() => null))?.value?.[0];
-      if (!st || st.err || st.confirmationStatus === "processed") continue;
-      const d = await txDeltas(conn, owner, sig);
+      const shortOf = `${sig.slice(0, 6)}…${sig.slice(-4)}`;
+      const st = (await conn!.getSignatureStatuses([sig], { searchTransactionHistory: true }).catch(() => undefined))?.value?.[0];
+      if (st === undefined) continue; // the node didn't answer: next time
+      // Not landed for sure: it failed on chain, or the chain has no record of it well after its blockhash expired.
+      if (st?.err || (st === null && Date.now() - Date.parse(e.ts) > 10 * 60_000)) { await this.settleRule(shortOf, sig, false); continue; }
+      if (!st || st.confirmationStatus === "processed") continue;
+      const d = await txDeltas(conn!, owner, sig);
       if (!d) continue;
       const line = describeDeltas(d, (m) => mintName(m));
       settle(e.id, { status: "done", tx: sig, reason: "Rechecked on the chain: this swap went through.", ...(line ? { detail: line } : {}) }, this.o.dir);
-      // The bot's side: its failed fill with this signature becomes the trade it was.
-      const shortOf = `${sig.slice(0, 6)}…${sig.slice(-4)}`, usdc = KNOWN.solana.USDC!.address;
-      const spent = -(d.tokens[usdc] ?? 0), got = d.tokens[usdc] ?? 0;
-      await this.rules().mutate((rs) => {
-        for (const r of rs) for (const f of r.state.fills) {
-          if (f.ok || !(f.reason ?? "").includes(shortOf)) continue;
-          const units = Math.abs(d.tokens[r.token] ?? (r.token === "SOL" ? d.sol : 0));
-          const buy = spent > 0;
-          Object.assign(f, { ok: true, tx: sig, side: buy ? "buy" : "sell", usd: Math.round((buy ? spent : got) * 100) / 100, units, reason: undefined });
-          if (buy) { r.state.spent_usd = (r.state.spent_usd ?? 0) + spent; r.state.bought_units = (r.state.bought_units ?? 0) + units; }
-          else { r.state.received_usd = (r.state.received_usd ?? 0) + got; r.state.sold_units = (r.state.sold_units ?? 0) + units; }
-          r.state.failures = Math.max(0, (r.state.failures ?? 1) - 1);
-          // Nov 10 (audit): a one-shot rule whose swap did go through is done, so it doesn't trade again.
-          if (["limit_buy", "limit_sell", "take_profit", "stop_loss", "trailing_stop"].includes(r.kind) && ["active", "paused"].includes(r.status)) { r.status = "done"; r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined; }
-        }
-      });
+      const usdc = KNOWN.solana.USDC!.address, spent = -(d.tokens[usdc] ?? 0), got = d.tokens[usdc] ?? 0;
+      await this.settleRule(shortOf, sig, true, (r) => ({ buy: spent > 0, usd: spent > 0 ? spent : got, units: Math.abs(d.tokens[r.token] ?? (r.token === "SOL" ? d.sol : 0)) }));
       fixed++;
     }
     return fixed;
+  }
+
+  /** Nov 10 (audit): bring the rule behind an unconfirmed (or dropped) swap up to date once the chain has answered. */
+  private async settleRule(shortOf: string, sig: string, landed: boolean, amounts?: (r: Rule) => { buy: boolean; usd: number; units: number }) {
+    await this.rules().mutate((rs) => {
+      for (const r of rs) {
+        const f = r.state.fills.find((x) => !x.ok && (x.reason ?? "").includes(shortOf));
+        const held = r.state.unconfirmed === shortOf;
+        if (!f && !held) continue;
+        r.state.unconfirmed = undefined;
+        if (!landed) { if (held && r.status === "error") { r.status = "active"; r.state.last_error = undefined; r.state.next_run = new Date().toISOString(); } continue; }
+        if (f) {
+          const a = amounts?.(r);
+          Object.assign(f, { ok: true, tx: sig, reason: undefined, ...(a ? { side: a.buy ? "buy" : "sell", usd: Math.round(a.usd * 100) / 100, units: a.units } : {}) });
+          if (a?.buy) { r.state.spent_usd = (r.state.spent_usd ?? 0) + a.usd; r.state.bought_units = (r.state.bought_units ?? 0) + a.units; }
+          else if (a) { r.state.received_usd = (r.state.received_usd ?? 0) + a.usd; r.state.sold_units = (r.state.sold_units ?? 0) + a.units; }
+          r.state.failures = Math.max(0, (r.state.failures ?? 1) - 1);
+        }
+        const open = ["active", "paused", "error"].includes(r.status);
+        if (!open) continue;
+        r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined;
+        if (r.kind === "dca") { r.state.next_run = nextRun(r, new Date()).toISOString(); r.status = r.times && r.state.runs >= r.times ? "done" : "active"; }
+        else if (r.kind === "signal_buy" || r.kind === "signal_sell") { r.state.alert_armed = false; r.state.last_alert = new Date().toISOString(); r.status = r.state.runs >= (r.times ?? 1) ? "done" : "active"; }
+        else if (["limit_buy", "limit_sell", "take_profit", "stop_loss", "trailing_stop"].includes(r.kind)) {
+          r.status = "done";
+          if (r.group) for (const o of rs) if (o.id !== r.id && o.group === r.group && ["active", "paused", "proposed"].includes(o.status)) { o.status = "cancelled"; o.state.note = "Its partner filled."; o.state.last_error = `Cancelled because rule ${r.id} in the same group filled.`; }
+        } else {
+          // A bot (grid, Smart DCA...) can't safely guess which level that trade was: it stays stopped and says why.
+          r.status = "error"; r.state.last_error = `This bot's trade (${shortOf}) went through after the network was slow to confirm it. Stop and start the bot to bring it up to date.`;
+        }
+      }
+    });
   }
 
   /** Fetch a URL, paying through x402 or MPP if it asks, within the owner's rules. */

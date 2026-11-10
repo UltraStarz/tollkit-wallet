@@ -558,8 +558,7 @@ export class Autopilot {
     if (r.kind === "range") await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (!x) return; const g = x.state.range ?? {};
       x.state.range = { ...g, log: [...(g.log ?? []), { ts: new Date(this.now()).toISOString(), text: `Couldn't go ahead: ${reason} It tries again in 5 minutes.` }].slice(-20) }; });
     const urgent = r.kind === "stop_loss" || r.kind === "trailing_stop";
-    // Nov 10 (audit): a swap that may have landed is never retried right away; the half-hourly chain check settles it first.
-    const wait = code === "swap_unconfirmed" ? 45 * 60_000 : code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
+    const wait = code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
     const updated = await this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id)!;
       x.state.failures += 1; x.state.fail_count = (x.state.fail_count ?? 0) + 1;
@@ -570,6 +569,8 @@ export class Autopilot {
       x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: false, reason: said });
       x.state.fills = x.state.fills.slice(-50);
       if (code === "denied") { x.status = "paused"; x.state.last_error = "You denied this trade, so the rule is paused."; }
+      // Nov 10 (audit): sent but never confirmed. Held, not retried, until the chain check says whether it went through.
+      else if (code === "swap_unconfirmed") { x.status = "error"; x.state.unconfirmed = /\(([1-9A-HJ-NP-Za-km-z]{4,}…[1-9A-HJ-NP-Za-km-z]{3,})\)/.exec(reason)?.[1] ?? "?"; x.state.last_error = `${reason} It starts again on its own if the trade didn't go through.`; }
       else if (!retries) x.status = "error";
       else x.state.next_run = new Date(this.now() + wait).toISOString();
       return { ...x };

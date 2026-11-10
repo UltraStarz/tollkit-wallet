@@ -200,8 +200,11 @@ async function main(argv: string[]) {
       const feed = new PriceFeed(); feed.start();
       const ap = new Autopilot(w.rules(), w.executor(paper ? "paper" : "live"), feed, { dir: w.dir, skip: paper ? undefined : (id) => w.always().serverRuns(id) || w.always().handedOff(id) || w.alwaysSol().serverRuns(id) || w.alwaysSol().handedOff(id), /* Nov 10 (audit): Solana 24/7 too */ onEvent: (e) => out(`${new Date().toISOString()} ${e.type.toUpperCase()} ${describeRule(e.rule)}: ${e.detail}`) });
       ap.start();
+      // Nov 10 (audit): swaps the network never confirmed are settled on the chain here too, every half hour.
+      const recon = paper ? null : setInterval(() => { void w.reconcileDropped().catch(() => {}); }, 30 * 60_000);
+      if (!paper) void w.reconcileDropped().catch(() => {});
       out(`Autopilot running${paper ? " in PAPER mode (pretend money)" : ""}. ${w.rules().list().filter((r) => r.status === "active").length} active rule(s). Ctrl-C to stop.`);
-      await new Promise<void>((r) => process.once("SIGINT", () => { ap.stop(); feed.stop(); r(); }));
+      await new Promise<void>((r) => process.once("SIGINT", () => { ap.stop(); feed.stop(); if (recon) clearInterval(recon); r(); }));
       return;
     }
     case "paper": {

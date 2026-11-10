@@ -120,6 +120,8 @@ export interface Rule extends RuleInput {
     high?: number;        // trailing stop: highest price seen while active
     runs: number;         // fills so far
     failures: number;     // consecutive failed attempts
+    /** Nov 10 (audit): a sent swap the network never confirmed (its short signature); the rule is held until the chain says. */
+    unconfirmed?: string;
     next_run?: string;    // DCA, or retry-after for a failed attempt
     last_price?: number;
     last_checked?: string;

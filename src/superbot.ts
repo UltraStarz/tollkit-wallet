@@ -823,7 +823,18 @@ export class SuperBot {
           await this.retire(st, why, all);
           await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: [`paper ${pct ?? "none"}%`], applied: true, outcome: "retired" }]);
         }
-      } else if (st.stage === "live" && pct !== null && pct < 0 && trades >= 3 && days >= 1 && !this.holds(st, all)) { // Nov 10 (audit): not while its sells wait
+      } else if (st.stage === "live" && pct !== null && pct < 0 && trades >= 3 && days >= 1 && this.holds(st, all)) {
+        // Nov 10 (audit, round 4): losing but holding coins its sells wait for. Moving it to paper would cancel those
+        // sells, so it stops buying more instead (its plain buy rules pause) and moves to paper once it has sold.
+        const buys = this.openRules(this.rulesOf(s, st, all)).filter((r) => r.status === "active" && ["dca", "limit_buy", "signal_buy"].includes(r.kind));
+        if (buys.length) {
+          const why = `Live result ${pct}% after ${trades} trades: no more buys; it moves to paper once its coins are sold.`;
+          for (const r of buys) await this.w.rules().setStatus(r.id, "paused").catch(() => {});
+          await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.history.push({ ts: nowIso(this.now()), note: why }); });
+          await this.log("rule", why, [{ type: "pause", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: true, outcome: `${buys.length} buy rule${buys.length === 1 ? "" : "s"} paused` }]);
+          this.d.onRulesChanged?.();
+        }
+      } else if (st.stage === "live" && pct !== null && pct < 0 && trades >= 3 && days >= 1) {
         const why = `Live result ${pct}% after ${trades} trades; moved back to paper.`;
         const ok = await this.restage(st, "paper", why, all);
         await this.log("rule", why, [{ type: "demote", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: ok.applied, outcome: ok.outcome }]);
@@ -919,7 +930,11 @@ export class SuperBot {
       }
       if (st.guard && st.guard.kind === kind && g && g.status === "active") continue; // already guarded for this move
       const held = this.summaryOf(st, all)?.units_held ?? 0;
-      if (held <= 1e-9) continue;
+      if (held <= 1e-9) {
+        // Nov 10 (audit): its coins are sold; a guard still waiting would sell another strategy's coins.
+        if (g && ["active", "paused"].includes(g.status)) { await this.w.rules().setStatus(g.id, "cancelled").catch(() => {}); await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.guard = null; }); }
+        continue;
+      }
       const amt = Math.floor(held * (mv.share_pct / 100) * 1e6) / 1e6;
       if (!(amt > 0)) continue;
       const tp = rules.find((r) => (r.kind === "take_profit" || r.kind === "limit_sell") && r.status === "active");

@@ -186,6 +186,20 @@ function market() {
   check(m.state.swaps.length === 0, "the live trader leaves a paper rule alone", { swaps: m.state.swaps.length, paper: s.get(g.id)?.paper });
 }
 
+// --- Nov 10 (audit, round 4): a swap the network never confirmed holds its rule; it is not retried blindly.
+{
+  const dir = tmp(), m = market(), s = new RuleStore(dir);
+  let clock = Date.now();
+  const ap = new Autopilot(s, m.exec, m.prices, { dir, now: () => clock });
+  const b = await s.add({ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 20, trigger_price: 2600 }, "owner", false);
+  (m.state as any).refuse = { code: "swap_unconfirmed", reason: "The Solana network hasn't confirmed this swap (AbCdEf…WxYz) yet. TOLLkit checks it on the chain and won't try it again until it knows whether it went through." };
+  await ap.tick();
+  const h = s.get(b.id)!;
+  check(h.status === "error" && h.state.unconfirmed === "AbCdEf…WxYz", "an unconfirmed swap holds its rule (stopped, remembers the swap)", { st: h.status, u: h.state.unconfirmed });
+  (m.state as any).refuse = undefined; clock += 3 * 3600_000; await ap.tick();
+  check(m.state.swaps.length === 0, "hours later it still hasn't traded again on its own");
+}
+
 // --- paper trading
 {
   const dir = tmp();
