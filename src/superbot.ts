@@ -275,6 +275,28 @@ function describeChange(a: Record<string, unknown>, b: Record<string, unknown>):
   return parts.length ? parts.join(", ") : "its settings";
 }
 
+/**
+ * Nov 10 (Joe: "it seems very hesitant"): Autopilot's RSI dip buys fire at 38 or above, not the textbook 30, which
+ * the hourly chart rarely reaches. Buys only; the owner's own settings are left alone.
+ */
+export const EAGER_RSI = 38;
+export function eagerRsi(template: string, p: Record<string, unknown>): Record<string, unknown> {
+  if (template !== "signal" || p.side === "sell" || (p.signal ?? "rsi_below") !== "rsi_below") return p;
+  const lv = Number(p.level) || 0;
+  return lv >= EAGER_RSI && lv <= 45 ? p : { ...p, level: lv > 45 ? 45 : EAGER_RSI };
+}
+/** Nov 10: how many strategies of one kind may run on one coin (with different settings). */
+export const MAX_TWINS = 2;
+/** Nov 10: two strategies' settings are the same when every number but the dollar size is within 15% (or 0.3) of the other's. */
+export function sameSetup(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (k === "amount_usd") continue;
+    const x = a[k], y = b[k];
+    if (typeof x === "number" && typeof y === "number") { if (Math.abs(x - y) > Math.max(0.3, 0.15 * Math.max(Math.abs(x), Math.abs(y)))) return false; }
+    else if (x !== undefined && y !== undefined && x !== y) return false;
+  }
+  return true;
+}
 export function committedUsd(template: string, params: Record<string, unknown>): number {
   const a = Number(params.amount_usd) || 0;
   switch (template) {
@@ -306,6 +328,8 @@ export function nextSize(mode: Sizing, base: number, cur: number, made: number, 
   if (mode === "step_up") return made > seen + 0.005 ? r(cur * 1.25) : made < seen - 0.005 ? r(base) : r(cur);
   return r(base);
 }
+/** Nov 10: the money is split over this many live strategies (half the slots; the rest are for practice). */
+export function liveSlots(maxStrategies: number): number { return Math.max(1, Math.ceil(maxStrategies / 2)); }
 export function shareUsd(budget: number, stable: number | undefined, maxStrategies: number,
   others?: { committed: number; live_committed: number; count: number }): number {
   const cash = stable !== undefined && Number.isFinite(stable) && stable >= 0 ? stable : budget;
@@ -408,7 +432,7 @@ export async function suggestedSizes(w: { dir: string; balances(): Promise<Recor
   for (const [chain, rows] of Object.entries(await w.balances())) {
     if (!Array.isArray(rows)) continue;
     const stable = rows.filter((x) => /^(USDC|USDT|USDC\.e)$/i.test(x.token)).reduce((t, x) => t + (Number(x.amount) || 0), 0);
-    out[chain] = Math.min(st.per_trade_usd, shareUsd(st.budget_usd, stable, st.max_strategies));
+    out[chain] = Math.min(st.per_trade_usd, shareUsd(st.budget_usd, stable, liveSlots(st.max_strategies)));
   }
   return out;
 }
@@ -1273,9 +1297,10 @@ export class SuperBot {
         if (st.owner_set) return { applied: false, outcome: "the owner set this one up; Autopilot leaves its settings alone" };
         if (st.owner_paused) return { applied: false, outcome: "the owner paused it; Autopilot leaves it alone" };
         const params = this.clampParams(s, st.template, { ...st.params, ...(a.params ?? {}) });
+        if (!st.owner_set) params.params = eagerRsi(st.template, params.params);
         if (params.note) return { applied: false, outcome: params.note };
         // 0.9.11: on paper the wallet re-sizes it to the equal share; a live one keeps its amount (budget checked at go-live).
-        if (st.stage === "paper") params.params = await this.sized(s, st.chain, st.template, params.params, st.id);
+        if (st.stage === "paper") params.params = await this.sized(s, st.chain, st.template, params.params, st.id, undefined, st.token);
         const clash = clashWithOwner(st.template, params.params, all, st.chain, st.token, await this.d.price(st.chain, st.token).catch(() => undefined));
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
@@ -1300,14 +1325,22 @@ export class SuperBot {
         if (a.template === "alert" || a.template === "twap" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
         // Nov 7 (Joe: "but nothing is running"): the no-doubles rules are for Autopilot's own picks. The owner may run a
         // second dip on SOL next to one Autopilot started, or next to a paused leftover it can't see.
-        if (!a.owner && running.some((x) => x.chain === chain && x.token.toLowerCase() === tok.token.toLowerCase() && x.template === a.template)) return { applied: false, outcome: `a ${a.template} on ${tok.token} is already running` };
-        // 0.9.13: and never a second copy of a bot that is still running, even one no strategy tracks any more.
-        if (!a.owner && all.some((r) => r.by === "superbot" && !r.archived && ["active", "paused", "proposed"].includes(r.status) && r.template === a.template && r.chain === chain && r.token.toLowerCase() === tok.token.toLowerCase())) return { applied: false, outcome: `a ${a.template} on ${tok.token.length > 12 ? "this coin" : tok.token} is already running` };
         const params = this.clampParams(s, a.template, a.params ?? {});
         if (params.note) return { applied: false, outcome: params.note };
+        if (!a.owner) params.params = eagerRsi(a.template, params.params);
+        // Nov 10 (Joe: "make the most money possible"): up to two of a kind on one coin, when their settings differ
+        // (a 1.5% dip next to a 3% one). Before, one of each was the limit and good ideas were turned away all night.
+        const coinName = tok.token.length > 12 ? "this coin" : tok.token;
+        const twins = running.filter((x) => x.chain === chain && x.token.toLowerCase() === tok!.token.toLowerCase() && x.template === a.template);
+        if (!a.owner && twins.some((x) => sameSetup(x.params, params.params))) return { applied: false, outcome: `a ${a.template} on ${coinName} with these settings is already running` };
+        // 0.9.13: and never more copies of a bot that is still running than that, even ones no strategy tracks any more.
+        const bots = new Set(all.filter((r) => r.by === "superbot" && !r.archived && ["active", "paused", "proposed"].includes(r.status) && r.template === a.template && r.chain === chain && r.token.toLowerCase() === tok!.token.toLowerCase()).map((r) => r.bot ?? r.id));
+        const tracked = new Set(running.map((x) => x.bot).filter(Boolean));
+        if (!a.owner && [...bots].some((b) => !tracked.has(b))) return { applied: false, outcome: `a ${a.template} on ${coinName} is already running` };
+        if (!a.owner && Math.max(twins.length, bots.size) >= MAX_TWINS) return { applied: false, outcome: `${MAX_TWINS} ${a.template} strategies on ${coinName} are already running` };
         // 0.9.12 Adaptive pace: nothing new that buys a coin while it's falling.
         if (this.marketOf(chain, tok.token) === "falling" && committedUsd(a.template, params.params) > 0) return { applied: false, outcome: `not started: ${tok.token.length > 12 ? "the coin" : tok.token} is falling, and Adaptive pace starts no new buys on it` };
-        try { params.params = await this.sized(s, chain, a.template, params.params, undefined, a.owner && Number(a.params?.amount_usd) > 0 ? Number(a.params.amount_usd) : undefined); }
+        try { params.params = await this.sized(s, chain, a.template, params.params, undefined, a.owner && Number(a.params?.amount_usd) > 0 ? Number(a.params.amount_usd) : undefined, tok.token); }
         catch (e) { return { applied: false, outcome: `not started: ${(e as Error).message}` }; }
         if (meme && typeof params.params.amount_usd === "number") params.params.amount_usd = Math.min(10, params.params.amount_usd as number);
         const price = await this.d.price(chain, tok.token).catch(() => undefined);
@@ -1340,20 +1373,21 @@ export class SuperBot {
    */
   private async resizeToBalance(all: Rule[]) {
     const s = this.load();
-    if ((s.sized ?? 0) >= 2 || s.halted) return; // Nov 7: 2 = sized again with free cash over open slots
+    if ((s.sized ?? 0) >= 3 || s.halted) return; // Nov 7: 2 = sized again with free cash over open slots; Nov 10: 3 = over live slots, RSI 38
     let waiting = false;
     for (const st of s.strategies) {
       if (st.stage === "retired" || st.owner_paused || st.owner_set || st.params.amount_usd === undefined) continue;
-      let next = await this.sized(this.load(), st.chain, st.template, st.params, st.id); // fresh: earlier ones in this pass may have grown
+      let next = await this.sized(this.load(), st.chain, st.template, st.params, st.id, undefined, st.token); // fresh: earlier ones in this pass may have grown
       if (st.paper_only && typeof next.amount_usd === "number") next = { ...next, amount_usd: Math.min(10, next.amount_usd) };
-      const a0 = Number(st.params.amount_usd), a1 = Number(next.amount_usd);
-      if (!(a1 > 0) || Math.abs(a1 - a0) < Math.max(0.5, a0 * 0.1)) continue;
+      next = eagerRsi(st.template, next);
+      const a0 = Number(st.params.amount_usd), a1 = Number(next.amount_usd), rsi = next.level !== st.params.level;
+      if (!rsi && (!(a1 > 0) || Math.abs(a1 - a0) < Math.max(0.5, a0 * 0.1))) continue;
       const neverSells = st.template === "dca" || (st.template === "signal" && st.params.side !== "sell");
       if (st.stage === "live" && !neverSells && (this.summaryOf(st, all)?.units_held ?? 0) > 1e-9) { waiting = true; continue; }
       if (this.rebuiltLately(st)) continue;
-      await this.restage(st, st.stage, `Resized from your balance: $${r2(a0)} → $${r2(a1)}${st.template === "grid" ? " a level" : st.template === "dca" ? " a buy" : ""}.`, this.w.rules().list(), next, true);
+      await this.restage(st, st.stage, `${a1 !== a0 ? `Resized from your balance: $${r2(a0)} → $${r2(a1)}${st.template === "grid" ? " a level" : st.template === "dca" ? " a buy" : ""}.` : ""}${rsi ? `${a1 !== a0 ? " " : ""}Buys when hourly RSI falls below ${next.level} (was ${Number(st.params.level) || 30}), so it trades more often.` : ""}`, this.w.rules().list(), next, true);
     }
-    if (!waiting) await this.update((x) => { x.sized = 2; });
+    if (!waiting) await this.update((x) => { x.sized = 3; });
   }
 
   /**
@@ -1412,11 +1446,16 @@ export class SuperBot {
   /** Last share per network, for Think 24/7 (brainInfo is synchronous). */
   private shares: Partial<Record<Chain, number>> = {};
   /** This network's equal share (see shareUsd), sized into the template's fields and clamped again. */
-  private async sized(s: State, chain: Chain, template: string, params: Record<string, unknown>, self?: string, ownerAmount?: number): Promise<Record<string, unknown>> {
+  private async sized(s: State, chain: Chain, template: string, params: Record<string, unknown>, self?: string, ownerAmount?: number, token?: string): Promise<Record<string, unknown>> {
     const stable = await this.d.stableUsd?.(chain).catch(() => undefined);
-    const others = s.strategies.filter((x) => x.stage !== "retired" && x.id !== self);
-    const o = { committed: others.reduce((a, x) => a + committedUsd(x.template, x.params), 0), live_committed: others.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0), count: others.length };
-    const share = shareUsd(s.settings.budget_usd, stable, s.settings.max_strategies, o);
+    // Nov 10 (Joe: "make the most money possible"): practice strategies no longer take a share of the real money, and a
+    // live one's reserve is only what it may still spend (a dip that already bought holds coins, not cash).
+    const others = s.strategies.filter((x) => x.stage === "live" && x.id !== self), all = this.w.rules().list();
+    const left = (x: Strategy) => Math.max(0, committedUsd(x.template, x.params) - (this.summaryOf(x, all)?.spent_usd ?? 0) + (this.summaryOf(x, all)?.received_usd ?? 0));
+    const o = { committed: others.reduce((a, x) => a + committedUsd(x.template, x.params), 0), live_committed: others.reduce((a, x) => a + Math.min(committedUsd(x.template, x.params), left(x)), 0), count: others.length };
+    let share = shareUsd(s.settings.budget_usd, stable, liveSlots(s.settings.max_strategies), o);
+    // ...and never more than the per-token cap leaves, so a practice strategy can still go live at its size.
+    if (token) share = Math.max(0, Math.min(share, Math.floor((s.settings.budget_usd * s.settings.max_token_pct / 100 - others.filter((x) => x.chain === chain && x.token.toLowerCase() === token.toLowerCase()).reduce((a, x) => a + committedUsd(x.template, x.params), 0)) * 100) / 100));
     this.shares[chain] = share;
     // Nov 7: a size the owner named in the AI chat ("a $100 first buy") is kept, inside the per-trade cap and the cash
     // still free; before, it was always replaced by the equal share ($1.81).
@@ -1468,7 +1507,7 @@ export class SuperBot {
         return { ai: { provider: k.provider, model: k.model, fp, ...(seen === fp ? {} : { key: k.key }) } };
       })(),
       settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_token_pct: st.max_token_pct, max_strategies: st.max_strategies, pace: st.pace, daily_loss_pct: st.daily_loss_pct,
-        share_usd: this.shares.solana ?? shareUsd(st.budget_usd, undefined, st.max_strategies),
+        share_usd: this.shares.solana ?? shareUsd(st.budget_usd, undefined, liveSlots(st.max_strategies)),
         paper_days: st.paper_days, paper_trades: st.paper_trades, rethink_minutes: st.rethink_minutes, slippage_bps: st.slippage_bps,
         tokens: st.tokens.filter((x) => x.chain === "solana").map((x) => ({ token: x.token })), sources_on: Object.entries(st.sources).filter(([, v]) => v).map(([k]) => k), ...(st.notes?.length ? { notes: st.notes } : {}) },
       strategies: s.strategies.filter((x) => x.stage !== "retired" && x.chain === "solana").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, name: x.name, template: x.template, token: x.token, params: x.params, stage: x.stage,

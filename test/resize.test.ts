@@ -21,7 +21,7 @@ const bot = new SuperBot(w, { dir, proxy: "https://api.test/wallet", fetch: (asy
   price: async () => 100, knownToken: async () => true, active: () => true, stableUsd: async () => 152.82 });
 await bot.enable({ chains: ["solana"], tokens: [{ chain: "solana", token: "SOL" }], budget_usd: 300, per_trade_usd: 100, max_strategies: 4, pace: "max" });
 let v = bot.view();
-check(v.strategies.length === 2 && v.strategies.find((x: any) => x.template === "grid")!.params.amount_usd === 7.64, "new: a 6-level grid at $7.64 a level ($152.82 / 4 over 5 buys)", v.strategies.map((x: any) => x.params));
+check(v.strategies.length === 2 && v.strategies.find((x: any) => x.template === "grid")!.params.amount_usd === 15, "new (Nov 10): a 6-level grid at $15 a level ($152.82 over 2 live slots, held to the $75 per-token cap, over 5 buys)", v.strategies.map((x: any) => x.params));
 
 // Pretend they were made before sizing: tiny amounts, not resized yet; one is live (a steady buyer never sells).
 const f = path.join(walletHome(dir), SUPERBOT.file);
@@ -33,12 +33,12 @@ decision = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: 
 await bot.cycle(true);
 v = bot.view();
 const g = v.strategies.find((x: any) => x.template === "grid")!, d = v.strategies.find((x: any) => x.template === "dca")!;
-check(g.params.amount_usd === 7.64 && g.stage === "paper", "old practice grid resized to $7.64 a level", g.params);
-check(d.params.amount_usd === 7.64 && d.stage === "live", "old live steady buyer resized too ($38.20 over 5 buys), still live", { p: d.params, s: d.stage });
-check(/Resized from your balance: \$1\.5 → \$7\.64/.test(JSON.stringify(g.history)), "its history says why", g.history.at(-1));
-check(JSON.parse(readFileSync(f, "utf8")).sized === 1, "done once");
+check(g.params.amount_usd === 13.5 && g.stage === "paper", "old practice grid resized to $13.50 a level (the $75 per-token cap less the live buyer's $7.50)", g.params);
+check(d.params.amount_usd === 15 && d.stage === "live", "old live steady buyer resized too ($75 over 5 buys), still live", { p: d.params, s: d.stage });
+check(/Resized from your balance: \$1\.5 → \$13\.5/.test(JSON.stringify(g.history)), "its history says why", g.history.at(-1));
+check(JSON.parse(readFileSync(f, "utf8")).sized === 3, "done once");
 
 // The AI tab's suggested size.
 const sz = await suggestedSizes(w);
-check(sz.solana === 38.2, "AI tab: suggested size on Solana = $38.20 (same share as Autopilot)", sz);
+check(sz.solana === 76.41, "AI tab: suggested size on Solana = $76.41 ($152.82 over 2 live slots)", sz);
 console.log(`\nresize: ${pass} passed, ${fail} failed`); if (fail) process.exit(1);
