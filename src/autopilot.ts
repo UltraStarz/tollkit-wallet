@@ -181,7 +181,11 @@ export class Autopilot {
         return { id: r.id, tier: sellTier(r.kind), want };
       });
       const got = allocateSells(asks, (tier) => (tier === 0 ? mine : free));
-      for (const { r, t: tk, p } of g) await this.fire(r, tk, p, got.get(r.id) ?? 0n, bal > 0n).catch((e) => this.record(r.id, { error: (e as Error).message }));
+      for (const { r, t: tk, p } of g) {
+        // Nov 10 (audit): a partner in the same group may have just sold and cancelled this one; then it doesn't sell too.
+        const cur = this.store.get(r.id); if (!cur || cur.status !== "active") continue;
+        await this.fire(cur, tk, p, got.get(r.id) ?? 0n, bal > 0n).catch((e) => this.record(r.id, { error: (e as Error).message }));
+      }
     }
   }
 
@@ -277,7 +281,8 @@ export class Autopilot {
       const eff = (q.quote.usd_value ?? 0) / units;
       if (r.kind === "limit_buy" ? eff > r.trigger_price! * 1.01 : eff < r.trigger_price! * 0.99) return; // the market moved back; keep waiting
     }
-    if (await this.overShare(r, BUY_KINDS.includes(r.kind) ? r.amount_usd! : (Number(req.sell_amount) / 10 ** t.decimals) * price)) return;
+    // Nov 10 (audit): the daily share limits buying only; a stop or take-profit always sells, even in a crash.
+    if (BUY_KINDS.includes(r.kind) && (await this.overShare(r, r.amount_usd!))) return;
     if (BUY_KINDS.includes(r.kind) && await this.cashShort(r, r.amount_usd!)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
@@ -353,7 +358,7 @@ export class Autopilot {
       }
       req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps, ...bot };
     }
-    if (await this.overShare(r, a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p)) return;
+    if (a.side === "buy" && (await this.overShare(r, a.usd))) return;
     if (a.side === "buy" && await this.cashShort(r, a.usd)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }

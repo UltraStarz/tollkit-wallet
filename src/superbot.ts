@@ -285,6 +285,11 @@ export function eagerRsi(template: string, p: Record<string, unknown>): Record<s
   const lv = Number(p.level) || 0;
   return lv >= EAGER_RSI && lv <= 45 ? p : { ...p, level: lv > 45 ? 45 : EAGER_RSI };
 }
+/** Nov 10 (audit): a strategy that bought and is waiting to sell; rebuilding it would cancel its sells. */
+export function holdsToSell(st: { template: string; params: Record<string, unknown> }, sum: { units_held: number } | null | undefined): boolean {
+  const neverSells = st.template === "dca" || (st.template === "signal" && st.params.side !== "sell");
+  return !neverSells && (sum?.units_held ?? 0) > 1e-9;
+}
 /** Nov 10: how many strategies of one kind may run on one coin (with different settings). */
 export const MAX_TWINS = 2;
 /** Nov 10: two strategies' settings are the same when every number but the dollar size is within 15% (or 0.3) of the other's. */
@@ -668,7 +673,7 @@ export class SuperBot {
   }
   /** After a loss stop, the owner may start again early (the stop would lift on its own at the next day or week). */
   async resume() {
-    await this.update((s) => { s.halted = null; s.marks = null; });
+    await this.update((s) => { s.halted = null; if (s.marks) s.marks = { ...s.marks, day: "" }; }); // Nov 10 (audit): a fresh day, but this week's losses still count
     const s = this.load(), all = this.w.rules().list();
     for (const st of s.strategies) if (st.stage === "live") for (const r of this.rulesOf(s, st, all)) if (r.status === "paused") await this.w.rules().setStatus(r.id, "active").catch(() => {});
     this.d.onRulesChanged?.();
@@ -754,7 +759,7 @@ export class SuperBot {
     const dayLoss = s.marks.day_start - liveResult, weekLoss = s.marks.week_start - liveResult;
     const dayCap = s.settings.budget_usd * s.settings.daily_loss_pct / 100, weekCap = s.settings.budget_usd * s.settings.weekly_loss_pct / 100;
     let why: string | null = null, until: string | null = null;
-    if (weekLoss >= weekCap) { why = `Weekly loss stop: down $${r2(weekLoss)} this week (limit $${r2(weekCap)}).`; const d = new Date(t); d.setUTCDate(d.getUTCDate() + (8 - ((d.getUTCDay() + 6) % 7)) % 7 || 7); d.setUTCHours(0, 0, 0, 0); until = d.toISOString(); }
+    if (weekLoss >= weekCap) { why = `Weekly loss stop: down $${r2(weekLoss)} this week (limit $${r2(weekCap)}).`; const d = new Date(t); d.setUTCDate(d.getUTCDate() + 7 - ((d.getUTCDay() + 6) % 7)); /* Nov 10 (audit): next Monday, never today */ d.setUTCHours(0, 0, 0, 0); until = d.toISOString(); }
     else if (dayLoss >= dayCap) { why = `Daily loss stop: down $${r2(dayLoss)} today (limit $${r2(dayCap)}).`; until = `${today}T00:00:00.000Z`; until = nowIso(Date.parse(until) + 86_400_000); }
     if (!why) return;
     for (const st of s.strategies) if (st.stage === "live") for (const r of this.rulesOf(s, st, all)) if (r.status === "active") { await this.w.rules().setStatus(r.id, "paused").catch(() => {}); if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false); }
@@ -852,6 +857,7 @@ export class SuperBot {
       const mk = this.marketOf(st.chain, st.token);
       if (mk === "rising" || mk === "falling") continue;
       const sum = this.summaryOf(st, all);
+      if (holdsToSell(st, sum)) continue; // Nov 10 (audit): waiting on its sell is not idle; a rebuild would orphan its coins
       const since = Math.max(Date.parse(st.stage_since), sum?.last_trade ? Date.parse(sum.last_trade) : 0, st.tightened_at ? Date.parse(st.tightened_at) : 0);
       if (t - since < SUPERBOT.idleHours * 3_600_000) continue;
       const next = tightened(st.template, st.params);
@@ -1307,6 +1313,7 @@ export class SuperBot {
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
         if (this.rebuiltLately(st)) return { applied: false, outcome: "changed less than 12 hours ago; left as it is" };
+        if (holdsToSell(st, this.summaryOf(st, all))) return { applied: false, outcome: "not changed: it holds coins waiting on its sell" }; // Nov 10 (audit)
         return this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params, true);
       }
       case "propose": {

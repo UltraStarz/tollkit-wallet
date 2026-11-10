@@ -506,6 +506,9 @@ export async function applyFills(store: RuleStore, fills: ServerFill[], dir?: st
         const step = r.every === "hour" ? 3600_000 : r.every === "week" ? 7 * 86_400_000 : 86_400_000;
         r.state.next_run = new Date(Date.parse(f.ts) + step).toISOString();
         if (r.times && r.state.runs >= r.times) r.status = "done";
+      } else if ((r.kind === "signal_buy" || r.kind === "signal_sell") && r.state.runs < (r.times ?? 1)) {
+        // Nov 10 (audit): a signal rule fires up to `times`, like on the device and the server; not done after the first.
+        r.state.alert_armed = false; r.state.last_alert = f.ts;
       } else {
         r.status = "done";
         if (r.group) for (const o of rules) if (o.id !== r.id && o.group === r.group && ["active", "paused"].includes(o.status)) { o.status = "cancelled"; o.state.note = "Its partner rule filled"; }
