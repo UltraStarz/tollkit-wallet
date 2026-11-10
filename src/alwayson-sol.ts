@@ -359,7 +359,9 @@ export class SolAlwaysOn {
     // Nov 10 (audit, round 12): a bot whose server trade went through after the network was slow to confirm it can't
     // know which level that was; it stops here too, with the server's note, until the owner restarts it.
     const pl = Object.entries(state.rules ?? {}).filter(([, v]: any) => v && v.pending_landed);
-    if (pl.length) await store.mutate((rs) => { for (const [id, v] of pl as [string, any][]) { const r = rs.find((x) => x.id === id); if (r && (r.status === "active" || r.status === "paused")) { r.status = "error"; r.state.last_error = String(v.note ?? "This bot's last 24/7 trade went through late. Stop and start the bot to bring it up to date.").slice(0, 300); } } });
+    // (A restart after the late trade, newer activated_at, is the owner bringing it back: it stays on and its new
+    // activated_at tells the server so.)
+    if (pl.length) await store.mutate((rs) => { for (const [id, v] of pl as [string, any][]) { const r = rs.find((x) => x.id === id); if (r && (r.status === "active" || r.status === "paused") && !(r.activated_at && Date.parse(r.activated_at) > (Number(v.pending_landed_at) || 0))) { r.status = "error"; r.state.last_error = String(v.note ?? "This bot's last 24/7 trade went through late. Stop and start the bot to bring it up to date.").slice(0, 300); } } });
     // 0.9.13: a trailing stop the server watched keeps the highest price it saw.
     const hi = Object.entries(state.rules ?? {}).filter(([, v]: any) => v && typeof v.high === "number");
     if (hi.length) await store.mutate((rs) => { for (const [id, v] of hi as [string, any][]) { const r = rs.find((x) => x.id === id); if (r && r.kind === "trailing_stop" && v.high > (r.state.high ?? 0)) r.state.high = v.high; } });
