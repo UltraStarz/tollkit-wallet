@@ -825,6 +825,13 @@ export class SuperBot {
           await this.retire(st, why, all);
           await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: [`paper ${pct ?? "none"}%`], applied: true, outcome: "retired" }]);
         }
+      } else if (st.stage === "live" && st.no_buys && pct !== null && pct >= 0) {
+        // Nov 10 (audit, round 6): back to even or better: its buys start again.
+        const why = `Live result back to ${pct}%: it buys again.`;
+        for (const r of this.rulesOf(s, st, all)) if (r.status === "paused" && ["dca", "limit_buy", "signal_buy"].includes(r.kind)) await this.w.rules().setStatus(r.id, "active").catch(() => {});
+        await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.no_buys = false; y.history.push({ ts: nowIso(this.now()), note: why }); } });
+        await this.log("rule", why, [{ type: "resume", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: true, outcome: "buys on again" }]);
+        this.d.onRulesChanged?.();
       } else if (st.stage === "live" && pct !== null && pct < 0 && trades >= 3 && days >= 1 && this.holds(st, all)) {
         // Nov 10 (audit, round 4): losing but holding coins its sells wait for. Moving it to paper would cancel those
         // sells, so it stops buying more instead (its plain buy rules pause) and moves to paper once it has sold.

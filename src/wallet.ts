@@ -422,6 +422,7 @@ export class TollkitWallet {
         if (rc === null) {
           // Nov 10 (audit, round 5): never included: once a later transaction from this wallet used its nonce, it can't land.
           const tx = await prov.getTransaction(e.tx).catch(() => undefined), next = await prov.getTransactionCount(this.addresses.evm, "latest").catch(() => undefined);
+          if (tx && tx.blockNumber != null) continue; // mined between the two calls: the receipt answers next time
           const gone = (tx === null && Date.now() - Date.parse(e.ts) > 3600_000) || (tx && next !== undefined && next > tx.nonce);
           if (!gone) continue;
           settle(e.id, { status: "failed", reason: "Rechecked on the chain: this swap didn't go through." }, this.o.dir);
@@ -465,7 +466,6 @@ export class TollkitWallet {
         // Nov 10 (audit, round 5): only this swap's own hold is lifted; an older swap's answer leaves a newer hold alone.
         if (held) r.state.unconfirmed = undefined;
         if (!landed) { if (held && r.status === "error") { r.status = "active"; r.state.last_error = undefined; r.state.next_run = new Date().toISOString(); } continue; }
-        if (!held && r.state.unconfirmed) continue; // a newer swap is still being checked: don't act on this rule yet
         if (f) {
           const a = amounts?.(r);
           Object.assign(f, { ok: true, tx: sig, reason: undefined, ...(a ? { side: a.buy ? "buy" : "sell", usd: Math.round(a.usd * 100) / 100, units: a.units } : {}) });
@@ -473,6 +473,9 @@ export class TollkitWallet {
           else if (a) { r.state.received_usd = (r.state.received_usd ?? 0) + a.usd; r.state.sold_units = (r.state.sold_units ?? 0) + a.units; }
           r.state.failures = Math.max(0, (r.state.failures ?? 1) - 1);
         }
+        // Nov 10 (audit, round 6): the fill above always counts; with a newer swap still being checked, the rule's status
+        // waits for that one's answer.
+        if (!held && r.state.unconfirmed) continue;
         const open = ["active", "paused", "error"].includes(r.status);
         if (!open) continue;
         r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined;
