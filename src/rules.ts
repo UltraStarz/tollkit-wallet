@@ -356,8 +356,10 @@ export class RuleStore {
       if (status === "active") {
         // Nov 10 (audit, round 8): turning a rule on is a fresh start: no swap hold, no loss pause; an earlier swap that
         // turned out to have landed still counts as one of its trades.
-        if (r.state.landed_pending) { r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; }
+        const pend = r.state.landed_pending;
         r.state.unconfirmed = undefined; r.state.landed_pending = undefined; r.state.no_buys = undefined;
+        // Nov 10 (audit, round 9): that earlier trade finishes a one-shot rule (and its partners), or a DCA at its count.
+        if (pend) { landedStatus(r, rules, "an earlier trade"); if (["done", "cancelled"].includes(r.status)) return { ...r }; r.status = "active"; r.state.last_error = undefined; } // a bot the owner restarts stays on
       }
       if (status === "active") retire(rules, r);
       if (status === "active") {
@@ -370,3 +372,19 @@ export class RuleStore {
     });
   }
 }
+
+/** Nov 10 (audit): a rule's status once one of its swaps is known to have landed. */
+export function landedStatus(r: Rule, rs: Rule[], shortOf: string) {
+        const open = ["active", "paused", "error"].includes(r.status);
+        if (!open) return;
+        r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined;
+        if (r.kind === "dca") { r.state.next_run = nextRun(r, new Date()).toISOString(); r.status = r.times && r.state.runs >= r.times ? "done" : "active"; }
+        else if (r.kind === "signal_buy" || r.kind === "signal_sell") { r.state.alert_armed = false; r.state.last_alert = new Date().toISOString(); r.status = r.state.runs >= (r.times ?? 1) ? "done" : "active"; }
+        else if (["limit_buy", "limit_sell", "take_profit", "stop_loss", "trailing_stop"].includes(r.kind)) {
+          r.status = "done";
+          if (r.group) for (const o of rs) if (o.id !== r.id && o.group === r.group && ["active", "paused", "proposed"].includes(o.status)) { o.status = "cancelled"; o.state.note = "Its partner filled."; o.state.last_error = `Cancelled because rule ${r.id} in the same group filled.`; }
+        } else {
+          // A bot (grid, Smart DCA...) can't safely guess which level that trade was: it stays stopped and says why.
+          r.status = "error"; r.state.last_error = `This bot's trade (${shortOf}) went through after the network was slow to confirm it. Stop and start the bot to bring it up to date.`;
+        }
+  }

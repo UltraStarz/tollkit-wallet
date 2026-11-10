@@ -1580,7 +1580,7 @@ export class SuperBot {
         const s = this.load(), st = s.strategies.find((x) => x.id === a.strategy_id && x.stage !== "retired");
         if (!st) continue;
         if (a.type === "retire") await this.retire(st, `Autopilot retired it while you were away: ${a.reason}`, this.w.rules().list());
-        else if (a.type === "pause" || a.type === "resume") for (const r of this.rulesOf(s, st, this.w.rules().list())) if (r.status === (a.type === "pause" ? "active" : "paused")) await this.w.rules().setStatus(r.id, a.type === "pause" ? "paused" : "active").catch(() => {});
+        else if (a.type === "pause" || a.type === "resume") for (const r of this.rulesOf(s, st, this.w.rules().list())) if (r.status === (a.type === "pause" ? "active" : "paused") && !(a.type === "resume" && (s.halted || st.owner_paused || r.state.no_buys))) await this.w.rules().setStatus(r.id, a.type === "pause" ? "paused" : "active").catch(() => {});
       }
     }
     if (fresh.length) await this.update((x) => { x.server_seen = [...seen, ...fresh.map((e) => e.id as string)].slice(-300); });

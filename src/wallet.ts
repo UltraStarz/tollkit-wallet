@@ -29,7 +29,7 @@ import { balanceAtomic, checkDestination, sendTokens, type SendRequest } from ".
 import { dashboardOpen, requestLocal } from "./approvals.js";
 import { randomUUID } from "node:crypto";
 import { KNOWN, type Token } from "./tokens.js";
-import { RuleStore, nextRun, type Rule } from "./rules.js";
+import { RuleStore, landedStatus, type Rule } from "./rules.js";
 import { IdeaStore } from "./ideas.js";
 import { AlwaysOn } from "./alwayson.js";
 import { SolAlwaysOn } from "./alwayson-sol.js";
@@ -468,7 +468,7 @@ export class TollkitWallet {
         if (!landed) {
           if (!held) continue;
           // Nov 10 (audit, round 7): an earlier swap of this rule did land meanwhile: that one counts as its trade.
-          if (r.state.landed_pending) { r.state.landed_pending = undefined; this.landedStatus(r, rs, shortOf); continue; }
+          if (r.state.landed_pending) { r.state.landed_pending = undefined; landedStatus(r, rs, shortOf); continue; }
           if (r.status !== "error") continue;
           r.status = "active"; r.state.last_error = undefined; r.state.next_run = new Date().toISOString(); continue;
         }
@@ -483,26 +483,10 @@ export class TollkitWallet {
         // waits for that one's answer.
         if (!held && r.state.unconfirmed) { r.state.landed_pending = true; continue; }
         const both = r.state.landed_pending; r.state.landed_pending = undefined;
-        this.landedStatus(r, rs, shortOf);
-        if (both) this.landedStatus(r, rs, shortOf); // the earlier swap landed too: two trades (a one-shot rule is already done)
+        landedStatus(r, rs, shortOf);
+        if (both) landedStatus(r, rs, shortOf); // the earlier swap landed too: two trades (a one-shot rule is already done)
       }
     });
-  }
-
-  /** Nov 10 (audit): a rule's status once one of its swaps is known to have landed. */
-  private landedStatus(r: Rule, rs: Rule[], shortOf: string) {
-        const open = ["active", "paused", "error"].includes(r.status);
-        if (!open) return;
-        r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined;
-        if (r.kind === "dca") { r.state.next_run = nextRun(r, new Date()).toISOString(); r.status = r.times && r.state.runs >= r.times ? "done" : "active"; }
-        else if (r.kind === "signal_buy" || r.kind === "signal_sell") { r.state.alert_armed = false; r.state.last_alert = new Date().toISOString(); r.status = r.state.runs >= (r.times ?? 1) ? "done" : "active"; }
-        else if (["limit_buy", "limit_sell", "take_profit", "stop_loss", "trailing_stop"].includes(r.kind)) {
-          r.status = "done";
-          if (r.group) for (const o of rs) if (o.id !== r.id && o.group === r.group && ["active", "paused", "proposed"].includes(o.status)) { o.status = "cancelled"; o.state.note = "Its partner filled."; o.state.last_error = `Cancelled because rule ${r.id} in the same group filled.`; }
-        } else {
-          // A bot (grid, Smart DCA...) can't safely guess which level that trade was: it stays stopped and says why.
-          r.status = "error"; r.state.last_error = `This bot's trade (${shortOf}) went through after the network was slow to confirm it. Stop and start the bot to bring it up to date.`;
-        }
   }
 
   /** Fetch a URL, paying through x402 or MPP if it asks, within the owner's rules. */
