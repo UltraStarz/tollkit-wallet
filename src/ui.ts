@@ -1563,11 +1563,11 @@ document.addEventListener("pointermove",function(e){if(BOT.drag)botDragMove(e)})
 function botChartData(key,q){var c=BOT.ch[key];if(c&&(c.busy||Date.now()-c.at<60000))return c.d||null;BOT.ch[key]={at:Date.now(),busy:true,d:c&&c.d};api("/bots/chart?"+q).then(function(d){BOT.ch[key]={at:Date.now(),d:d};if(!busy())render()}).catch(function(e){BOT.ch[key]={at:Date.now(),d:c&&c.d,err:e.message};if(!busy())render()});return c&&c.d||null}
 
 // ── Top strip.
-function botStrip(L){var run=L.filter(function(b){return b.status==="running"||b.status==="waiting"}),res=0,has=false,pres=0,phas=false,tt=0;L.forEach(function(b){if(b.result_usd!==null){if(b.paper){pres+=b.result_usd;phas=true}else{res+=b.result_usd;has=true}}tt+=b.trades_today||0});/* Nov 10: real and practice shown apart, so the box adds up to the cards */ /* Nov 8 (money audit): practice bots aren't real money */
+function botStrip(L){var run=L.filter(function(b){return b.status==="running"||b.status==="waiting"}),res=0,has=false,tt=0;L.forEach(function(b){if(b.result_usd!==null&&!b.paper){res+=b.result_usd;has=true}tt+=b.trades_today||0});/* Nov 10: real money only; paper bots are not counted */ /* Nov 8 (money audit): practice bots aren't real money */
 var nx=run.filter(function(b){return b.next}).map(function(b){return {b:b,n:b.next,s:b.next.at?Math.max(0,(Date.parse(b.next.at)-Date.now())/864e5)*5:Math.abs(b.next.dist_pct===undefined?100:b.next.dist_pct)}}).sort(function(a,b){return a.s-b.s});
 var up=nx[0];
 return '<div class="bstrip"><div class="bsk"><small>Running</small><b>'+(run.length?'<i class="botlive" aria-hidden="true"></i>':'')+run.length+'</b><span class="sm mut">of '+L.length+' bot'+(L.length===1?"":"s")+'</span></div>'+
-'<div class="bsk"><small>Combined result</small><b>'+(has?sgn(res,fmtUsd(Math.abs(res))):'<span class="mut">—</span>')+'</b><span class="sm mut">'+(has?"real money":"no real trades yet")+(phas?' · practice '+sgn(pres,fmtUsd(Math.abs(pres))):'')+'</span></div>'+
+'<div class="bsk"><small>Combined result</small><b>'+(has?sgn(res,fmtUsd(Math.abs(res))):'<span class="mut">—</span>')+'</b><span class="sm mut">'+(has?"real money":"no real trades yet")+'</span></div>'+
 '<div class="bsk"><small>Trades today</small><b>'+tt+'</b><span class="sm mut">'+(tt?"so far":"none yet")+'</span></div>'+
 '<div class="bsk bsnext"><small>Next up</small>'+(up?'<b class="bsnt">'+esc(symText(up.n.text))+'</b><span class="sm mut">'+esc(symText(up.b.name))+' · '+(up.n.at?when(up.n.at):up.n.dist_pct!==undefined?Math.abs(up.n.dist_pct)+'% '+(up.n.dist_pct<0?"below":"above")+' now':'')+'</span>':'<b class="mut">—</b><span class="sm mut">nothing waiting</span>')+'</div></div>'}
 
