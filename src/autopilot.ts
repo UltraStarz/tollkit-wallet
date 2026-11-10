@@ -187,6 +187,9 @@ export class Autopilot {
 
   private async consider(r: Rule) {
     if (this.o.skip?.(r.id)) return;
+    // Nov 10 (data audit): a practice rule never trades real money, whatever any list says. A rebuilt strategy's new
+    // paper rules were saved a moment before Autopilot listed them as paper, and a live check in between bought for real.
+    if (this.exec.mode === "live" && isPaperRule(r)) return;
     const now = this.now();
     if (r.expires_at && Date.parse(r.expires_at) <= now) { await this.finish(r.id, "expired", "Expired before it triggered."); return; }
     if (r.state.hold_until && Date.parse(r.state.hold_until) > now) return;

@@ -176,6 +176,16 @@ function market() {
   check(s.get(buy.id)!.status === "done" && m.state.swaps.length >= 1, "it buys once the cash is there");
 }
 
+// --- Nov 10 (data audit): a practice rule never trades real money, even when no list marks it as paper.
+{
+  const dir = tmp(), m = market(), s = new RuleStore(dir);
+  const ap = new Autopilot(s, m.exec, m.prices, { dir });
+  m.state.bal.USDC = 100_000_000n;
+  const g = await s.add({ kind: "grid", chain: "base", token: "ETH", amount_usd: 10, lower_price: 2300, upper_price: 2700, levels: 5, paper: true } as any, "owner", false);
+  await ap.tick();
+  check(m.state.swaps.length === 0, "the live trader leaves a paper rule alone", { swaps: m.state.swaps.length, paper: s.get(g.id)?.paper });
+}
+
 // --- paper trading
 {
   const dir = tmp();
