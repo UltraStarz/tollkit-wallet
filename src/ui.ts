@@ -1134,8 +1134,8 @@ if(coin&&!(amt>0)){BUY.err="Enter how much "+BUY.asset+" to buy.";buyRender();re
 if(usd!==null&&!(usd>=5&&usd<=10000)){BUY.err=coin?"That's about "+fmtUsd(usd)+". Coinbase takes $5 to $10,000.":"Pick an amount from $5 to $10,000.";buyRender();return}
 var win=window.open("about:blank","_blank");BUY.busy=true;BUY.err=null;BUY.done=null;buyRender();
 api("/buy",coin?{chain:BUY.chain,asset:BUY.asset,amount_crypto:BUY.cv,sandbox:BUY.test}:{chain:BUY.chain,asset:BUY.asset,amount_usd:amt,sandbox:BUY.test}).then(function(r){BUY.busy=false;if(win){win.opener=null;win.location.href=r.url}else window.open(r.url,"_blank","noopener");BUY.done="Coinbase opened in a new tab"+(r.sandbox?" (test mode)":"")+". Your balance updates here once the crypto arrives.";buyRender()}).catch(function(e){if(win)win.close();BUY.busy=false;BUY.err=e.message;buyRender()})}
-var CK="candles";try{CK=localStorage.getItem("tk_ck")||"candles"}catch(e){}
-function setCK(k){CK=k==="line"?"line":"candles";try{localStorage.setItem("tk_ck",CK)}catch(e){}}
+/* Nov 10 (Joe: "lets just do lines for now and remove the switches"): every chart is a line; no candle switch. */var CK="line";
+function setCK(k){CK="line"}
 var CHT={o:null,coin:"",sym:"",chain:"",name:"",range:"1D",data:null,loading:false,err:null,table:false,hover:null};
 function coinOf(chain,sym){var c=(S.coins||{})[chain]||{};return c[sym]||c[String(sym).toUpperCase()]||""}
 function rowAttrs(coin,sym,chain,name){return coin?' rowc" tabindex="0" role="button" aria-label="'+esc((name||sym)+" price chart")+'" data-chart="'+esc(coin)+'" data-sym="'+esc(sym)+'" data-chain="'+esc(chain)+'" data-name="'+esc(name||sym)+'"':'"'}
@@ -1480,7 +1480,7 @@ ch.timeScale().fitContent();
 return {ch:ch,s:s,v:v,times:times,map:o.map,pr:pr,candles:!!o.candles}}
 // The bar under the crosshair, as an index into the data (or null).
 function lwIdx(L,pm){if(!pm||pm.time===undefined||!pm.point||pm.point.x<0)return null;var t=pm.time,a=L.times,lo=0,hi=a.length-1;while(lo<hi){var m=(lo+hi+1)>>1;if(a[m]<=t)lo=m;else hi=m-1}return a.length?lo:null}
-function ckBtns(){var ic={candles:'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 2v12M12 3v10M8 1v14" stroke="currentColor" stroke-width="1.2"/><rect x="2.5" y="5" width="3" height="5" rx=".6" fill="currentColor"/><rect x="6.5" y="3" width="3" height="8" rx=".6" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="10.5" y="6" width="3" height="4" rx=".6" fill="currentColor"/></svg>',line:'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M1.5 12l4-5 3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'};return '<div class="ckg" role="group" aria-label="Chart type">'+["candles","line"].map(function(k){return '<button type="button" data-ck="'+k+'" class="ckb'+(CK===k?" on":"")+'" aria-pressed="'+(CK===k)+'" title="'+(k==="candles"?"Candles":"Line")+'">'+ic[k]+'</button>'}).join("")+'</div>'}
+function ckBtns(){return ""}
 
 // ── The token price chart (tap a token).
 function chHero(i){var D=CHT.data,L=CHT.lw;if(!L||!L.map.length)return "";var M=L.map,n=M.length-1,j=i===null?n:i,first=L.candles?M[0][1]:M[0][1],cur=L.candles?M[j][4]:M[j][1],cc=(cur-first)/first,up=cc>=0;
