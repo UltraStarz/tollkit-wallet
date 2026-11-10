@@ -365,7 +365,8 @@ export async function executeSwap(q: SwapQuote, keys: { evm: Wallet | HDNodeWall
   if (q.raw?.issues?.allowance) {
     const token = new Contract(q.sell_token, ERC20, signer);
     const a = await token.getFunction("approve")(ALLOWANCE_HOLDER, BigInt(q.sell_amount)); // exact amount, never unlimited
-    await waitMined(a, "approval");
+    // Nov 10 (audit, round 5): an approval that times out moved no funds, so it is a plain failure (safe to retry), not an unconfirmed swap.
+    try { await waitMined(a, "approval"); } catch (e) { throw new Error((e as Error).message); }
   }
   const t = q.raw.transaction;
   const sent = await signer.sendTransaction({

@@ -285,7 +285,7 @@ export class Autopilot {
     if (BUY_KINDS.includes(r.kind) && (await this.overShare(r, r.amount_usd!))) return;
     if (BUY_KINDS.includes(r.kind) && await this.cashShort(r, r.amount_usd!)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
-    if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
+    if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed.", (res.refused as any)?.tx); return; }
     const usd = res.quote?.usd_value ?? undefined;
     const now = new Date(this.now());
     const buy = BUY_KINDS.includes(r.kind);
@@ -361,7 +361,7 @@ export class Autopilot {
     if (a.side === "buy" && (await this.overShare(r, a.usd))) return;
     if (a.side === "buy" && await this.cashShort(r, a.usd)) return;
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
-    if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
+    if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed.", (res.refused as any)?.tx); return; }
     const usd0 = res.quote?.usd_value ?? (a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p);
     // Nov 8 (money audit): on Solana Tollkit's fee is paid in SOL beside the swap, so it never reached the bot's money.
     const qf: any = res.quote, feeX = qf && (qf.fee_separate || qf.fee_inline) ? (Number(qf.fee_usd) || usd0 * (Number(qf.fee_bps) || 0) / 10_000) : 0;
@@ -443,7 +443,7 @@ export class Autopilot {
         ? { chain: "solana", sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps, bot: true }
         : { chain: "solana", sell_token: t.address, buy_token: usdc.address, sell_amount: BigInt(Math.floor((usd / pool.price) * 1e9)).toString(), slippage_bps: this.exec.slippageBps, bot: true };
       const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
-      if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed."); return; }
+      if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed.", (res.refused as any)?.tx); return; }
       const got = BigInt(String(res.quote?.buy_amount ?? "0"));
       if (buy) { usdcHave -= BigInt(req.sell_amount); solHave += got; } else { solHave -= BigInt(req.sell_amount); usdcHave += got; }
       await this.saveRange(r, { staged: true, sol: Number(solHave) / 1e9, usdc: Number(usdcHave < 0n ? 0n : usdcHave) / 1e6,
@@ -553,7 +553,7 @@ export class Autopilot {
   }
 
   /** Back off after a failure. Stops retry fast; anything else slows down and stops after 5 tries. */
-  private async fail(r: Rule, code: string, reason: string) {
+  private async fail(r: Rule, code: string, reason: string, tx?: string) {
     reason = plainError(reason, r.chain);
     if (r.kind === "range") await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (!x) return; const g = x.state.range ?? {};
       x.state.range = { ...g, log: [...(g.log ?? []), { ts: new Date(this.now()).toISOString(), text: `Couldn't go ahead: ${reason} It tries again in 5 minutes.` }].slice(-20) }; });
@@ -566,11 +566,11 @@ export class Autopilot {
       // 0.9.12: a rule that retries on its own says when, instead of asking the owner to try again.
       const said = retries ? reason.replace(/Try again in a moment\.$/, `It tries again in ${wait / 60_000} minute${wait === 60_000 ? "" : "s"}.`) : reason;
       x.state.last_error = said;
-      x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: false, reason: said });
+      x.state.fills.push({ ts: new Date(this.now()).toISOString(), ok: false, reason: said, ...(tx ? { tx } : {}) });
       x.state.fills = x.state.fills.slice(-50);
       if (code === "denied") { x.status = "paused"; x.state.last_error = "You denied this trade, so the rule is paused."; }
       // Nov 10 (audit): sent but never confirmed. Held, not retried, until the chain check says whether it went through.
-      else if (code === "swap_unconfirmed") { x.status = "error"; x.state.unconfirmed = /\(([1-9A-HJ-NP-Za-km-z]{4,}…[1-9A-HJ-NP-Za-km-z]{3,})\)/.exec(reason)?.[1] ?? "?"; x.state.last_error = `${reason} It starts again on its own if the trade didn't go through.`; }
+      else if (code === "swap_unconfirmed") { x.status = "error"; x.state.unconfirmed = tx ?? /\(([1-9A-HJ-NP-Za-km-z]{4,}…[1-9A-HJ-NP-Za-km-z]{3,})\)/.exec(reason)?.[1] ?? "?"; x.state.last_error = `${reason} It starts again on its own if the trade didn't go through.`; }
       else if (!retries) x.status = "error";
       else x.state.next_run = new Date(this.now() + wait).toISOString();
       return { ...x };

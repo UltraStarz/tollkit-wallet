@@ -137,6 +137,8 @@ export interface Strategy {
   ready?: { at: string; result_pct: number; trades: number } | null;
   /** Nov 5: Big moves: the trailing stop it added for the current big move, and when a broken-out grid last followed. */
   guard?: { rule: string; kind: "rising" | "falling"; at: string } | null;
+  /** Nov 10 (audit): losing while holding coins: its plain buys stay paused (resume leaves them) until it moves to paper. */
+  no_buys?: boolean;
   followed_at?: string;
 }
 /** Nov 5: a big move on one coin, for the alert on Home (key chain:token). */
@@ -683,7 +685,7 @@ export class SuperBot {
     await this.update((s) => { s.halted = null; s.marks = byOwner ? null : s.marks ? { ...s.marks, day: "" } : null; });
     const s = this.load(), all = this.w.rules().list();
     // ...and a bot the owner paused stays paused.
-    for (const st of s.strategies) if (st.stage === "live" && !st.owner_paused) for (const r of this.rulesOf(s, st, all)) if (r.status === "paused") await this.w.rules().setStatus(r.id, "active").catch(() => {});
+    for (const st of s.strategies) if (st.stage === "live" && !st.owner_paused) for (const r of this.rulesOf(s, st, all)) if (r.status === "paused" && !(st.no_buys && ["dca", "limit_buy", "signal_buy"].includes(r.kind))) await this.w.rules().setStatus(r.id, "active").catch(() => {});
     this.d.onRulesChanged?.();
     return this.view();
   }
@@ -830,7 +832,7 @@ export class SuperBot {
         if (buys.length) {
           const why = `Live result ${pct}% after ${trades} trades: no more buys; it moves to paper once its coins are sold.`;
           for (const r of buys) await this.w.rules().setStatus(r.id, "paused").catch(() => {});
-          await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.history.push({ ts: nowIso(this.now()), note: why }); });
+          await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.no_buys = true; y.history.push({ ts: nowIso(this.now()), note: why }); } });
           await this.log("rule", why, [{ type: "pause", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: true, outcome: `${buys.length} buy rule${buys.length === 1 ? "" : "s"} paused` }]);
           this.d.onRulesChanged?.();
         }
@@ -1164,7 +1166,7 @@ export class SuperBot {
       y.prev_bots = keepClock && y.stage === stage && y.bot ? [...(y.prev_bots ?? []), y.bot].slice(-200) : []; // Nov 7: 200, so a re-armed dip keeps its whole record
       if (y.bot) y.old_bots = [...(y.old_bots ?? []).filter((b) => b !== y.bot), y.bot].slice(-40);
       if (keepClock) y.rebuilt_at = nowIso(this.now());
-      y.stage = stage; if (!keepClock) y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
+      y.no_buys = false; y.stage = stage; if (!keepClock) y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
       if (stage === "paper") x.paper_rules.push(...made.map((r) => r.id));
     });
     if (stage === "live") await this.handToAlwaysOn(made);
@@ -1314,7 +1316,7 @@ export class SuperBot {
         if (st.owner_paused) return { applied: false, outcome: "the owner paused it; Autopilot leaves it alone" };
         const want = a.type === "pause" ? "paused" : "active", from = a.type === "pause" ? "active" : "paused";
         let n = 0;
-        for (const r of this.rulesOf(s, st, all)) if (r.status === from) { await this.w.rules().setStatus(r.id, want); n++; if (a.type === "pause" && this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false); }
+        for (const r of this.rulesOf(s, st, all)) if (r.status === from && !(a.type === "resume" && st.no_buys && ["dca", "limit_buy", "signal_buy"].includes(r.kind))) { await this.w.rules().setStatus(r.id, want); n++; if (a.type === "pause" && this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false); }
         await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); y?.history.push({ ts: nowIso(this.now()), note: `${a.type}: ${a.reason}` }); });
         return { applied: n > 0, outcome: n ? `${n} rule${n === 1 ? "" : "s"} ${want}` : `nothing to ${a.type}` };
       }

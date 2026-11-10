@@ -381,7 +381,7 @@ export class TollkitWallet {
     } catch (e) {
       const why = plainError(e, q.chain), sig = (e as any)?.sig as string | undefined;
       settle(id, { status: "failed", reason: why, ...(sig ? { tx: sig } : {}) }, this.o.dir); // Nov 7: kept, so reconcileDropped can re-check it
-      return { ok: false, quote: strip(q), receipt_id: id, refused: { code: (e as any)?.unconfirmed ? "swap_unconfirmed" : "swap_failed", reason: why } };
+      return { ok: false, quote: strip(q), receipt_id: id, refused: { code: (e as any)?.unconfirmed ? "swap_unconfirmed" : "swap_failed", reason: why, ...(sig ? { tx: sig } : {}) } };
     }
   }
 
@@ -415,11 +415,20 @@ export class TollkitWallet {
       if (e.chain !== "solana") {
         // Base / Ethereum: the receipt says landed (1), failed (0), or not yet (null).
         if (!e.tx) continue;
-        const rc = await new JsonRpcProvider(this.rpc(e.chain as Chain)).getTransactionReceipt(e.tx).catch(() => undefined);
-        if (rc === undefined || rc === null) continue;
+        const prov = new JsonRpcProvider(this.rpc(e.chain as Chain));
+        const rc = await prov.getTransactionReceipt(e.tx).catch(() => undefined);
+        if (rc === undefined) continue;
         const short = `${e.tx.slice(0, 6)}…${e.tx.slice(-4)}`;
+        if (rc === null) {
+          // Nov 10 (audit, round 5): never included: once a later transaction from this wallet used its nonce, it can't land.
+          const tx = await prov.getTransaction(e.tx).catch(() => undefined), next = await prov.getTransactionCount(this.addresses.evm, "latest").catch(() => undefined);
+          const gone = (tx === null && Date.now() - Date.parse(e.ts) > 3600_000) || (tx && next !== undefined && next > tx.nonce);
+          if (!gone) continue;
+          settle(e.id, { status: "failed", reason: "Rechecked on the chain: this swap didn't go through." }, this.o.dir);
+          await this.settleRule(short, e.tx, false); continue;
+        }
         if (rc.status === 1) { settle(e.id, { status: "done", reason: "Rechecked on the chain: this swap went through." }, this.o.dir); await this.settleRule(short, e.tx, true); fixed++; }
-        else await this.settleRule(short, e.tx, false);
+        else { settle(e.id, { status: "failed", reason: "Rechecked on the chain: this swap failed, so nothing changed." }, this.o.dir); await this.settleRule(short, e.tx, false); }
         continue;
       }
       const short = /\(([1-9A-HJ-NP-Za-km-z]{4,}…[1-9A-HJ-NP-Za-km-z]{3,})\)/.exec(e.reason ?? "")?.[1];
@@ -429,32 +438,38 @@ export class TollkitWallet {
       const st = (await conn!.getSignatureStatuses([sig], { searchTransactionHistory: true }).catch(() => undefined))?.value?.[0];
       if (st === undefined) continue; // the node didn't answer: next time
       // Not landed for sure: it failed on chain, or the chain has no record of it well after its blockhash expired.
-      if (st?.err || (st === null && Date.now() - Date.parse(e.ts) > 10 * 60_000)) { await this.settleRule(shortOf, sig, false); continue; }
+      if (st?.err || (st === null && Date.now() - Date.parse(e.ts) > 10 * 60_000)) {
+        // Nov 10 (audit, round 5): settled for good, so this receipt isn't checked (and its rule touched) again.
+        settle(e.id, { status: "failed", tx: sig, reason: st?.err ? "Rechecked on the chain: this swap failed, so nothing changed." : "Rechecked on the chain: this swap didn't go through, so nothing changed." }, this.o.dir);
+        await this.settleRule(shortOf, sig, false); continue;
+      }
       if (!st || st.confirmationStatus === "processed") continue;
       const d = await txDeltas(conn!, owner, sig);
       if (!d) continue;
       const line = describeDeltas(d, (m) => mintName(m));
       settle(e.id, { status: "done", tx: sig, reason: "Rechecked on the chain: this swap went through.", ...(line ? { detail: line } : {}) }, this.o.dir);
       const usdc = KNOWN.solana.USDC!.address, spent = -(d.tokens[usdc] ?? 0), got = d.tokens[usdc] ?? 0;
-      await this.settleRule(shortOf, sig, true, (r) => ({ buy: spent > 0, usd: spent > 0 ? spent : got, units: Math.abs(d.tokens[r.token] ?? (r.token === "SOL" ? d.sol : 0)) }));
+      await this.settleRule(shortOf, sig, true, (r) => { const units = Math.abs(d.tokens[r.token] ?? (r.token === "SOL" ? d.sol : 0)), dec = r.token === "SOL" ? 9 : d.decimals?.[r.token]; return { buy: spent > 0, usd: spent > 0 ? spent : got, units, ...(dec !== undefined ? { atomic: BigInt(Math.round(units * 10 ** dec)) } : {}) }; });
       fixed++;
     }
     return fixed;
   }
 
   /** Nov 10 (audit): bring the rule behind an unconfirmed (or dropped) swap up to date once the chain has answered. */
-  private async settleRule(shortOf: string, sig: string, landed: boolean, amounts?: (r: Rule) => { buy: boolean; usd: number; units: number }) {
+  private async settleRule(shortOf: string, sig: string, landed: boolean, amounts?: (r: Rule) => { buy: boolean; usd: number; units: number; atomic?: bigint }) {
     await this.rules().mutate((rs) => {
       for (const r of rs) {
-        const f = r.state.fills.find((x) => !x.ok && (x.reason ?? "").includes(shortOf));
-        const held = r.state.unconfirmed === shortOf;
+        const f = r.state.fills.find((x) => !x.ok && ((x.reason ?? "").includes(shortOf) || (x.reason ?? "").includes(sig) || (x as any).tx === sig));
+        const held = r.state.unconfirmed === shortOf || r.state.unconfirmed === sig;
         if (!f && !held) continue;
-        r.state.unconfirmed = undefined;
+        // Nov 10 (audit, round 5): only this swap's own hold is lifted; an older swap's answer leaves a newer hold alone.
+        if (held) r.state.unconfirmed = undefined;
         if (!landed) { if (held && r.status === "error") { r.status = "active"; r.state.last_error = undefined; r.state.next_run = new Date().toISOString(); } continue; }
+        if (!held && r.state.unconfirmed) continue; // a newer swap is still being checked: don't act on this rule yet
         if (f) {
           const a = amounts?.(r);
           Object.assign(f, { ok: true, tx: sig, reason: undefined, ...(a ? { side: a.buy ? "buy" : "sell", usd: Math.round(a.usd * 100) / 100, units: a.units } : {}) });
-          if (a?.buy) { r.state.spent_usd = (r.state.spent_usd ?? 0) + a.usd; r.state.bought_units = (r.state.bought_units ?? 0) + a.units; }
+          if (a?.buy) { r.state.spent_usd = (r.state.spent_usd ?? 0) + a.usd; r.state.bought_units = (r.state.bought_units ?? 0) + a.units; if (a.atomic) r.state.bought_atomic = (BigInt(r.state.bought_atomic ?? "0") + a.atomic).toString(); }
           else if (a) { r.state.received_usd = (r.state.received_usd ?? 0) + a.usd; r.state.sold_units = (r.state.sold_units ?? 0) + a.units; }
           r.state.failures = Math.max(0, (r.state.failures ?? 1) - 1);
         }

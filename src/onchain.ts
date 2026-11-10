@@ -8,7 +8,7 @@
  */
 import { Connection } from "@solana/web3.js";
 
-export interface Deltas { sol: number; tokens: Record<string, number> }
+export interface Deltas { sol: number; tokens: Record<string, number>; decimals?: Record<string, number> }
 
 /** What a landed transaction changed for `owner`: SOL (after the network fee) and each token, by mint. Null: not found or failed. */
 export async function txDeltas(conn: Connection, owner: string, sig: string): Promise<Deltas | null> {
@@ -17,11 +17,11 @@ export async function txDeltas(conn: Connection, owner: string, sig: string): Pr
   const keys: string[] = t.transaction.message.accountKeys.map((k: any) => (typeof k === "string" ? k : k.pubkey?.toBase58?.() ?? String(k.pubkey)));
   const i = keys.indexOf(owner);
   const sol = i >= 0 ? (t.meta.postBalances[i] - t.meta.preBalances[i]) / 1e9 : 0;
-  const tokens: Record<string, number> = {};
-  const add = (list: any[], sign: number) => { for (const b of list ?? []) if (b.owner === owner) tokens[b.mint] = (tokens[b.mint] ?? 0) + sign * Number(b.uiTokenAmount?.uiAmountString ?? 0); };
+  const tokens: Record<string, number> = {}, decimals: Record<string, number> = {};
+  const add = (list: any[], sign: number) => { for (const b of list ?? []) if (b.owner === owner) { tokens[b.mint] = (tokens[b.mint] ?? 0) + sign * Number(b.uiTokenAmount?.uiAmountString ?? 0); if (typeof b.uiTokenAmount?.decimals === "number") decimals[b.mint] = b.uiTokenAmount.decimals; } };
   add(t.meta.postTokenBalances, 1); add(t.meta.preTokenBalances, -1);
   for (const k of Object.keys(tokens)) if (Math.abs(tokens[k]!) < 1e-12) delete tokens[k];
-  return { sol, tokens };
+  return { sol, tokens, decimals };
 }
 
 /** A full signature from the short form the wallet shows ("5MjWSg…1Qux"), among this wallet's recent transactions. */
