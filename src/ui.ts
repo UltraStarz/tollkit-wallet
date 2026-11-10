@@ -750,7 +750,7 @@ input:where([type=text],[type=number],[type=password],[type=email],[type=search]
 .sbn-st button{border:0;background:none;color:var(--mut);font-size:17px;width:26px;height:26px}.sbn-st button:hover{color:var(--acc)}
 .sbp button{align-items:center;text-align:center;background:none;border:0;border-radius:0;border-bottom:2px solid transparent;padding:8px 4px}.sbp button:hover{border-color:transparent}
 .sbp button.on{background:none;box-shadow:none;border-bottom-color:var(--tkblue)}.sbp button.on b{color:var(--tkblue)}
-.sbchip{justify-content:center;text-align:center;border:0;background:none;padding:6px 10px}.sbchip.on{background:none;color:var(--tkblue)}
+.sbchip{justify-content:center;text-align:center;border:0;background:none;padding:6px 10px}.sbchip.on{background:none;color:var(--tkblue)}/* Nov 10 (GUI audit) */.sbsave{background:linear-gradient(to top,var(--bg) 78%,transparent)!important;margin:0 -16px;padding:14px 16px 8px!important}.sbchip{border:1px solid var(--line)!important;border-radius:999px;color:var(--mut)}.sbchip.on{border-color:var(--tkblue)!important;color:var(--tkblue)}.sbchip.on::before{content:"\2713\00a0"}@media (prefers-color-scheme:light){:root:not([data-theme=dark]) .apao-ic{color:var(--ok)!important}:root:not([data-theme=dark]) button.b.g,:root:not([data-theme=dark]) button.b.sbtn.g{background:#e3e5ec!important;box-shadow:0 2px 0 rgba(0,0,0,.10),0 3px 6px rgba(0,0,0,.06)!important}:root:not([data-theme=dark]) button.b.no,:root:not([data-theme=dark]) button.b.g.no{background:#fde3e3!important;color:#c0302f!important;box-shadow:0 2px 0 rgba(192,48,47,.18),0 3px 6px rgba(0,0,0,.06)!important}}
 .sbseg{background:none;border:0}
 .sbtok input{background:none;border:0;border-radius:0}
 .sbtc,.sbtc.on{background:none;border:0;justify-content:center}.sbtc.on{color:var(--tkblue)}.sbtc.add{color:var(--tkblue)}.ap-pill.off{background:none}
@@ -2365,7 +2365,7 @@ return '<span class="ap-mk" title="'+(m.d1===null?"Price history isn\u2019t avai
 // 0.9.10: what the strategies on paper (practice money) have made or lost so far, under the real-money number.
 function apPractice(paper){if(!paper.length)return "";var n=paper.reduce(function(a,x){return a+(x.earned_usd||0)},0),tr=paper.reduce(function(a,x){return a+(x.trades||0)},0);
 return '<div class="ap-prac">Practice <b>'+(tr?sgn(n,fmtUsd(Math.abs(n))):'$0.00')+'</b> earned · '+paper.length+' testing'+(tr?' · '+tr+' pretend trade'+(tr===1?'':'s'):'')+'</div>'}
-function usdS(n){return Math.abs(n-Math.round(n))<0.005?"$"+Math.round(n).toLocaleString():fmtUsd(n)}
+function usdS(n){return fmtUsd(n)}/* Nov 10 (GUI audit): money always shows cents */
 function apParam(k,v){if(k==="amount_usd")return "$"+v+(v==1?"":"")+" a buy";if(k==="times")return v>0?v+" buys":"until stopped";if(k==="every")return "every "+v;if(k==="levels")return v+" levels";if(k==="sell_percent")return "sells "+v+"%";if(/_pct$/.test(k))return k.replace(/_pct$/,"").replace(/_/g," ")+" "+v+"%";if(/_usd$/.test(k))return k.replace(/_usd$/,"").replace(/_/g," ")+" $"+v;return k.replace(/_/g," ")+" "+v}
 function apShort(id){var x=((S.superbot||{}).strategies||[]).filter(function(y){return y.id===id})[0];if(!x)return id;var t=x.symbol?String(x.symbol).toUpperCase():x.token.length>12?tokName(x.chain,x.token):x.token.toUpperCase();return t+" "+(x.template==="dca"?"buyer":x.template)}
 function apName(id){var x=((S.superbot||{}).strategies||[]).filter(function(y){return y.id===id})[0];return x?x.name:id}
