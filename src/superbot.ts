@@ -512,6 +512,11 @@ export class SuperBot {
   private async update<T>(fn: (s: State) => T): Promise<T> { return withLock(() => { const s = this.load(); const out = fn(s); this.save(s); return out; }, this.d.dir); }
 
   isPaperRule(id: string) { return this.load().paper_rules.includes(id); }
+  /** Nov 10 (audit): holds coins and still has a sell waiting for them (a rebuild or demotion would cancel it). */
+  private holds(st: Strategy, all: Rule[]): boolean {
+    if (!holdsToSell(st, this.summaryOf(st, all))) return false;
+    return this.openRules(this.rulesOf(this.load(), st, all)).some((r) => !["dca", "limit_buy", "signal_buy"].includes(r.kind));
+  }
   /** 0.9.1: dollars of live trades Autopilot may make today: its share of the wallet's daily trading limit. */
   dailyCapUsd(walletDailyUsd: number): number | null {
     const s = this.load();
@@ -672,10 +677,13 @@ export class SuperBot {
     return this.view();
   }
   /** After a loss stop, the owner may start again early (the stop would lift on its own at the next day or week). */
-  async resume() {
-    await this.update((s) => { s.halted = null; if (s.marks) s.marks = { ...s.marks, day: "" }; }); // Nov 10 (audit): a fresh day, but this week's losses still count
+  async resume(byOwner = true) {
+    // Nov 10 (audit): the owner starting again early starts the count over; a stop lifting on its own keeps this
+    // week's losses (only the day starts fresh), so the weekly stop still adds up a bad week.
+    await this.update((s) => { s.halted = null; s.marks = byOwner ? null : s.marks ? { ...s.marks, day: "" } : null; });
     const s = this.load(), all = this.w.rules().list();
-    for (const st of s.strategies) if (st.stage === "live") for (const r of this.rulesOf(s, st, all)) if (r.status === "paused") await this.w.rules().setStatus(r.id, "active").catch(() => {});
+    // ...and a bot the owner paused stays paused.
+    for (const st of s.strategies) if (st.stage === "live" && !st.owner_paused) for (const r of this.rulesOf(s, st, all)) if (r.status === "paused") await this.w.rules().setStatus(r.id, "active").catch(() => {});
     this.d.onRulesChanged?.();
     return this.view();
   }
@@ -750,7 +758,7 @@ export class SuperBot {
   private async checkLosses(s: State, all: Rule[]) {
     const t = this.now(), today = day(t), week = weekOf(t);
     const liveResult = r2((s.live_banked?.result ?? 0) + s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + (this.summaryOf(x, all)?.result_usd ?? 0), 0));
-    if (s.halted && s.halted.until && t >= Date.parse(s.halted.until)) { await this.resume(); s = this.load(); }
+    if (s.halted && s.halted.until && t >= Date.parse(s.halted.until)) { await this.resume(false); s = this.load(); }
     if (!s.marks || s.marks.day !== today || s.marks.week !== week) {
       await this.update((x) => { x.marks = { day: today, day_start: x.marks?.day === today ? x.marks.day_start : liveResult, week, week_start: x.marks?.week === week ? x.marks.week_start : liveResult }; });
       return;
@@ -815,7 +823,7 @@ export class SuperBot {
           await this.retire(st, why, all);
           await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: [`paper ${pct ?? "none"}%`], applied: true, outcome: "retired" }]);
         }
-      } else if (st.stage === "live" && pct !== null && pct < 0 && trades >= 3 && days >= 1) {
+      } else if (st.stage === "live" && pct !== null && pct < 0 && trades >= 3 && days >= 1 && !this.holds(st, all)) { // Nov 10 (audit): not while its sells wait
         const why = `Live result ${pct}% after ${trades} trades; moved back to paper.`;
         const ok = await this.restage(st, "paper", why, all);
         await this.log("rule", why, [{ type: "demote", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: ok.applied, outcome: ok.outcome }]);
@@ -857,7 +865,7 @@ export class SuperBot {
       const mk = this.marketOf(st.chain, st.token);
       if (mk === "rising" || mk === "falling") continue;
       const sum = this.summaryOf(st, all);
-      if (holdsToSell(st, sum)) continue; // Nov 10 (audit): waiting on its sell is not idle; a rebuild would orphan its coins
+      if (this.holds(st, all)) continue; // Nov 10 (audit): waiting on its sell is not idle; a rebuild would orphan its coins
       const since = Math.max(Date.parse(st.stage_since), sum?.last_trade ? Date.parse(sum.last_trade) : 0, st.tightened_at ? Date.parse(st.tightened_at) : 0);
       if (t - since < SUPERBOT.idleHours * 3_600_000) continue;
       const next = tightened(st.template, st.params);
@@ -915,8 +923,11 @@ export class SuperBot {
       const amt = Math.floor(held * (mv.share_pct / 100) * 1e6) / 1e6;
       if (!(amt > 0)) continue;
       const tp = rules.find((r) => (r.kind === "take_profit" || r.kind === "limit_sell") && r.status === "active");
-      const group = tp?.group ?? `guard-${st.id}`;
-      if (tp && !tp.group) await this.w.rules().mutate((rs) => { const x = rs.find((y) => y.id === tp.id); if (x) x.group = group; });
+      // Nov 10 (audit): only a guard that sells everything joins the take-profit's group. A partial one sells its share
+      // and leaves the take-profit on for the rest, so no coins are left without a sell.
+      const whole = mv.share_pct >= 100;
+      const group = whole ? tp?.group ?? `guard-${st.id}` : `guard-${st.id}`;
+      if (whole && tp && !tp.group) await this.w.rules().mutate((rs) => { const x = rs.find((y) => y.id === tp.id); if (x) x.group = group; });
       const why = kind === "rising"
         ? `${coin} jumped ${m!.d1}% in 24 hours: Big moves locks in the gain. ${mv.share_pct}% of what ${st.name} holds sells if ${coin} falls ${mv.trail_pct}% from its new high.`
         : `${coin} fell ${Math.abs(m!.d1)}% in 24 hours: Big moves protects ${mv.share_pct}% of what ${st.name} holds. It sells if ${coin} falls another ${mv.trail_pct}% from here (or from any bounce).`;
@@ -1313,7 +1324,7 @@ export class SuperBot {
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
         if (this.rebuiltLately(st)) return { applied: false, outcome: "changed less than 12 hours ago; left as it is" };
-        if (holdsToSell(st, this.summaryOf(st, all))) return { applied: false, outcome: "not changed: it holds coins waiting on its sell" }; // Nov 10 (audit)
+        if (this.holds(st, all)) return { applied: false, outcome: "not changed: it holds coins waiting on its sell" }; // Nov 10 (audit)
         return this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params, true);
       }
       case "propose": {

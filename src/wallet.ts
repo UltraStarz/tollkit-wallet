@@ -365,7 +365,7 @@ export class TollkitWallet {
         // quote and blockhash, when the price is still within 2% and no separate SOL fee rides along.
         if (q.chain !== "solana" || fee || q.fee_inline || !/network dropped this swap/.test((e as Error).message)) throw e;
         const again = await this.priced(req);
-        if (!("q" in again) || again.q.usd_value! > usd * 1.02 || again.q.fee_inline || again.q.fee_separate) throw e;
+        if (!("q" in again) || again.q.usd_value! > usd * 1.02 || again.q.usd_value! > p.per_trade_usd || again.q.fee_inline || again.q.fee_separate) throw e; // Nov 10 (audit): still inside the per-trade limit
         tx = await run(again.q);
       }
       let feeNote: { fee_tx?: string; reason?: string } = {};
@@ -381,7 +381,7 @@ export class TollkitWallet {
     } catch (e) {
       const why = plainError(e, q.chain), sig = (e as any)?.sig as string | undefined;
       settle(id, { status: "failed", reason: why, ...(sig ? { tx: sig } : {}) }, this.o.dir); // Nov 7: kept, so reconcileDropped can re-check it
-      return { ok: false, quote: strip(q), receipt_id: id, refused: { code: "swap_failed", reason: why } };
+      return { ok: false, quote: strip(q), receipt_id: id, refused: { code: (e as any)?.unconfirmed ? "swap_unconfirmed" : "swap_failed", reason: why } };
     }
   }
 
@@ -404,7 +404,7 @@ export class TollkitWallet {
    */
   async reconcileDropped(): Promise<number> {
     const week = Date.now() - 7 * 86_400_000, owner = this.addresses.solana;
-    const todo = entries(this.o.dir).filter((e) => e.kind === "trade" && e.chain === "solana" && e.status === "failed" && /network dropped this swap/.test(e.reason ?? "") && Date.parse(e.ts) >= week);
+    const todo = entries(this.o.dir).filter((e) => e.kind === "trade" && e.chain === "solana" && e.status === "failed" && /network dropped this swap|hasn't confirmed this/.test(e.reason ?? "") && Date.parse(e.ts) >= week);
     if (!todo.length) return 0;
     const conn = new Connection(this.rpc("solana"), "confirmed");
     let fixed = 0;
@@ -430,6 +430,8 @@ export class TollkitWallet {
           if (buy) { r.state.spent_usd = (r.state.spent_usd ?? 0) + spent; r.state.bought_units = (r.state.bought_units ?? 0) + units; }
           else { r.state.received_usd = (r.state.received_usd ?? 0) + got; r.state.sold_units = (r.state.sold_units ?? 0) + units; }
           r.state.failures = Math.max(0, (r.state.failures ?? 1) - 1);
+          // Nov 10 (audit): a one-shot rule whose swap did go through is done, so it doesn't trade again.
+          if (["limit_buy", "limit_sell", "take_profit", "stop_loss", "trailing_stop"].includes(r.kind) && ["active", "paused"].includes(r.status)) { r.status = "done"; r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined; }
         }
       });
       fixed++;

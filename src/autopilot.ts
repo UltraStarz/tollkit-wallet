@@ -558,7 +558,8 @@ export class Autopilot {
     if (r.kind === "range") await this.store.mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (!x) return; const g = x.state.range ?? {};
       x.state.range = { ...g, log: [...(g.log ?? []), { ts: new Date(this.now()).toISOString(), text: `Couldn't go ahead: ${reason} It tries again in 5 minutes.` }].slice(-20) }; });
     const urgent = r.kind === "stop_loss" || r.kind === "trailing_stop";
-    const wait = code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
+    // Nov 10 (audit): a swap that may have landed is never retried right away; the half-hourly chain check settles it first.
+    const wait = code === "swap_unconfirmed" ? 45 * 60_000 : code === "over_daily_limit" ? 3600_000 : urgent ? 60_000 : 300_000;
     const updated = await this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id)!;
       x.state.failures += 1; x.state.fail_count = (x.state.fail_count ?? 0) + 1;

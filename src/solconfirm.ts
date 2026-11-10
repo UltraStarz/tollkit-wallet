@@ -44,6 +44,11 @@ export async function sendAndConfirm(conn: Connection, tx: Transaction, signers:
   }
 }
 
+/** Nov 10 (audit): sent, but not known to have landed or failed. The wallet holds the rule until the chain says which. */
+export function unconfirmed(sig: string, what: string, short: string) {
+  return Object.assign(new Error(`The Solana network hasn't confirmed this ${what} (${short}) yet. TOLLkit checks it on the chain and won't try it again until it knows whether it went through.`), { sig, unconfirmed: true });
+}
+
 /** How long a swap goes only through Jito before its resends also go the normal way (see pollSolana's `resend`). */
 export const JITO_ALONE_MS = 10_000;
 
@@ -58,16 +63,19 @@ export async function pollSolana(conn: Connection, sig: string, lastValidBlockHe
   const t0 = Date.now(), until = t0 + (o.maxMs ?? 150_000), short = `${sig.slice(0, 6)}…${sig.slice(-4)}`;
   const done = (st: any) => st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized");
   for (;;) {
-    const st = (await conn.getSignatureStatuses([sig])).value[0];
+    // Nov 10 (audit): a node that doesn't answer isn't an answer. The check is tried again until the time runs out,
+    // instead of calling a swap that may have landed a failure (and buying a second time).
+    let st: any = null, expired = false;
+    try { st = (await conn.getSignatureStatuses([sig])).value[0]; } catch { st = undefined; }
     if (st?.err) throw new Error(`Solana ${what} ${sig} failed: ${JSON.stringify(st.err)}`);
     if (done(st)) return sig;
-    const expired = (await conn.getBlockHeight("confirmed")) > lastValidBlockHeight;
+    if (st !== undefined) { try { expired = (await conn.getBlockHeight("confirmed")) > lastValidBlockHeight; } catch { expired = false; } }
     if (expired) {
       // Nov 7: one node's "unknown" isn't proof. Run 24/7's allowance was called dropped on Nov 6 while it had landed
       // (2iooii…xzHC), so the history is asked twice, a few seconds apart, and the transaction itself once, before saying so.
       for (let i = 0; i < 2; i++) {
         if (i) await new Promise((r) => setTimeout(r, o.settleMs ?? 3000));
-        const last = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+        let last: any = null; try { last = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0]; } catch { throw unconfirmed(sig, what, short); }
         if (last?.err) throw new Error(`Solana ${what} ${sig} failed: ${JSON.stringify(last.err)}`);
         if (last && last.confirmationStatus !== "processed") return sig;
       }
@@ -75,7 +83,7 @@ export async function pollSolana(conn: Connection, sig: string, lastValidBlockHe
       if (seen) { if (seen.meta?.err) throw new Error(`Solana ${what} ${sig} failed: ${JSON.stringify(seen.meta.err)}`); return sig; }
       throw Object.assign(new Error(`The Solana network dropped this ${what} (${short}), so nothing changed in your wallet. It's safe to try again.`), { sig });
     }
-    if (Date.now() > until) throw new Error(`Solana ${what} ${sig} is still waiting for the network. Check it on an explorer before trying again.`);
+    if (Date.now() > until) throw unconfirmed(sig, what, short);
     if (o.resend && !st) try { await o.resend(Date.now() - t0 >= JITO_ALONE_MS); } catch { /* the next check tries again */ }
     await new Promise((r) => setTimeout(r, o.pollMs ?? 1500));
   }

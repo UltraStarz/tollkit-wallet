@@ -564,7 +564,9 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const ts = W.store.list().filter((r) => r.kind === "trailing_stop" && r.status === "active");
   const tp = W.store.list().find((r) => r.bot === b.bot && r.kind === "take_profit");
   check(ts.length === 1 && ts[0]!.trail_pct === 3 && ts[0]!.sell_amount === "1" && ts[0]!.by === "superbot" && ts[0]!.bot === b.bot, "Nov 5: a 9.5% drop puts a 3% trailing stop on half of what the live strategy holds", ts);
-  check(!!tp && !!tp.group && tp.group === ts[0]?.group, "Nov 5: it shares the take-profit's group, so only one of them sells", [tp?.group, ts[0]?.group]);
+  // Nov 10 (audit): a guard that sells only its share (50% here) stays out of the take-profit's group, so the
+  // take-profit still sells the rest after the guard fills; a 100% guard joins the group so only one sells.
+  check(!!tp && tp.status === "active" && tp.group !== ts[0]?.group && ts[0]?.group === "guard-bm1", "Nov 10: a 50% guard stays apart from the take-profit, which keeps the rest", [tp?.group, ts[0]?.group]);
   const v = W.bot.view() as any;
   check(v.moves?.length === 1 && v.moves[0].kind === "falling" && v.moves[0].did.some((x: string) => /trailing stop/.test(x)), "Nov 5: one Big move alert, saying what it did", v.moves);
   check(W.notes.some((n) => /ETH is down 9.5% in 24 hours/.test(n)), "Nov 5: the owner is told", W.notes);

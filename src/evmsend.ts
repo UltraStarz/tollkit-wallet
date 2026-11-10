@@ -33,7 +33,7 @@ export function sendingProvider(chain: Chain, o: { rpc?: Partial<Record<Chain, s
 export async function waitMined(tx: { hash: string; wait: (c?: number, t?: number) => Promise<any> }, what = "transaction", ms = 240_000) {
   try { return await tx.wait(1, ms); }
   catch (e: any) {
-    if (e?.code === "TIMEOUT") throw new Error(`The ${what} ${tx.hash} wasn't included within ${Math.round(ms / 60000)} minute${Math.round(ms / 60000) === 1 ? "" : "s"}. It may still land; check a block explorer before trying again.`);
+    if (e?.code === "TIMEOUT") throw Object.assign(new Error(`The ${what} ${tx.hash} wasn't included within ${Math.round(ms / 60000)} minute${Math.round(ms / 60000) === 1 ? "" : "s"}. It may still land; check a block explorer before trying again.`), { sig: tx.hash, unconfirmed: true });
     throw e;
   }
 }
