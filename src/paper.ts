@@ -58,13 +58,17 @@ export class PaperBook {
     if (!q.ok || !q.quote) return q;
     const s = this.load();
     const have = BigInt(s.balances[key(req.chain, req.sell_token)] ?? "0");
-    if (have < BigInt(req.sell_amount)) return { ok: false, quote: q.quote, refused: { code: "insufficient_balance", reason: "Not enough paper balance for this trade." } };
+    // Nov 9 (Joe: "why not do unlimited cash for paper?"): practice USDC never runs out, so a practice strategy is
+    // judged on its trades, not on what the pretend wallet had left (stopped practice bots keep their coins). Coins
+    // still have to be held to be sold, and the per-trade and daily limits below still apply.
+    const cash = req.sell_token.toLowerCase() === KNOWN[req.chain].USDC!.address.toLowerCase();
+    if (!cash && have < BigInt(req.sell_amount)) return { ok: false, quote: q.quote, refused: { code: "insufficient_balance", reason: "Not enough paper balance for this trade." } };
     const usd = q.quote.usd_value ?? 0, p = this.w.policy;
     if (usd > p.per_trade_usd) return { ok: false, quote: q.quote, refused: { code: "over_per_limit", reason: `$${usd.toFixed(2)} is over the per-trade limit of $${p.per_trade_usd}.` } };
     const today = new Date().toISOString().slice(0, 10);
     const spent = s.fills.filter((f) => f.ts.slice(0, 10) === today).reduce((a, f) => a + f.usd, 0);
     if (spent + usd > p.daily_trades_usd) return { ok: false, quote: q.quote, refused: { code: "over_daily_limit", reason: `This would go over today's trading limit of $${p.daily_trades_usd}.` } };
-    s.balances[key(req.chain, req.sell_token)] = String(have - BigInt(req.sell_amount));
+    s.balances[key(req.chain, req.sell_token)] = String(have > BigInt(req.sell_amount) ? have - BigInt(req.sell_amount) : 0n);
     const bk = key(req.chain, req.buy_token);
     s.balances[bk] = String(BigInt(s.balances[bk] ?? "0") + BigInt(q.quote.buy_amount));
     const id = `paper-${randomUUID().slice(0, 8)}`;

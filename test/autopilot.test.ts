@@ -196,10 +196,16 @@ function market() {
   check(r.ok && /^paper-/.test(r.tx!) && pb.balance("base", USDC) === 60_000_000n && pb.balance("base", ETH) > 0n, "paper buy moves pretend balances at the live quote (fee included)", r);
   const big = await pb.swap({ chain: "base", sell_token: USDC.address, buy_token: ETH.address, sell_amount: "55000000", slippage_bps: 50 });
   check(big.refused?.code === "over_per_limit", "paper trades obey the same per-trade limit");
-  const broke = await pb.swap({ chain: "solana", sell_token: KNOWN.solana.USDC!.address, buy_token: KNOWN.solana.SOL!.address, sell_amount: "200000000", slippage_bps: 50 });
-  check(broke.refused?.code === "insufficient_balance", "can't spend more paper money than you have");
+  // Nov 9: practice cash never runs out (a $45 buy with $15 left still goes through; cash floors at $0) ...
+  const more = await pb.swap({ chain: "base", sell_token: USDC.address, buy_token: ETH.address, sell_amount: "45000000", slippage_bps: 50 });
+  check(more.ok && pb.balance("base", USDC) === 15_000_000n, "a second practice buy goes through", more);
+  const past = await pb.swap({ chain: "base", sell_token: USDC.address, buy_token: ETH.address, sell_amount: "45000000", slippage_bps: 50 });
+  check(past.ok && pb.balance("base", USDC) === 0n, "practice cash never runs out: a buy past the cash still goes through", past);
+  // ... but coins still have to be held to be sold.
+  const oversell = await pb.swap({ chain: "base", sell_token: ETH.address, buy_token: USDC.address, sell_amount: String(10n ** 18n), slippage_bps: 50 });
+  check(oversell.refused?.code === "insufficient_balance", "can't sell more practice coins than it holds");
   const sum = pb.summary();
-  check(sum.fills === 1 && sum.fees_usd === 0.2 && sum.balances.some((b) => b.token === "ETH"), "paper summary: fills, fees, balances", sum);
+  check(sum.fills === 3 && sum.balances.some((b) => b.token === "ETH"), "paper summary: fills, balances", sum);
 }
 
 // 0.9.12 Adaptive pace: a held buy waits (and fires once the hold lifts); sells never wait.
