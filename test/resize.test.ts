@@ -19,9 +19,9 @@ const w: any = { dir, policy: { chains: ["solana"] }, rules: () => store, always
   balances: async () => ({ solana: [{ token: "SOL", amount: "1.9" }, { token: "USDC", amount: "152.82" }] }) };
 const bot = new SuperBot(w, { dir, proxy: "https://api.test/wallet", fetch: (async () => Response.json({ id: `s${Math.random()}`, at: new Date().toISOString(), changes: { moved: true } })) as any,
   price: async () => 100, knownToken: async () => true, active: () => true, stableUsd: async () => 152.82 });
-await bot.enable({ chains: ["solana"], tokens: [{ chain: "solana", token: "SOL" }], budget_usd: 300, per_trade_usd: 100, max_strategies: 4, pace: "max" });
+await bot.enable({ chains: ["solana"], tokens: [{ chain: "solana", token: "SOL" }], budget_usd: 300, per_trade_usd: 100, max_strategies: 4, max_token_pct: 100, pace: "max" });
 let v = bot.view();
-check(v.strategies.length === 2 && v.strategies.find((x: any) => x.template === "grid")!.params.amount_usd === 15, "new (Nov 10): a 6-level grid at $15 a level ($152.82 over 2 live slots, held to the $75 per-token cap, over 5 buys)", v.strategies.map((x: any) => x.params));
+check(v.strategies.length === 2 && v.strategies.find((x: any) => x.template === "grid")!.params.amount_usd === 15.28, "new (Nov 10): a 6-level grid at $15.28 a level ($152.82 over 2 live slots, over 5 buys)", v.strategies.map((x: any) => x.params));
 
 // Pretend they were made before sizing: tiny amounts, not resized yet; one is live (a steady buyer never sells).
 const f = path.join(walletHome(dir), SUPERBOT.file);
@@ -33,9 +33,9 @@ decision = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: 
 await bot.cycle(true);
 v = bot.view();
 const g = v.strategies.find((x: any) => x.template === "grid")!, d = v.strategies.find((x: any) => x.template === "dca")!;
-check(g.params.amount_usd === 13.5 && g.stage === "paper", "old practice grid resized to $13.50 a level (the $75 per-token cap less the live buyer's $7.50)", g.params);
-check(d.params.amount_usd === 15 && d.stage === "live", "old live steady buyer resized too ($75 over 5 buys), still live", { p: d.params, s: d.stage });
-check(/Resized from your balance: \$1\.5 → \$13\.5/.test(JSON.stringify(g.history)), "its history says why", g.history.at(-1));
+check(g.params.amount_usd === 29.06 && g.stage === "paper", "old practice grid resized to $29.06 a level ($152.82 less the live buyer's $7.50, over the 1 live slot left, over 5 buys)", g.params);
+check(d.params.amount_usd === 15.28 && d.stage === "live", "old live steady buyer resized too ($76.41 over 5 buys), still live", { p: d.params, s: d.stage });
+check(/Resized from your balance: \$1\.5 → \$29\.06/.test(JSON.stringify(g.history)), "its history says why", g.history.at(-1));
 check(JSON.parse(readFileSync(f, "utf8")).sized === 3, "done once");
 
 // The AI tab's suggested size.

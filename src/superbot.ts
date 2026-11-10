@@ -1300,7 +1300,9 @@ export class SuperBot {
         if (!st.owner_set) params.params = eagerRsi(st.template, params.params);
         if (params.note) return { applied: false, outcome: params.note };
         // 0.9.11: on paper the wallet re-sizes it to the equal share; a live one keeps its amount (budget checked at go-live).
-        if (st.stage === "paper") params.params = await this.sized(s, st.chain, st.template, params.params, st.id, undefined, st.token);
+        if (st.stage === "paper") { try { params.params = await this.sized(s, st.chain, st.template, params.params, st.id, undefined, st.token); } catch { /* keeps its size */ } }
+        // Nov 10 (code audit): a tweak may not turn it into a copy of its twin on the same coin.
+        if (s.strategies.some((x) => x.id !== st.id && x.stage !== "retired" && x.template === st.template && x.chain === st.chain && x.token.toLowerCase() === st.token.toLowerCase() && sameSetup(x.params, params.params))) return { applied: false, outcome: "not changed: that would copy another strategy on this coin" };
         const clash = clashWithOwner(st.template, params.params, all, st.chain, st.token, await this.d.price(st.chain, st.token).catch(() => undefined));
         if (clash) return { applied: false, outcome: `not changed: ${clash}` };
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
@@ -1377,14 +1379,14 @@ export class SuperBot {
     let waiting = false;
     for (const st of s.strategies) {
       if (st.stage === "retired" || st.owner_paused || st.owner_set || st.params.amount_usd === undefined) continue;
-      let next = await this.sized(this.load(), st.chain, st.template, st.params, st.id, undefined, st.token); // fresh: earlier ones in this pass may have grown
+      let next: Record<string, unknown>; try { next = await this.sized(this.load(), st.chain, st.template, st.params, st.id, undefined, st.token); } catch { next = { ...st.params }; } // fresh: earlier ones in this pass may have grown
       if (st.paper_only && typeof next.amount_usd === "number") next = { ...next, amount_usd: Math.min(10, next.amount_usd) };
       next = eagerRsi(st.template, next);
       const a0 = Number(st.params.amount_usd), a1 = Number(next.amount_usd), rsi = next.level !== st.params.level;
       if (!rsi && (!(a1 > 0) || Math.abs(a1 - a0) < Math.max(0.5, a0 * 0.1))) continue;
       const neverSells = st.template === "dca" || (st.template === "signal" && st.params.side !== "sell");
       if (st.stage === "live" && !neverSells && (this.summaryOf(st, all)?.units_held ?? 0) > 1e-9) { waiting = true; continue; }
-      if (this.rebuiltLately(st)) continue;
+      if (this.rebuiltLately(st)) { waiting = true; continue; } // Nov 10 (code audit): try again later, not never
       await this.restage(st, st.stage, `${a1 !== a0 ? `Resized from your balance: $${r2(a0)} → $${r2(a1)}${st.template === "grid" ? " a level" : st.template === "dca" ? " a buy" : ""}.` : ""}${rsi ? `${a1 !== a0 ? " " : ""}Buys when hourly RSI falls below ${next.level} (was ${Number(st.params.level) || 30}), so it trades more often.` : ""}`, this.w.rules().list(), next, true);
     }
     if (!waiting) await this.update((x) => { x.sized = 3; });
@@ -1451,11 +1453,11 @@ export class SuperBot {
     // Nov 10 (Joe: "make the most money possible"): practice strategies no longer take a share of the real money, and a
     // live one's reserve is only what it may still spend (a dip that already bought holds coins, not cash).
     const others = s.strategies.filter((x) => x.stage === "live" && x.id !== self), all = this.w.rules().list();
-    const left = (x: Strategy) => Math.max(0, committedUsd(x.template, x.params) - (this.summaryOf(x, all)?.spent_usd ?? 0) + (this.summaryOf(x, all)?.received_usd ?? 0));
+    const left = (x: Strategy) => { const m = this.summaryOf(x, all); return Math.max(0, committedUsd(x.template, x.params) - (m?.units_held ?? 0) * (m?.avg_cost ?? 0)); }; // Nov 10 (code audit): what is in coins now, not lifetime spending
     const o = { committed: others.reduce((a, x) => a + committedUsd(x.template, x.params), 0), live_committed: others.reduce((a, x) => a + Math.min(committedUsd(x.template, x.params), left(x)), 0), count: others.length };
     let share = shareUsd(s.settings.budget_usd, stable, liveSlots(s.settings.max_strategies), o);
     // ...and never more than the per-token cap leaves, so a practice strategy can still go live at its size.
-    if (token) share = Math.max(0, Math.min(share, Math.floor((s.settings.budget_usd * s.settings.max_token_pct / 100 - others.filter((x) => x.chain === chain && x.token.toLowerCase() === token.toLowerCase()).reduce((a, x) => a + committedUsd(x.template, x.params), 0)) * 100) / 100));
+    if (token) share = Math.max(0, Math.min(share, Math.floor((s.settings.budget_usd * s.settings.max_token_pct / 100 - s.strategies.filter((x) => x.stage !== "retired" && x.id !== self && x.chain === chain && x.token.toLowerCase() === token.toLowerCase()).reduce((a, x) => a + committedUsd(x.template, x.params), 0)) * 100) / 100));
     this.shares[chain] = share;
     // Nov 7: a size the owner named in the AI chat ("a $100 first buy") is kept, inside the per-trade cap and the cash
     // still free; before, it was always replaced by the equal share ($1.81).
@@ -1468,6 +1470,9 @@ export class SuperBot {
       const out = this.clampParams(s, template, want);
       return out.note ? params : out.params;
     }
+    // Nov 10 (code audit): with no money free (or the coin's cap used up), start nothing rather than keep the AI's hint,
+    // which could never go live and would hold a slot.
+    if (params.amount_usd !== undefined && share < 1) throw new Error(share <= 0 ? "no money is free for another strategy on this coin" : `only $${r2(share)} is free for another strategy`);
     const out = this.clampParams(s, template, sizeToShare(template, params, share));
     return out.note ? params : out.params;
   }
