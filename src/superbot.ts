@@ -782,6 +782,7 @@ export class SuperBot {
   /** Paper -> live when a strategy beat holding USDC for the paper period; live -> paper when it is losing. */
   private async promoteDemote(all: Rule[]) {
     const s = this.load(), t = this.now();
+    if (s.halted) return; // Nov 10 (audit, round 7): while a loss stop holds, nothing goes live and no buys turn back on
     for (const st of s.strategies) {
       if (st.stage === "retired" || st.owner_paused) continue;
       const sum = this.summaryOf(st, all);
@@ -825,10 +826,11 @@ export class SuperBot {
           await this.retire(st, why, all);
           await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: [`paper ${pct ?? "none"}%`], applied: true, outcome: "retired" }]);
         }
-      } else if (st.stage === "live" && st.no_buys && pct !== null && pct >= 0) {
+      } else if (st.stage === "live" && st.no_buys && pct !== null && pct >= 0.5) { // Nov 10 (audit, round 7): a margin, so it doesn't flip each check
         // Nov 10 (audit, round 6): back to even or better: its buys start again.
         const why = `Live result back to ${pct}%: it buys again.`;
-        for (const r of this.rulesOf(s, st, all)) if (r.status === "paused" && ["dca", "limit_buy", "signal_buy"].includes(r.kind)) await this.w.rules().setStatus(r.id, "active").catch(() => {});
+        // Only the buys it paused itself: ones the owner denied or the AI paused stay paused.
+        for (const r of this.rulesOf(s, st, all)) if (r.status === "paused" && r.state.no_buys) { await this.w.rules().setStatus(r.id, "active").catch(() => {}); await this.w.rules().mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (x) x.state.no_buys = undefined; }).catch(() => {}); }
         await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.no_buys = false; y.history.push({ ts: nowIso(this.now()), note: why }); } });
         await this.log("rule", why, [{ type: "resume", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: true, outcome: "buys on again" }]);
         this.d.onRulesChanged?.();
@@ -838,7 +840,7 @@ export class SuperBot {
         const buys = this.openRules(this.rulesOf(s, st, all)).filter((r) => r.status === "active" && ["dca", "limit_buy", "signal_buy"].includes(r.kind));
         if (buys.length) {
           const why = `Live result ${pct}% after ${trades} trades: no more buys; it moves to paper once its coins are sold.`;
-          for (const r of buys) await this.w.rules().setStatus(r.id, "paused").catch(() => {});
+          for (const r of buys) { await this.w.rules().setStatus(r.id, "paused").catch(() => {}); await this.w.rules().mutate((rs) => { const x = rs.find((y) => y.id === r.id); if (x) x.state.no_buys = true; }).catch(() => {}); }
           await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.no_buys = true; y.history.push({ ts: nowIso(this.now()), note: why }); } });
           await this.log("rule", why, [{ type: "pause", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: true, outcome: `${buys.length} buy rule${buys.length === 1 ? "" : "s"} paused` }]);
           this.d.onRulesChanged?.();

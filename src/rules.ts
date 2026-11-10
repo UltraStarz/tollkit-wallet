@@ -122,6 +122,10 @@ export interface Rule extends RuleInput {
     failures: number;     // consecutive failed attempts
     /** Nov 10 (audit): a sent swap the network never confirmed (its short signature); the rule is held until the chain says. */
     unconfirmed?: string;
+    /** Nov 10 (audit): paused by Autopilot while its strategy loses money (only these turn back on when it recovers). */
+    no_buys?: boolean;
+    /** Nov 10 (audit): an earlier swap turned out to have landed while a newer one was still being checked. */
+    landed_pending?: boolean;
     next_run?: string;    // DCA, or retry-after for a failed attempt
     last_price?: number;
     last_checked?: string;

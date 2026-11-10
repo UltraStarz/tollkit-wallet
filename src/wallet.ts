@@ -465,7 +465,12 @@ export class TollkitWallet {
         if (!f && !held) continue;
         // Nov 10 (audit, round 5): only this swap's own hold is lifted; an older swap's answer leaves a newer hold alone.
         if (held) r.state.unconfirmed = undefined;
-        if (!landed) { if (held && r.status === "error") { r.status = "active"; r.state.last_error = undefined; r.state.next_run = new Date().toISOString(); } continue; }
+        if (!landed) {
+          if (!held || r.status !== "error") continue;
+          // Nov 10 (audit, round 7): an earlier swap of this rule did land meanwhile: that one counts as its trade.
+          if (r.state.landed_pending) { r.state.landed_pending = undefined; this.landedStatus(r, rs, shortOf); continue; }
+          r.status = "active"; r.state.last_error = undefined; r.state.next_run = new Date().toISOString(); continue;
+        }
         if (f) {
           const a = amounts?.(r);
           Object.assign(f, { ok: true, tx: sig, reason: undefined, ...(a ? { side: a.buy ? "buy" : "sell", usd: Math.round(a.usd * 100) / 100, units: a.units } : {}) });
@@ -475,9 +480,18 @@ export class TollkitWallet {
         }
         // Nov 10 (audit, round 6): the fill above always counts; with a newer swap still being checked, the rule's status
         // waits for that one's answer.
-        if (!held && r.state.unconfirmed) continue;
+        if (!held && r.state.unconfirmed) { r.state.landed_pending = true; continue; }
+        const both = r.state.landed_pending; r.state.landed_pending = undefined;
+        this.landedStatus(r, rs, shortOf);
+        if (both) this.landedStatus(r, rs, shortOf); // the earlier swap landed too: two trades (a one-shot rule is already done)
+      }
+    });
+  }
+
+  /** Nov 10 (audit): a rule's status once one of its swaps is known to have landed. */
+  private landedStatus(r: Rule, rs: Rule[], shortOf: string) {
         const open = ["active", "paused", "error"].includes(r.status);
-        if (!open) continue;
+        if (!open) return;
         r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined;
         if (r.kind === "dca") { r.state.next_run = nextRun(r, new Date()).toISOString(); r.status = r.times && r.state.runs >= r.times ? "done" : "active"; }
         else if (r.kind === "signal_buy" || r.kind === "signal_sell") { r.state.alert_armed = false; r.state.last_alert = new Date().toISOString(); r.status = r.state.runs >= (r.times ?? 1) ? "done" : "active"; }
@@ -488,8 +502,6 @@ export class TollkitWallet {
           // A bot (grid, Smart DCA...) can't safely guess which level that trade was: it stays stopped and says why.
           r.status = "error"; r.state.last_error = `This bot's trade (${shortOf}) went through after the network was slow to confirm it. Stop and start the bot to bring it up to date.`;
         }
-      }
-    });
   }
 
   /** Fetch a URL, paying through x402 or MPP if it asks, within the owner's rules. */
