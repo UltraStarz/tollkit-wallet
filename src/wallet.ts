@@ -466,9 +466,10 @@ export class TollkitWallet {
         // Nov 10 (audit, round 5): only this swap's own hold is lifted; an older swap's answer leaves a newer hold alone.
         if (held) r.state.unconfirmed = undefined;
         if (!landed) {
-          if (!held || r.status !== "error") continue;
+          if (!held) continue;
           // Nov 10 (audit, round 7): an earlier swap of this rule did land meanwhile: that one counts as its trade.
           if (r.state.landed_pending) { r.state.landed_pending = undefined; this.landedStatus(r, rs, shortOf); continue; }
+          if (r.status !== "error") continue;
           r.status = "active"; r.state.last_error = undefined; r.state.next_run = new Date().toISOString(); continue;
         }
         if (f) {

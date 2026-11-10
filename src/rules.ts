@@ -353,6 +353,12 @@ export class RuleStore {
       if (!r) throw new Error(`No rule ${id}.`);
       if (["done", "cancelled", "expired"].includes(r.status)) throw new Error(`Rule ${id} is ${r.status}; make a new one instead.`);
       r.status = status;
+      if (status === "active") {
+        // Nov 10 (audit, round 8): turning a rule on is a fresh start: no swap hold, no loss pause; an earlier swap that
+        // turned out to have landed still counts as one of its trades.
+        if (r.state.landed_pending) { r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; }
+        r.state.unconfirmed = undefined; r.state.landed_pending = undefined; r.state.no_buys = undefined;
+      }
       if (status === "active") retire(rules, r);
       if (status === "active") {
         r.activated_at = new Date().toISOString();
