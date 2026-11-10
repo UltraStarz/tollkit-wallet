@@ -707,6 +707,9 @@ input:where([type=text],[type=number],[type=password],[type=email],[type=search]
 .apao.on{background:none!important;border-color:transparent!important}
 .apao.on .apao-ic{box-shadow:none!important}
 .chip.botpill{background:none!important;box-shadow:none!important;padding-right:0}
+/* Nov 10 (App Review recording): in light mode the Swap and Connect your AI sheets kept a black background behind dark
+   text, so their titles were hard to read. They follow the theme now, like the rest of the app. */
+@media (prefers-color-scheme:light){:root:not([data-theme=dark]) .aidlg{background:var(--card)!important;color:var(--tx)}:root:not([data-theme=dark]) .mnu{background:var(--card)}:root:not([data-theme=dark]) .aio{background:rgba(20,22,30,.45)}:root:not([data-theme=dark]) .aicmd{background:var(--surf2)}}
 /* Nov 9 (Joe: "change the fonts on the various cards to the same font as token font"): the cards (Balance, trader cards,
    Pipeline, reports, While you were away) use the app's own type, like the token list, instead of the code-style font.
    Numbers keep even widths so columns still line up. Addresses, codes and keys stay in the code font. */
@@ -2390,7 +2393,9 @@ tkMoney(b,live,paper)+apAO(b,live)+
 if(b.halted)h+='<div class="ap-halt"><div><b>Stopped.</b> '+esc(b.halted.reason)+(b.halted.until?'<div class="sm mut">Resumes '+when(b.halted.until)+'.</div>':'')+'</div><button class="b sbtn" onclick="sbAct(\'resume\')">Resume</button></div>';
 // 0.9.9: nothing to do in a flat market: Autopilot suggests a Range bot; the owner starts it (Autopilot never moves the money).
 if(b.range_idea&&!b.halted){var ri=b.range_idea;h+='<div class="rgidea"><div class="rgline"><span class="rgdot in"></span><b>Idea: a Range bot</b></div><div class="sm rgsub">'+esc(ri.why)+'</div><div class="sm mut rgsub">Suggested: '+fmtUsd(ri.amount_usd)+' in Orca’s SOL/USDC pool, ±'+ri.range_pct+'% around today’s price. You check it and start it; Autopilot won’t move the money.</div><div class="btns"><button class="b" onclick="rangeIdeaGo()">Set it up '+ARROW+'</button><button class="b g" onclick="rangeIdeaLater()">Not now</button></div></div>'}
-if(b.stats.last_error)h+='<div class="ap-halt" style="border-color:color-mix(in srgb,var(--warn) 35%,var(--line));background:color-mix(in srgb,var(--warn) 7%,var(--surf))"><div><b style="color:var(--warn)">Last check had a problem.</b> '+esc(b.stats.last_error)+'</div></div>';
+/* Nov 10 (App Review): no AI key yet is a setup step, not a problem; it says so plainly with a button to the AI tab. */
+if(b.stats.last_error&&/^Add your AI key/.test(b.stats.last_error))h+='<div class="ap-halt" style="border-color:color-mix(in srgb,var(--acc) 30%,var(--line));background:color-mix(in srgb,var(--acc) 6%,var(--surf))"><div><b>One more step:</b> Autopilot decides with your own AI. Add your key on the AI tab; until then it doesn\u2019t start new strategies.</div><div class="btns" style="margin-top:8px"><button class="b" onclick="go(\'ai\')">Add AI key</button></div></div>';
+else if(b.stats.last_error)h+='<div class="ap-halt" style="border-color:color-mix(in srgb,var(--warn) 35%,var(--line));background:color-mix(in srgb,var(--warn) 7%,var(--surf))"><div><b style="color:var(--warn)">Last check had a problem.</b> '+esc(b.stats.last_error)+'</div></div>';
 h+=apX(b);
 var D=b.decisions||[],R=b.reports||[],L=live.concat(paper),pt=PT.pilot||"strat";
 h+=pgTabs("pilot",[["pipe","Pipeline"],["strat","Strategies",L.length||""],["dec","Decisions"],["rep","Reports"]],pt);
