@@ -761,6 +761,28 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   await W3.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
   await new Promise((r) => setTimeout(r, 30));
   check(W3.bot.view().strategies.length === 1 && !(W3.bot.view().strategies[0] as any).tested, "when past prices can't be fetched it still starts on paper, with no test claimed");
+
+  // Review, Nov 11: an adjust is tested again, and the old result never stays on a changed bot.
+  let q = 0; const runs: any[] = [];
+  const adj = (params: any) => ({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "adjust", strategy_id: "", params, reason: "Tighter.", sources: [] }] });
+  const W4 = world({ decision: () => (q++ === 0 ? propose : keep) });
+  (W4.bot as any).d.backtest = async (x: any) => { runs.push(x); return runs.length === 1 ? { days: 90, result_usd: 4.21, baseline_usd: -12.5, worst_drop_usd: 6.3, trades: 14 } : x.custom.buy.type === "rsi" ? { days: 90, result_usd: 0, baseline_usd: 1, worst_drop_usd: 0, trades: 0 } : { days: 90, result_usd: 9.5, baseline_usd: -12.5, worst_drop_usd: 4, trades: 30 }; };
+  await W4.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  const id4 = W4.bot.view().strategies[0]!.id;
+  W4.advance(13 * 3_600_000);
+  const never = await (W4.bot as any).apply({ ...adj({ buy: "rsi", rsi_below: 5 }).actions[0], strategy_id: id4 });
+  check(never.applied === false && /would never have traded/.test(never.outcome) && /\+\$4\.21/.test((W4.bot.view().strategies[0] as any).tested), "an adjust that would never trade is refused; the bot and its result stay", never);
+  const ok4 = await (W4.bot as any).apply({ ...adj({ buy_pct: 1 }).actions[0], strategy_id: id4 });
+  const st4 = W4.bot.view().strategies[0] as any;
+  check(ok4.applied === true && /\+\$9\.50 after fees in 30 trades/.test(st4.tested) && !/4\.21/.test(st4.tested) && st4.params.buy_pct === 1 && runs.at(-1).custom.buy.step_pct === 1, "an adjust that passes carries its own new test result", { ok4, t: st4.tested });
+  // The owner's "add a strategy" card can't carry a custom bot; settings a buy type ignores don't make a copy look new; many buys fit the share.
+  let threw4 = ""; try { await W4.bot.ownerAsk({ template: "custom", chain: "base", token: "ETH", params: { amount_usd: 50, type: "rsi" } }); } catch (e) { threw4 = (e as Error).message; }
+  check(/not handed to Autopilot/.test(threw4) && W4.bot.view().strategies.length === 1, "a custom bot can't be handed to Autopilot from the chat card", threw4);
+  const twin = await (W4.bot as any).apply({ type: "propose", template: "custom", chain: "base", token: "ETH", params: { ...st4.params, rsi_below: 20, hours: 99 }, reason: "copy", sources: [] });
+  check(twin.applied === false && /already running/.test(twin.outcome), "the same bot with only unused settings changed is still a copy", twin);
+  const many = sizeToShare("custom", { ...flat, max_buys: 40 }, 30) as any;
+  check(many.max_buys === 30 && many.amount_usd === 1 && committedUsd("custom", many) === 30, "more buys than dollars: fewer buys, never sized past its share", many);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

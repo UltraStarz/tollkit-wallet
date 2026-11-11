@@ -376,7 +376,12 @@ export function sizeToShare(template: string, params: Record<string, unknown>, s
     case "smart_dca": { let t = 0; for (let i = 0; i <= n; i++) t += k ** i; per = share / t; break; }
     case "infinity_grid": per = share / 1.5; break;
     case "dip": case "rebalance": per = share; break;
-    case "custom": per = share / customBuys(params); break;
+    case "custom": {
+      // Review, Nov 11, 2026: more buys than the share has dollars for: fewer buys, so the $1 minimum can't size it past its share.
+      const nb = customBuys(params), fit = Math.max(1, Math.min(nb, Math.floor(share)));
+      if (fit < nb) return { ...params, max_buys: fit, amount_usd: Math.floor((share / fit) * 100) / 100 };
+      per = share / nb; break;
+    }
     default: return params;
   }
   return { ...params, amount_usd: Math.floor(per * 100) / 100 };
@@ -505,7 +510,7 @@ export class SuperBot {
     const s = this.load(), mv = this.mv(s), m = this.market[`${r.chain}:${r.token.toLowerCase()}`], coin = r.token.length > 12 ? "This coin" : r.token;
     if (!m) return null;
     if (r.by === "superbot") {
-      if ((r.template === "grid" || r.template === "dip") && m.state === "falling" && (this.adaptive(s) || mv.on))
+      if ((r.template === "grid" || r.template === "dip" || r.template === "custom") && m.state === "falling" && (this.adaptive(s) || mv.on))
         return `${coin} is falling (${m.d1}% in 24 hours, ${m.d3}% in 3 days): ${this.adaptive(s) ? "Adaptive pace" : "Big moves"} holds grid and dip buys until it steadies.`;
       // Nov 5: easy on buys near the top: a DCA-style buy waits while the coin is up 8% or more in a day.
       if (mv.on && m.d1 >= MOVES.bigPct && (r.template === "dca" || r.template === "smart_dca"))
@@ -891,6 +896,12 @@ export class SuperBot {
     this.d.onRulesChanged?.();
   }
 
+  /** A custom bot's test on the last 90 days of prices: a refusal when it would never have traded, else the line kept with the strategy ("" when the coin has no history to test on). */
+  private async testCustom(chain: Chain, token: string, custom: CustomSpec): Promise<{ refuse?: string; tested: string }> {
+    const pt = await (this.d.backtest ?? pastTest)({ chain, token, custom, days: 90 }).catch(() => null);
+    if (pt && pt.trades === 0) return { refuse: `on the last ${pt.days} days of prices these settings would never have traded`, tested: "" };
+    return { tested: pt ? `Tested on the last ${pt.days} days of prices: ${signed(pt.result_usd)} after fees in ${pt.trades} trades, against ${signed(pt.baseline_usd)} for holding; worst drop $${pt.worst_drop_usd.toFixed(2)}.` : "" };
+  }
   /** Rebuild a strategy's rules at today's price in a stage (same template and params). */
   /**
    * 0.9.7 Active pace: a strategy that hasn't traded for a day is rebuilt tighter (and around today's price) by a
@@ -1314,6 +1325,8 @@ export class SuperBot {
    */
   async ownerAsk(a: { template: string; chain: string; token: string; params?: Record<string, unknown>; reason?: string }) {
     if (!this.load().enabled) throw new Error("Turn Autopilot on first.");
+    // Review, Nov 11, 2026: the chat describes a custom bot as five nested parts, which this card can't carry; it would have started the default design instead of the owner's.
+    if (a.template === "custom") throw new Error("A custom bot is started from the chat or the Build a bot screen, not handed to Autopilot.");
     const why = String(a.reason ?? "You asked for it from the AI chat.").slice(0, 200);
     const { sizing, ...params } = (a.params ?? {}) as Record<string, unknown>;
     const mode = SIZINGS.includes(sizing as Sizing) ? (sizing as Sizing) : undefined;
@@ -1367,7 +1380,17 @@ export class SuperBot {
         // 0.9.10: a tweak keeps the paper (or live) clock and the results so far, so a paper test can finish.
         if (this.rebuiltLately(st)) return { applied: false, outcome: "changed less than 12 hours ago; left as it is" };
         if (this.holds(st, all)) return { applied: false, outcome: "not changed: it holds coins waiting on its sell" }; // Nov 10 (audit)
-        return this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params, true);
+        // Review, Nov 11, 2026: changed settings are tested again; the old result never stays on a changed bot.
+        let retest: string | undefined;
+        if (st.template === "custom") {
+          let b2; try { b2 = buildBot("custom", st.token, st.chain, params.params, undefined); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
+          const pt = await this.testCustom(st.chain, st.token, b2.rules[0]!.custom!);
+          if (pt.refuse) return { applied: false, outcome: `not changed: ${pt.refuse}` };
+          retest = pt.tested;
+        }
+        const res = await this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params, true);
+        if (res.applied && retest !== undefined) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (!y) return; y.tested = retest || undefined; if (retest) y.history.push({ ts: nowIso(this.now()), note: retest }); });
+        return res.applied && retest ? { ...res, outcome: `${res.outcome}. ${retest}` } : res;
       }
       case "propose": {
         const running = s.strategies.filter((x) => x.stage !== "retired");
@@ -1415,9 +1438,9 @@ export class SuperBot {
         // would never have traded is refused; otherwise the result is kept with the strategy for the owner and the AI.
         let tested = "";
         if (a.template === "custom") {
-          const pt = await (this.d.backtest ?? pastTest)({ chain, token: tok.token, custom: built.rules[0]!.custom!, days: 90 }).catch(() => null);
-          if (pt && pt.trades === 0) return { applied: false, outcome: `not started: on the last ${pt.days} days of prices these settings would never have traded` };
-          if (pt) tested = `Tested on the last ${pt.days} days of prices: ${signed(pt.result_usd)} after fees in ${pt.trades} trades, against ${signed(pt.baseline_usd)} for holding; worst drop $${pt.worst_drop_usd.toFixed(2)}.`;
+          const pt = await this.testCustom(chain, tok.token, built.rules[0]!.custom!);
+          if (pt.refuse) return { applied: false, outcome: `not started: ${pt.refuse}` };
+          tested = pt.tested;
         }
         const id = randomUUID().slice(0, 8), t = nowIso(this.now());
         const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: String(a.reason).slice(0, 200), paper: true })), "agent", true, "superbot");
@@ -1560,6 +1583,16 @@ export class SuperBot {
       if (f.kind === "int") n = Math.round(n);
       if (f.kind === "usd") n = Math.min(n, s.settings.per_trade_usd);
       out[f.key] = n;
+    }
+    if (template === "custom") {
+      const d = (k: string) => { out[k] = tpl.fields.find((f) => f.key === k)!.default; }, b = out.buy;
+      if (b !== "rsi") d("rsi_below");
+      if (b === "rsi") { d("buy_pct"); d("hours"); }
+      if (b === "levels") d("hours");
+      if (b === "schedule") d("buy_pct");
+      if (b === "rsi" || b === "drop") out.max_buys = 1;
+      if (!(Number(out.sell_gain_pct) > 0)) d("sell_share_pct");
+      if (!(Number(out.downtrend_days) > 0)) d("downtrend_gap_pct");
     }
     return { params: out };
   }

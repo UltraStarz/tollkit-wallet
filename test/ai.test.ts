@@ -134,7 +134,24 @@ setAiTier(dir, "fast");
   const { ADVISOR_TOOLS } = await import("../src/mcp.js");
   const q = splitAsk("I can build that.\n\n[[ask]] How big a dip should it wait for?\n- A small one | 2% in a day, trades often\n- A real one | 5% in a day\n- A crash\n[[/ask]]\n");
   check(q.text === "I can build that." && q.ask?.question === "How big a dip should it wait for?" && q.ask.options.length === 3 && q.ask.options[0]!.label === "A small one" && q.ask.options[0]!.detail === "2% in a day, trades often" && q.ask.options[2]!.detail === undefined, "a question block comes off the message as a question and its answers", q);
-  check(splitAsk("No question here.").ask === undefined && splitAsk("[[ask]] Only one?\n- Yes\n[[/ask]]").ask === undefined && splitAsk("[[ask]] Mid?\n- A\n- B\n[[/ask]] and more text").ask === undefined, "no block, a block with one answer, or a block that isn't at the end: the text is left as written");
+  check(splitAsk("No question here.").ask === undefined && splitAsk("[[ask]] Only one?\n- Yes\n[[/ask]]").ask === undefined , "no block, or a block with one answer: the text is left as written");
+  // Review, Nov 11: what models really write.
+  const tail = splitAsk("Sure.\n[[ask]] **How much?**\n1. **$100** | a small test\n2) $300\n[[/ask]]\nThey're waiting below.");
+  check(tail.ask?.question === "How much?" && tail.ask.options.map((o) => o.label).join() === "$100,$300" && tail.ask.options[0]!.detail === "a small test" && tail.text === "Sure.\n\nThey're waiting below." && !/\[\[/.test(tail.text), "a line after the block, bold marks and numbered answers are all read", tail);
+  const two = splitAsk("[[ask]] One?\n- A\n- B\n[[/ask]]\nor\n[[ask]] Two?\n- C\n- D\n[[/ask]]");
+  check(two.ask?.question === "Two?" && two.ask.options.length === 2, "with two blocks the last one is the question", two);
+  {
+    const { ACTIONS: AC } = await import("../src/actions.js");
+    const tl = (n: string) => (AC as readonly any[]).find((x) => x.name === n);
+    const cs = { buy: { type: "schedule", every_hours: 1 }, size: { usd: 25 }, sell: { trail_pct: 5 }, limits: { max_usd: 300 } };
+    const made = await tl("bot_start").run(w, { chain: "base", token: "ETH", template: "custom", custom: cs }, { app: "Tollkit AI", advisor: true });
+    const res = await tl("bot_control").run(w, { bot: made.bot, action: "resume" }, { app: "Tollkit AI", advisor: true });
+    const pau = await tl("bot_control").run(w, { bot: made.bot, action: "pause" }, { app: "Tollkit AI", advisor: true });
+    const still = w.rules().list().find((r) => r.bot === made.bot)!;
+    check(made.status === "proposed" && res.ok === false && res.refused?.code === "needs_owner" && pau.ok === false && still.status === "proposed", "an AI can't turn on (or pause, then resume) a bot that waits for the owner", { res, pau, st: still.status });
+    const stop = await tl("bot_control").run(w, { bot: made.bot, action: "stop" }, { app: "Tollkit AI", advisor: true });
+    check(stop.ok === true && w.rules().list().find((r) => r.bot === made.bot)!.status === "cancelled", "it can still withdraw its own suggestion");
+  }
   check(splitAsk("[[ask]] Q?\n- A\n- B\n- C\n- D\n- E\n- F\n[[/ask]]").ask?.options.length === 4, "at most four answers");
   const before = (ai as any).load().messages.length;
   reply = "Got it.\n[[ask]] How much should it work with?\n- $100 | a small test\n- $300 | about a third of your USDC\n[[/ask]]"; propose = null;

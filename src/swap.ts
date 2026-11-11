@@ -124,7 +124,8 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
       chain: "solana", venue: "jupiter", sell_token: req.sell_token, buy_token: req.buy_token,
       sell_amount: String(j.inAmount ?? req.sell_amount), buy_amount: String(j.outAmount), min_buy_amount: String(j.otherAmountThreshold ?? j.outAmount),
       // Tollkit's fee is always 0.5%; when the route doesn't carry it, whatever the route does carry is Jupiter's own.
-      fee_bps: SWAP_FEE_BPS, venue_fee_bps: inRoute ? 0 : Math.max(0, Number(j.platformFee?.feeBps ?? j.feeBps ?? 0) || 0),
+      // Review, Nov 11, 2026: when the fee is sent beside the swap (not taken inside Jupiter's route, which can't go under 0.5%), a bot trade pays the bot fee here too.
+      fee_bps: req.bot && !inRoute ? BOT_FEE_BPS : SWAP_FEE_BPS, venue_fee_bps: inRoute ? 0 : Math.max(0, Number(j.platformFee?.feeBps ?? j.feeBps ?? 0) || 0),
       usd_value: null, fee_usd: null, raw: j, ...(inRoute ? {} : { fee_separate: true }), route: "Jupiter Ultra",
     };
     return withUsd(q);

@@ -70,6 +70,8 @@ export interface CustomState {
   next_at?: number;
   /** Stepped out of a downtrend: no buys until the price is back over its average. */
   out?: boolean;
+  /** Review, Nov 11: after a stop-loss, no buys until this time (ms), so a stop is never followed by a buy at the next check. */
+  rest_until?: number;
   /** Dollars made on everything sold so far, this round's share of it, and winning rounds in a row. */
   realized?: number; round?: number; wins?: number;
 }
@@ -231,7 +233,10 @@ export function cleanCustom(x: any): CustomSpec | undefined {
 export function cleanCustomState(x: any): CustomState | undefined {
   if (!x || typeof x !== "object") return undefined;
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined), out: Record<string, number | boolean> = {};
-  for (const k of ["anchor", "buys", "step", "peak", "next_at", "realized", "round", "wins"]) { const v = n(x[k]); if (v !== undefined) out[k] = v; }
+  // Review, Nov 11: counts are whole and never negative, prices and times are positive; a bad one is dropped.
+  for (const k of ["anchor", "peak", "next_at", "rest_until"]) { const v = n(x[k]); if (v !== undefined && v > 0) out[k] = v; }
+  for (const k of ["buys", "step", "wins"]) { const v = n(x[k]); if (v !== undefined && v >= 0) out[k] = Math.floor(v); }
+  for (const k of ["realized", "round"]) { const v = n(x[k]); if (v !== undefined) out[k] = v; }
   if (typeof x.out === "boolean") out.out = x.out;
   return out as CustomState;
 }
@@ -247,21 +252,27 @@ function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, 
   if (holding && c.limits.max_loss_usd && (cs.realized ?? 0) + value - cost <= -c.limits.max_loss_usd) return all(`Down $${c.limits.max_loss_usd} in all: sells everything and stops`, "loss");
   if (holding && c.protect?.stop_pct && gain <= -c.protect.stop_pct) return all(`Stop: ${c.protect.stop_pct}% under its average cost`, "stop");
   const dt = c.protect?.downtrend;
-  if (dt && closes && closes.length >= dt.hours) {
-    let sum = 0; for (let i = closes.length - dt.hours; i < closes.length; i++) sum += closes[i]!;
-    const mean = sum / dt.hours;
+  // Review, Nov 11: a price source can return a little less history than asked (186 of 200 points seen). The average
+  // then uses what there is, down to 70% of its window, so the exit doesn't switch itself off.
+  const dn = dt && closes ? Math.min(dt.hours, closes.length) : 0;
+  if (dt && closes && dn >= Math.max(24, dt.hours * 0.7)) {
+    let sum = 0; for (let i = closes.length - dn; i < closes.length; i++) sum += closes[i]!;
+    const mean = sum / dn;
     if (!cs.out && price < mean * (1 - dt.gap_pct / 100)) return holding ? all(`Downtrend: ${dt.gap_pct}% under its ${Math.round(dt.hours / 24)}-day average, so it sells to USDC`, "downtrend") : { side: "mark", ref: price, why: "Downtrend: waiting in USDC", c: { out: true } };
     if (cs.out && price > mean * (1 + dt.gap_pct / 100)) return { side: "mark", ref: price, why: "The downtrend lifted: buying again", c: { out: false, anchor: price } };
   }
   // 2. Selling what it holds.
   if (holding && c.sell) {
-    const steps = c.sell.steps ?? [], i = cs.step ?? 0;
+    const steps = Array.isArray(c.sell.steps) ? c.sell.steps : [], i = Math.max(0, Math.floor(cs.step ?? 0));
     if (i < steps.length) {
       if (gain >= steps[i]!.gain_pct) {
-        const share = Math.min(100, steps[i]!.share_pct), part = share >= 100 ? held : (held * BigInt(Math.round(share * 100))) / 10_000n;
+        const share = Math.min(100, steps[i]!.share_pct), part = share >= 100 || (value * share) / 100 < MIN_TRADE_USD ? held : (held * BigInt(Math.round(share * 100))) / 10_000n; // a step worth under $1 sells everything instead
         if (part > 0n) return { side: "sell", atomic: part.toString(), why: `Up ${steps[i]!.gain_pct}% on its average cost: sells ${share >= 100 ? "the rest" : `${share}%`}`, tag: "step" };
       }
-    } else if (c.sell.trail_pct) {
+    } else if (!c.sell.trail_pct) {
+      // Review, Nov 11: the steps are done but coin is left (a sell the wallet cut short): sell it at the last step's gain.
+      if (steps.length && gain >= steps[steps.length - 1]!.gain_pct) return all(`Up ${steps[steps.length - 1]!.gain_pct}% on its average cost: sells the rest`, "step");
+    } else {
       const armed = cs.peak !== undefined || gain >= (c.sell.trail_after_pct ?? -Infinity);
       if (armed) {
         const peak = cs.peak ?? price;
@@ -272,9 +283,10 @@ function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, 
     }
   }
   // 3. Buying.
-  if (cs.out) return null;
+  if (cs.out || (cs.rest_until && nowMs < cs.rest_until)) return null;
+  if (c.limits.max_loss_usd && (cs.realized ?? 0) <= -c.limits.max_loss_usd) return null; // past its loss limit: no new round
   const usd = customSize(c, cs), b = c.buy, n = cs.buys ?? 0;
-  if (usd < MIN_TRADE_USD || cost + usd > c.limits.max_usd + 0.005) return null;
+  if (usd < MIN_TRADE_USD || cost + usd > c.limits.max_usd * 1.005 + 0.005) return null; // 0.5% of room: a fee paid beside the swap counts in the cost and must not cancel the last buy
   const buy = (why: string): BotAction => ({ side: "buy", usd, why });
   switch (b.type) {
     case "schedule": return !cs.next_at || nowMs >= cs.next_at ? buy("Scheduled buy") : null;
@@ -283,7 +295,7 @@ function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, 
       if (n >= b.levels) return null;
       return price <= cs.anchor! * (1 - (b.step_pct / 100) * (n + 1)) ? buy(`Level ${n + 1} of ${b.levels}: ${(b.step_pct * (n + 1)).toFixed(1)}% under $${+cs.anchor!.toPrecision(6)}`) : null;
     }
-    case "drop": { if (holding || !closes) return null; const h = b.hours ?? 24, was = closes[closes.length - 1 - h]; return was && price <= was * (1 - b.pct / 100) ? buy(`Down ${b.pct}% in ${h} hours`) : null; }
+    case "drop": { if (holding || !closes) return null; const h = Math.round(b.hours ?? 24), was = closes[closes.length - 1 - h]; return was && price <= was * (1 - b.pct / 100) ? buy(`Down ${b.pct}% in ${h} hours`) : null; }
     case "price": return !holding && price <= b.at ? buy(`At or under $${b.at}`) : null;
     case "rsi": { if (holding || !closes) return null; const v = rsi14([...closes, price]); return v !== null && v <= b.below ? buy(`Hourly RSI ${v.toFixed(0)}, at or under ${b.below}`) : null; }
   }
@@ -333,6 +345,8 @@ export function applyFill(p: BotParams, s0: BotState, a: Exclude<BotAction, null
   return { state: s, done: !!s.done, profit };
 }
 
+/** After a stop-loss a custom bot waits this long before it may buy again. */
+export const STOP_REST_MS = 24 * 3_600_000;
 function applyCustom(c: CustomSpec, s: BotState, a: Exclude<BotAction, null | { side: "mark" }>, fill: { usd: number; got: bigint }, price: number, nowMs: number): { state: BotState; done: boolean; profit?: number } {
   const held = big(s.units), cs: CustomState = (s.c = { ...(s.c ?? {}) });
   if (a.side === "buy") {
@@ -343,7 +357,11 @@ function applyCustom(c: CustomSpec, s: BotState, a: Exclude<BotAction, null | { 
     return { state: s, done: false };
   }
   const sold = fill.got > held ? held : fill.got, share = held > 0n ? Number(sold) / Number(held) : 0, costOut = (s.cost ?? 0) * share, profit = fill.usd - costOut;
-  s.units = (held - sold).toString(); s.cost = Math.max(0, (s.cost ?? 0) - costOut); s.ref = price;
+  // Review, Nov 11: a sell of everything that the wallet cut short by a sliver (rounding, a little kept for network
+  // fees) still ends the round: under 1% left is let go, as Smart DCA does. More than that stays and is sold next.
+  let left = held - sold;
+  if (left > 0n && BigInt(a.atomic) >= held && left * 100n <= held) left = 0n;
+  s.units = left.toString(); s.cost = left === 0n ? 0 : Math.max(0, (s.cost ?? 0) - costOut); s.ref = price;
   cs.realized = (cs.realized ?? 0) + profit; cs.round = (cs.round ?? 0) + profit;
   if (a.tag === "step") cs.step = (cs.step ?? 0) + 1;
   if (big(s.units) <= 0n) { // the round is over
@@ -351,6 +369,7 @@ function applyCustom(c: CustomSpec, s: BotState, a: Exclude<BotAction, null | { 
     cs.wins = (cs.round ?? 0) > 0 ? (cs.wins ?? 0) + 1 : 0;
     cs.buys = 0; cs.step = 0; cs.peak = undefined; cs.round = 0; cs.anchor = price;
     if (a.tag === "downtrend") cs.out = true;
+    if (a.tag === "stop") cs.rest_until = nowMs + STOP_REST_MS;
     if (a.tag === "loss") s.done = true;
   }
   return { state: s, done: !!s.done, profit };
@@ -433,15 +452,17 @@ export function customProblem(c: CustomSpec | undefined): string | null {
   if (!c || !c.buy || !c.size || !c.limits) return "A custom bot needs when to buy, how much, and its limits.";
   const b = c.buy;
   if (b.type === "schedule") { if (!num(b.every_hours, 1, 24 * 30)) return "Buy on a schedule: every 1 hour to 30 days."; }
-  else if (b.type === "drop") { if (!num(b.pct, 0.5, 90) || (b.hours !== undefined && !num(b.hours, 1, 168))) return "Buy after a drop: 0.5% to 90%, over 1 to 168 hours."; }
-  else if (b.type === "levels") { if (!num(b.step_pct, 0.4, 50) || !Number.isInteger(b.levels) || !num(b.levels, 1, 40)) return "Buy at levels: steps of 0.4% to 50%, 1 to 40 levels."; }
+  else if (b.type === "drop") { if (!num(b.pct, 0.5, 90) || (b.hours !== undefined && (!Number.isInteger(b.hours) || !num(b.hours, 1, 168)))) return "Buy after a drop: 0.5% to 90%, over 1 to 168 hours."; }
+  else if (b.type === "levels") { if (!num(b.step_pct, 0.4, 50) || !Number.isInteger(b.levels) || !num(b.levels, 1, 40)) return "Buy at levels: steps of 0.4% to 50%, 1 to 40 levels."; if (b.step_pct * b.levels >= 95) return "Those levels would reach a price of zero: use fewer or smaller steps."; }
   else if (b.type === "price") { if (!num(b.at, 1e-12, 1e12)) return "Buy at a price: give the price."; }
   else if (b.type === "rsi") { if (!num(b.below, 5, 60)) return "Buy on RSI: a level from 5 to 60."; }
   else return "Pick when to buy: on a schedule, after a drop, at levels, at a price, or on RSI.";
   if (!num(c.size.usd, MIN_TRADE_USD, 1_000_000)) return `Each buy needs at least $${MIN_TRADE_USD}.`;
+  if (c.size.grow !== undefined && !["none", "wins", "deeper"].includes(c.size.grow)) return "Pick how the size changes: the same, bigger after wins, or bigger as it falls.";
   if (c.size.grow === "deeper" && c.size.factor !== undefined && !num(c.size.factor, 1, 3)) return "Each further buy can be 1 to 3 times the one before.";
   if (!num(c.limits.max_usd, c.size.usd, 10_000_000)) return "The limit must be at least one buy.";
-  if (c.limits.max_loss_usd !== undefined && !num(c.limits.max_loss_usd, 0.01, 10_000_000)) return "The loss limit must be more than zero.";
+  if (c.limits.max_loss_usd !== undefined && !num(c.limits.max_loss_usd, Math.max(0.01, c.size.usd * 0.02), 10_000_000)) return "The loss limit must be at least 2% of one buy.";
+  if (c.sell?.steps !== undefined && !Array.isArray(c.sell.steps)) return "Sell steps must be a list.";
   const steps = c.sell?.steps ?? [];
   if (steps.length > 6) return "At most 6 sell steps.";
   for (let i = 0; i < steps.length; i++) {
@@ -449,8 +470,9 @@ export function customProblem(c: CustomSpec | undefined): string | null {
     if (i > 0 && steps[i]!.gain_pct <= steps[i - 1]!.gain_pct) return "Each sell step needs a bigger gain than the one before.";
   }
   if (c.sell?.trail_pct !== undefined && !num(c.sell.trail_pct, 0.5, 90)) return "Trail by 0.5% to 90%.";
+  if (c.sell?.trail_after_pct !== undefined && !num(c.sell.trail_after_pct, 0, 1000)) return "Start trailing after a gain of 0% to 1000%.";
   if (steps.length && steps[steps.length - 1]!.share_pct < 100 && !c.sell?.trail_pct) return "The last sell step should sell the rest (100%), or add a trail for what's left.";
-  if (c.protect?.stop_pct !== undefined && !num(c.protect.stop_pct, 0.5, 90)) return "Stop at 0.5% to 90% under the average cost.";
+  if (c.protect?.stop_pct !== undefined && !num(c.protect.stop_pct, 1, 90)) return "Stop at 1% to 90% under the average cost.";
   const dt = c.protect?.downtrend;
   if (dt && (!Number.isInteger(dt.hours) || !num(dt.hours, 24, 240) || !num(dt.gap_pct, 0.5, 20))) return "Downtrend exit: an average of 1 to 10 days, and a gap of 0.5% to 20%.";
   return null;

@@ -232,6 +232,9 @@ export const ACTIONS = [
         }
         const live = rs.filter((r) => !done(r));
         if (!live.length) return { ok: false, refused: { code: "finished", reason: "That bot has nothing left to change." } };
+        // Review, Nov 11, 2026: a bot that waits for the owner's "Turn on" is not this tool's to start. Before, resume
+        // (or pause, then resume) made a proposed bot active, skipping the owner. Stop still works.
+        if (a.action !== "stop" && live.some((r) => r.status === "proposed")) return { ok: false, refused: { code: "needs_owner", reason: "This bot is waiting for the owner to turn it on in the wallet. Only they can start it." } };
         const st = a.action === "pause" ? "paused" : a.action === "resume" ? "active" : "cancelled";
         for (const r of live) await store.setStatus(r.id, st);
         w.hooks.rulesChanged?.();

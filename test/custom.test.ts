@@ -74,7 +74,9 @@ function bot(custom: CustomSpec) {
   check(b.log.join() === "buy 10@98,buy 20@96,buy 40@94", "deeper: each further buy in a round is twice the one before", b.log);
   const w = bot({ buy: { type: "price", at: 100 }, size: { usd: 20, grow: "wins" }, sell: { steps: [{ gain_pct: 5, share_pct: 100 }] }, protect: { stop_pct: 10 }, limits: { max_usd: 500 } });
   w.at(100); w.at(106); w.at(100); w.at(89); w.at(80);
-  check(w.log.join() === "buy 20@100,sell step@106,buy 25@100,sell stop@89,buy 20@80", "a winning round makes the next buy bigger; a losing one puts it back", w.log);
+  check(w.log.join() === "buy 20@100,sell step@106,buy 25@100,sell stop@89", "after a stop it does not buy at the next check (review, Nov 11)", w.log);
+  w.at(80, null, 23); const n23 = w.log.length; w.at(80, null, 2);
+  check(n23 === 4 && w.log.join() === "buy 20@100,sell step@106,buy 25@100,sell stop@89,buy 20@80", "a winning round makes the next buy bigger; a losing one puts it back, a day after the stop", w.log);
 }
 
 // ── When to sell ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -162,6 +164,46 @@ async function both(label: string, o: SimOptions, custom: CustomSpec, min: numbe
   const worst = (r: SimResult) => { let top = r.curve.equity[0]!, w = 0; for (const v of r.curve.equity) { top = Math.max(top, v); w = Math.max(w, top - v); } return w; };
   check(withExit.trades.some((t) => t.side === "sell") && worst(withExit) < worst(without) && withExit.position_usd < without.position_usd, "in a steady fall the exit sells out and the worst drop is smaller than without it", { with: worst(withExit), without: worst(without) });
   check(Math.min(...a.curve.cash) >= -1e-6 && Math.max(...a.curve.position) <= 400 * 1.2, "it never spends cash it doesn't have, and stays near its $400 limit");
+}
+
+// ── Review fixes, Nov 11, 2026 ───────────────────────────────────────────────────────────────────────────────────
+{
+  const { cleanCustomState, cleanCustom } = await import("../src/botlogic.js");
+  const P = (custom: CustomSpec) => ({ kind: "custom", custom });
+  // A "sell everything" the wallet cut short by a sliver still ends the round.
+  const c1: CustomSpec = { buy: { type: "levels", step_pct: 1, levels: 3 }, size: { usd: 10 }, sell: { steps: [{ gain_pct: 2, share_pct: 100 }] }, limits: { max_usd: 30 } };
+  let s: BotState = { units: "1000000000", cost: 100, c: { anchor: 100, buys: 1 } };
+  const a1 = decide(P(c1), s, 103, 0, { decimals: D }) as any;
+  const cut = applyFill(P(c1), s, a1, { usd: 102.9, got: 999_999_000n }, 103, 0, D).state;
+  check(a1.side === "sell" && cut.units === "0" && cut.cost === 0 && cut.c!.buys === 0 && cut.cycles === 1, "a sell of everything cut short by a sliver ends the round", cut);
+  // Cut short by a lot: the rest stays, and is sold at the next check even though the steps are done.
+  const half = applyFill(P(c1), s, a1, { usd: 51.5, got: 500_000_000n }, 103, 0, D).state;
+  const a2 = decide(P(c1), half, 103, 0, { decimals: D }) as any;
+  check(half.units === "500000000" && half.c!.step === 1 && a2?.side === "sell" && a2.atomic === "500000000", "cut short by a lot: what is left is sold at the next check", { half, a2 });
+  // The fee paid beside the swap must not cancel the last planned buy.
+  const c3: CustomSpec = { buy: { type: "levels", step_pct: 1, levels: 6 }, size: { usd: 25 }, sell: { steps: [{ gain_pct: 50, share_pct: 100 }] }, limits: { max_usd: 150 } };
+  const a3 = decide(P(c3), { units: "1300000000", cost: 125.125, c: { anchor: 100, buys: 5 } }, 93, 0, { decimals: D }) as any;
+  check(a3?.side === "buy" && a3.usd === 25, "five buys that each cost 0.1% more still leave room for the sixth", a3);
+  check(decide(P(c3), { units: "1560000000", cost: 150.15, c: { anchor: 100, buys: 5 } }, 80, 0, { decimals: D }) === null, "and nothing past the limit");
+  // A step worth under $1 sells everything rather than a crumb.
+  const c4: CustomSpec = { buy: { type: "price", at: 100 }, size: { usd: 1 }, sell: { steps: [{ gain_pct: 1, share_pct: 1 }, { gain_pct: 2, share_pct: 100 }] }, limits: { max_usd: 1 } };
+  const a4 = decide(P(c4), { units: "10000000", cost: 1, c: { buys: 1 } }, 101.5, 0, { decimals: D }) as any;
+  check(a4?.side === "sell" && a4.atomic === "10000000", "a sell step worth under $1 sells everything", a4);
+  // What customProblem now refuses.
+  const base: CustomSpec = { buy: { type: "levels", step_pct: 1, levels: 5 }, size: { usd: 25 }, sell: { trail_pct: 4 }, limits: { max_usd: 125 } };
+  check(/whole|168 hours/.test(customProblem({ ...base, buy: { type: "drop", pct: 5, hours: 1.5 } }) ?? "") && /price of zero/.test(customProblem({ ...base, buy: { type: "levels", step_pct: 50, levels: 5 } }) ?? "") && /at least 2% of one buy/.test(customProblem({ ...base, limits: { max_usd: 125, max_loss_usd: 0.01 } }) ?? "")
+    && /Start trailing/.test(customProblem({ ...base, sell: { trail_pct: 4, trail_after_pct: "x" as any } }) ?? "") && /Pick how the size changes/.test(customProblem({ ...base, size: { usd: 25, grow: "big" as any } }) ?? "") && /must be a list/.test(customProblem({ ...base, sell: { steps: {} as any, trail_pct: 4 } }) ?? "")
+    && /1% to 90%/.test(customProblem({ ...base, protect: { stop_pct: 0.5 } }) ?? "") && customProblem(base) === null, "refused: fractional hours, levels reaching zero, a loss limit under one buy's fee, a bad trail start, size rule or steps, a stop under 1%");
+  // Past its loss limit it starts no new round.
+  check(decide(P({ ...base, limits: { max_usd: 125, max_loss_usd: 10 } }), { units: "0", cost: 0, c: { anchor: 100, realized: -11 } }, 90, 0, { decimals: D }) === null, "past its loss limit it starts no new round");
+  // The downtrend exit works on a little less history than asked, and state from outside is cleaned.
+  const dt: CustomSpec = { ...base, protect: { downtrend: { hours: 240, gap_pct: 3 } } };
+  const a5 = decide(P(dt), { units: "1000000000", cost: 100, c: { anchor: 100, buys: 1 } }, 90, 0, { decimals: D, closes: Array(186).fill(100) }) as any;
+  check(a5?.side === "sell" && a5.tag === "downtrend" && (decide(P(dt), { units: "1000000000", cost: 100, c: { anchor: 100, buys: 1 } }, 90, 0, { decimals: D, closes: Array(100).fill(100) }) as any)?.tag !== "downtrend", "the downtrend exit works with 186 of 240 hours, and waits with far too few", a5);
+  const cs = cleanCustomState({ step: -1, buys: 2.7, wins: "3", anchor: -5, peak: 110, realized: -4, rest_until: 99, out: true, evil: 1 }) as any;
+  check(cs.step === undefined && cs.buys === 2 && cs.wins === undefined && cs.anchor === undefined && cs.peak === 110 && cs.realized === -4 && cs.rest_until === 99 && cs.out === true && cs.evil === undefined, "state from outside: counts whole and never negative, prices positive", cs);
+  check(decide(P(c1), { units: "1000000000", cost: 100, c: { step: -1 as any } }, 103, 0, { decimals: D }) !== undefined && cleanCustom({ buy: { type: "drop", pct: 5 }, size: { usd: 5 }, limits: { max_usd: 5 } })?.buy.type === "drop", "a bad step count no longer throws");
+  check(describeCustom({ ...base, sell: { trail_pct: 4, trail_after_pct: 6 }, protect: { stop_pct: 8 } }, "SOL").join("; ").includes("trails 4% under its high once it is up 6%; Stops 8% under its cost, then waits a day"), "the card says when the trail starts and that a stop is followed by a day's wait");
 }
 
 console.log(`\ncustom: ${pass} passed, ${fail} failed`);

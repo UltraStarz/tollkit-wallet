@@ -90,7 +90,7 @@ export function customFromFlat(v: Record<string, number | string>): CustomSpec {
   const trail = n("trail_pct") > 0 ? Math.max(0.5, n("trail_pct")) : 0, gain = n("sell_gain_pct") > 0 ? Math.max(0.3, n("sell_gain_pct")) : 0;
   if (!trail && !gain) throw new Error("A custom bot needs a way to sell: a sell step or a trail.");
   const sell: NonNullable<CustomSpec["sell"]> = { ...(gain ? { steps: [{ gain_pct: gain, share_pct: trail ? n("sell_share_pct") || 50 : 100 }] } : {}), ...(trail ? { trail_pct: trail } : {}) };
-  const days = Math.round(n("downtrend_days")), protect: NonNullable<CustomSpec["protect"]> = { ...(n("stop_pct") > 0 ? { stop_pct: Math.max(0.5, n("stop_pct")) } : {}), ...(days > 0 ? { downtrend: { hours: days * 24, gap_pct: n("downtrend_gap_pct") || 3 } } : {}) };
+  const days = Math.round(n("downtrend_days")), protect: NonNullable<CustomSpec["protect"]> = { ...(n("stop_pct") > 0 ? { stop_pct: Math.max(1, n("stop_pct")) } : {}), ...(days > 0 ? { downtrend: { hours: days * 24, gap_pct: n("downtrend_gap_pct") || 3 } } : {}) };
   return { buy, size: { usd }, sell, ...(Object.keys(protect).length ? { protect } : {}), limits: { max_usd: Math.round(usd * customBuys(v) * 100) / 100 } };
 }
 

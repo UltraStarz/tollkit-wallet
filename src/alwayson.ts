@@ -484,7 +484,7 @@ function receiptsFor(rules: Rule[], fills: ServerFill[], dir?: string) {
     have.add(f.tx);
     const sym = r.token.length > 12 ? `${r.token.slice(0, 4)}…` : r.token, usd = f.usd ?? 0, units = f.units ?? 0;
     const fmt = (n: number) => (n >= 1 ? n.toFixed(4) : n.toPrecision(4)).replace(/\.?0+$/, "");
-    record({ id: f.id ?? `srv-${f.tx.slice(0, 16)}`, ts: f.ts, kind: "trade", status: "done", usd, fee_usd: serverFeeUsd(r.kind, usd), chain: r.chain, seller: r.chain === "solana" ? "jupiter" : "0x", tool: "swap",
+    record({ id: f.id ?? `srv-${f.tx.slice(0, 16)}`, ts: f.ts, kind: "trade", status: "done", usd, fee_usd: typeof f.fee === "number" && f.fee >= 0 ? f.fee : serverFeeUsd(r.kind, usd), chain: r.chain, seller: r.chain === "solana" ? "jupiter" : "0x", tool: "swap",
       detail: f.side === "buy" ? `${usd.toFixed(2)} USDC -> ${fmt(units)} ${sym}` : `${fmt(units)} ${sym} -> ${usd.toFixed(2)} USDC`, tx: f.tx, by: isAutopilotRule(r) ? "Autopilot (24/7)" : "24/7" }, dir);
   }
 }

@@ -86,9 +86,9 @@ Rule kinds: limit_buy, limit_sell, stop_loss, take_profit, trailing_stop, dca (r
 
 Before suggesting: check balances (don't plan to sell what they don't hold or spend more USDC than they have), keep each trade within their per-trade limit, and use recent prices to pick sensible triggers. Amounts: when the owner names one, use theirs. When they don't, size from their money, not tiny test amounts: use suggested_size_usd from wallet_status for that network (an equal share of their dollars there, the same size Autopilot uses). For a grid that is the whole bot, spread over its levels (amount_usd per level = suggested size / (levels - 1)); for a recurring buy, spread over its buys. If what they ask is unclear or risky (all-in, no stop, a coin they don't know), say so briefly and suggest a safer version; they decide.
 
-Building a bot from the owner's idea: when they describe a bot in their own words ("buy SOL when it dips and take profit on the way up"), build it as a custom bot: bot_start with template "custom" and its five parts (when to buy, how much, when to sell, protection, limits). Fill in every part you can from what they said and from their balances; size it from their money. Before you start it, run bot_test on the same settings (90 days unless they ask otherwise) and tell them in one or two lines what it made, what holding made, and the worst drop, even when the bot lost. Then start it; it waits on a card for them to turn on. A ready-made template is fine when the idea is exactly one of them.
+Building a bot from the owner's idea: when they describe a bot in their own words ("buy SOL when it dips and take profit on the way up"), build it as a custom bot: bot_start with template "custom" and its five parts (when to buy, how much, when to sell, protection, limits). Fill in every part you can from what they said and from their balances; size it from their money. Before you start it, run bot_test on the same settings (90 days unless they ask otherwise) and tell them in one or two lines what it made, what holding made, and the worst drop, even when the bot lost. Then start it; it waits on a card for them to turn on. A ready-made template is fine when the idea is exactly one of them. A custom bot is always started with bot_start; autopilot_strategy takes ready-made templates only.
 
-Asking the owner a question: when one thing they haven't told you would really change the bot or the trade (how big a dip, how much money, how much risk), ask it before building, one question at a time, and at most three in a row. Put the question at the very end of your message in this exact form, on its own lines, and nothing after it:
+Asking the owner a question: when one thing they haven't told you would really change the bot or the trade (how big a dip, how much money, how much risk), ask it before building, one question at a time, and at most three in a row. Put the question at the very end of your message in this exact form, on its own lines, with nothing after it (no closing line either):
 [[ask]] How big a dip should it wait for?
 - A small one | 2% in a day, trades often
 - A real one | 5% in a day, a few times a month
@@ -103,12 +103,15 @@ Style: short, plain English, like a careful friend who knows markets. No hype, n
  * off the text and returns it. A block that isn't well formed is left in the text as it was written.
  */
 export function splitAsk(text: string): { text: string; ask?: { question: string; options: { label: string; detail?: string }[] } } {
-  const m = /\[\[ask\]\]([\s\S]*?)\[\[\/ask\]\]\s*$/.exec(text);
-  if (!m) return { text };
-  const lines = m[1]!.split("\n").map((l) => l.trim()).filter(Boolean), question = (lines[0] ?? "").replace(/^[-•*]\s*/, "").slice(0, 200);
-  const options = lines.slice(1).filter((l) => /^[-•*]\s+/.test(l)).map((l) => { const [label, ...rest] = l.replace(/^[-•*]\s+/, "").split("|"); const detail = rest.join("|").trim().slice(0, 120); return { label: label!.trim().slice(0, 60), ...(detail ? { detail } : {}) }; }).filter((o) => o.label).slice(0, 4);
+  // Review, Nov 11, 2026: the last block in the message is the question; a line after it stays as text; bold marks
+  // and numbered answers are read too. Anything else is left as written.
+  const open = text.lastIndexOf("[[ask]]"), close = text.indexOf("[[/ask]]", open);
+  if (open < 0 || close < 0) return { text };
+  const plain = (x: string) => x.replace(/\*\*|__|`/g, "").trim(), bullet = /^(?:[-•*]|\d{1,2}[.)])\s*/;
+  const lines = text.slice(open + 7, close).split("\n").map((l) => l.trim()).filter(Boolean), question = plain(lines[0] ?? "").replace(bullet, "").trim().slice(0, 200);
+  const options = lines.slice(1).filter((l) => bullet.test(l)).map((l) => { const [label, ...rest] = l.replace(bullet, "").split("|"); const detail = plain(rest.join("|")).slice(0, 120); return { label: plain(label!).slice(0, 60), ...(detail ? { detail } : {}) }; }).filter((o) => o.label).slice(0, 4);
   if (!question || options.length < 2) return { text };
-  return { text: text.slice(0, m.index).trim(), ask: { question, options } };
+  return { text: [text.slice(0, open).trim(), text.slice(close + 8).trim()].filter(Boolean).join("\n\n"), ask: { question, options } };
 }
 
 const CHECKIN = (hours: number) => `Scheduled check-in (every ${hours} hour${hours === 1 ? "" : "s"}). Don't suggest one-off swaps in a check-in; only rules. Look at current prices, the recent price history for the coins in the owner's rules and balances, and their open rules, with what they've told you they want in this conversation. If a rule should change (for example raising a stop-loss after a rise, or a buy level that no longer makes sense), suggest the replacement with \`replaces\`. Suggest something new only if it clearly fits what they asked for. If nothing needs changing, reply with one short line that starts with "No changes".`;

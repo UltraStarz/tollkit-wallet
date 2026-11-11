@@ -177,8 +177,8 @@ export function describeCustom(c: CustomSpec | undefined, t: string): string[] {
     : b.type === "price" ? `Buys ${t} at ${$(b.at)} or under` : `Buys ${t} when hourly RSI is ${b.below} or under`);
   out.push(`${$(c.size.usd)} a time${c.size.grow === "wins" ? ", growing with wins" : c.size.grow === "deeper" ? `, ${c.size.factor ?? 1.5}× on each further buy` : ""}`);
   const st = c.sell?.steps ?? [], tr = c.sell?.trail_pct;
-  out.push(!st.length && !tr ? "Never sells for profit" : `Sells ${st.map((x) => `${x.share_pct >= 100 ? "the rest" : `${x.share_pct}%`} at +${x.gain_pct}%`).join(", then ")}${st.length && tr ? ", then " : ""}${tr ? `${st.length ? "trails the rest" : "trails"} ${tr}% under its high` : ""}`);
-  if (c.protect?.stop_pct) out.push(`Stops ${c.protect.stop_pct}% under its cost`);
+  out.push(!st.length && !tr ? "Never sells for profit" : `Sells ${st.map((x) => `${x.share_pct >= 100 ? "the rest" : `${x.share_pct}%`} at +${x.gain_pct}%`).join(", then ")}${st.length && tr ? ", then " : ""}${tr ? `${st.length ? "trails the rest" : "trails"} ${tr}% under its high${c.sell?.trail_after_pct ? ` once it is up ${c.sell.trail_after_pct}%` : ""}` : ""}`);
+  if (c.protect?.stop_pct) out.push(`Stops ${c.protect.stop_pct}% under its cost, then waits a day`);
   if (c.protect?.downtrend) out.push("Sells to USDC in a downtrend");
   out.push(`${$(c.limits.max_usd)} at most${c.limits.max_loss_usd ? `, stops for good after ${$(c.limits.max_loss_usd)} lost` : ""}`);
   return out;
