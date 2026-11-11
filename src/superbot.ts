@@ -6,8 +6,8 @@
  *      news moods, Farcaster chatter when Tollkit has a key);
  *   2. measures every strategy it runs (the wallet's own bot templates: dca, dip, protect, trail, ladder,
  *      grid) from its rules' fills, on paper and live;
- *   3. promotes or demotes on its own rule: a paper strategy that beat holding USDC after fees for
- *      `paper_days` or `paper_trades` goes live; a live one that is losing goes back to paper;
+ *   3. promotes or demotes on its own rule (Phase 3: see TRIAL): a paper strategy that beat holding USDC and half in the coin after fees for
+ *      `paper_days` and `paper_trades` goes live at a small size first; a live one that is losing goes back to paper;
  *   4. if the snapshot says something moved since the last decision (or an hour passed), pays Tollkit's
  *      server $0.005 for ONE strategist decision (Claude, src/superbot-step.ts there) and applies only the
  *      actions that fit the owner's limits: adjust a strategy's settings, pause, resume, retire, or propose
@@ -41,6 +41,25 @@ import { describeRule, type Rule, type RuleStore } from "./rules.js";
 import type { TollkitWallet } from "./wallet.js";
 import { SUPERBOT_SYSTEM, DECIDE_TOOL, checkDecision, strategistUser } from "./strategist.js";
 import { marketState, type MarketState } from "./botlogic.js";
+
+/**
+ * Phase 3, Nov 11, 2026 (trading brief, Gate 2 and Gate 3). Before: a paper strategy went live once it reached
+ * EITHER its paper days OR its paper trades and was up at all; with the default pace that was 1 day or 5 trades,
+ * and 4 of 8 strategies went live after one practice trade. Now:
+ *  - the trial needs BOTH at least minDays days and minTrades trades (the owner may ask for more, never less);
+ *  - it must beat holding USDC AND keeping half the money in the coin over the same stretch (so a rising coin alone
+ *    is not a pass);
+ *  - it goes live at canaryShare of its size first, and moves to full size only after the live test passes the same
+ *    gate. A live strategy that loses goes back to paper as before.
+ */
+export const TRIAL = { minDays: 3, minTrades: 10, canaryShare: 0.25 };
+/** The result a strategy must beat over a stretch in which its coin moved coinPct: holding USDC (0) or half in the coin. */
+export function trialBar(coinPct: number | null): number { return Math.max(0, (coinPct ?? 0) / 2); }
+/** Its settings at a smaller size (dollar fields only): the small first live test. */
+export function canaryParams(params: Record<string, unknown>, share = TRIAL.canaryShare): Record<string, unknown> {
+  const a = Number(params.amount_usd);
+  return Number.isFinite(a) && a > 0 ? { ...params, amount_usd: Math.max(1, Math.floor(a * share * 100) / 100) } : { ...params };
+}
 
 export const SUPERBOT = {
   file: "superbot.json",
@@ -115,6 +134,8 @@ export interface Strategy {
   stage: Stage; bot: string | null; created_at: string; stage_since: string;
   /** Nov 11, 2026: a custom bot's test on past prices, run before it started. */
   tested?: string;
+  /** Phase 3: the coin's price when this stage began (the trial's benchmark), and, while live at a small size, the settings it moves to once that test passes. */
+  stage_px?: number; canary?: { full: Record<string, unknown>; since: string } | null;
   history: { ts: string; note: string }[];
   /** 0.33.0: a meme coin from "Trending on X": tested on paper only; it never moves to live money unless the owner
    * adds the coin on Home. */
@@ -231,8 +252,8 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
   if (b.daily_loss_pct !== undefined) s.daily_loss_pct = num(b.daily_loss_pct, 5, 1, 50);
   if (b.weekly_loss_pct !== undefined) s.weekly_loss_pct = num(b.weekly_loss_pct, 15, 1, 90);
   if (b.slippage_bps !== undefined) s.slippage_bps = num(b.slippage_bps, 100, 10, 500);
-  if (b.paper_days !== undefined) s.paper_days = num(b.paper_days, 7, 1, 60);
-  if (b.paper_trades !== undefined) s.paper_trades = num(b.paper_trades, 20, 1, 500);
+  if (b.paper_days !== undefined) s.paper_days = num(b.paper_days, 7, TRIAL.minDays, 60);
+  if (b.paper_trades !== undefined) s.paper_trades = num(b.paper_trades, 20, TRIAL.minTrades, 500);
   if (b.rethink_minutes !== undefined) { const m = Number(b.rethink_minutes); if (!(SUPERBOT.rethink as readonly number[]).includes(m)) throw new Error("Rethink every 15, 30 or 60 minutes."); s.rethink_minutes = m as 15 | 30 | 60; }
   if (b.max_strategies !== undefined) s.max_strategies = num(b.max_strategies, 4, 1, 10);
   if (b.always_on !== undefined) s.always_on = !!b.always_on;
@@ -808,18 +829,34 @@ export class SuperBot {
       if (st.stage === "retired" || st.owner_paused) continue;
       const sum = this.summaryOf(st, all);
       const days = (t - Date.parse(st.stage_since)) / 86_400_000, trades = sum?.trades_ok ?? 0, pct = sum?.result_pct ?? null;
+      const needDays = Math.max(TRIAL.minDays, s.settings.paper_days), needTrades = Math.max(TRIAL.minTrades, s.settings.paper_trades);
+      const enough = days >= needDays && trades >= needTrades; // Phase 3: both, never either
+      const coin = enough ? await this.coinMove(st) : null, bar = trialBar(coin);
+      const beat = pct !== null && pct > bar, vs = coin !== null && coin > 0 ? ` and keeping half in ${st.symbol ? `$${st.symbol}` : st.token.length > 12 ? "the coin" : st.token} (+${r2(bar)}%)` : "";
+      if (st.stage === "live" && st.canary) {
+        // Phase 3, Gate 3: the small first live test. Passed: full size (once it holds nothing waiting on a sell).
+        if (enough && beat && !this.holds(st, all)) {
+          const why = `Live test at ${TRIAL.canaryShare * 100}% size: +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC${vs}. Now at full size.`;
+          const ok = await this.restage(st, "live", why, all, st.canary.full);
+          if (ok.applied) {
+            await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.canary = null; });
+            await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`live ${pct}%`, `coin ${coin === null ? "?" : r2(coin)}%`], applied: true, outcome: ok.outcome }]);
+            await this.d.notify?.(`Autopilot: ${st.name} passed its small live test (+${pct}%) and now trades at full size.`).catch(() => {});
+          }
+          continue;
+        }
+      }
       if (st.stage === "paper") {
-        const periodOver = days >= s.settings.paper_days || trades >= s.settings.paper_trades;
-        if (!periodOver) continue;
-        // 0.9.8: a strategy that beat holding USDC waits for the owner's Go live; it keeps practising on paper meanwhile.
+        if (!enough) { if (st.ready) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; }); }
+        // 0.9.8: a strategy that passed waits for the owner's Go live; it keeps practising on paper meanwhile.
         // A trending meme also needs the coin added on Home before it can go live (checked again on Go live).
-        if (pct !== null && pct > 0) {
+        if (enough && beat && pct !== null) {
           // 0.9.10 Active mode: it goes live by itself when it fits the budget (never a Trending-on-X coin: those need the owner).
           if (s.settings.active_mode && !st.paper_only && !st.owner_set) { // Nov 7: one the owner set up waits for their Go live
-            const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC. Active mode is on, so it went live with real money.`;
-            const ok = await this.restage(st, "live", why, all);
+            const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC${vs}. Active mode is on, so it went live with real money, at ${TRIAL.canaryShare * 100}% of its size until the live test passes too.`;
+            const full = st.params, ok = await this.restage(st, "live", why, all, this.clampParams(s, st.template, canaryParams(full)).params);
             if (ok.applied) {
-              await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
+              await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = null; y.canary = { full, since: nowIso(t) }; } });
               await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`, "Active mode"], applied: true, outcome: ok.outcome }]);
               await this.d.notify?.(`Autopilot: ${st.name} passed its paper trial (+${pct}%) and went live (Active mode).`).catch(() => {});
               continue;
@@ -827,7 +864,7 @@ export class SuperBot {
           }
           if (!st.ready) {
             const sym = st.symbol ? `$${st.symbol}` : st.token.length > 12 ? `${st.token.slice(0, 4)}…` : st.token;
-            const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC. Ready to go live with real money when you tap Go live.`;
+            const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC${vs}. Ready to go live with real money when you tap Go live; it starts at ${TRIAL.canaryShare * 100}% of its size.`;
             await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = { at: nowIso(t), result_pct: pct, trades }; y.history.push({ ts: nowIso(t), note: why }); } });
             await this.log("rule", why, [{ type: "keep", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`], applied: true, outcome: "ready to go live" }]);
             await this.d.notify?.(`Autopilot: ${st.paper_only ? st.name.replace(/ · [^·]*$/, ` · ${sym}`) : st.name} passed its paper trial (+${pct}%). Open Autopilot and tap Go live to use real money.`).catch(() => {});
@@ -840,10 +877,10 @@ export class SuperBot {
           continue;
         }
         if (st.ready) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
-        if (!st.owner_set && (days >= 2 * s.settings.paper_days || (trades >= s.settings.paper_trades && pct !== null && pct <= 0))) {
+        if (!st.owner_set && (days >= 2 * needDays || (enough && !beat))) {
           const why = st.paper_only
             ? `Paper test of ${st.symbol ? `$${st.symbol}` : "this meme"} from Trending on X finished (${pct === null ? "no trades" : `${pct}%`}) without beating holding USDC; retired.`
-            : `Paper result ${pct === null ? "no trades" : `${pct}%`} after ${r2(days)} days did not beat holding USDC; retired.`;
+            : `Paper result ${pct === null ? "no trades" : `${pct}%`} after ${trades} trades in ${r2(days)} days ${enough ? `did not beat holding USDC${coin !== null && coin > 0 ? ` and keeping half in the coin (+${r2(bar)}%)` : ""}` : `was not enough to judge (it needs ${needTrades} trades in ${needDays} days)`}; retired.`;
           await this.retire(st, why, all);
           await this.log("rule", why, [{ type: "retire", strategy_id: st.id, reason: why, sources: [`paper ${pct ?? "none"}%`], applied: true, outcome: "retired" }]);
         }
@@ -872,6 +909,17 @@ export class SuperBot {
         await this.log("rule", why, [{ type: "demote", strategy_id: st.id, reason: why, sources: [`live ${pct}%`], applied: ok.applied, outcome: ok.outcome }]);
       }
     }
+  }
+
+  /** How much its coin moved (%) since this stage began, from the price kept then or the hourly closes; null when unknown. */
+  private async coinMove(st: Strategy): Promise<number | null> {
+    const now = await this.d.price(st.chain, st.token).catch(() => undefined);
+    let from = st.stage_px;
+    if (!(from && from > 0) && this.d.closes) {
+      const c = await this.d.closes(st.chain, st.token).catch(() => [] as number[]), h = Math.round((this.now() - Date.parse(st.stage_since)) / 3_600_000);
+      if (h >= 0 && c.length > h) from = c[c.length - 1 - h];
+    }
+    return now && now > 0 && from && from > 0 ? r2((now / from - 1) * 100) : null;
   }
 
   /** Cancel a strategy's open rules (and Always On for them). */
@@ -1173,10 +1221,11 @@ export class SuperBot {
     if (!st.ready) throw new Error("It hasn't passed its paper trial yet.");
     if (!(await this.d.knownToken(st.chain, st.token).catch(() => false))) throw new Error(`Add ${st.symbol ? `$${st.symbol}` : st.token} on Home first. Add runs TOLLkit's token check, then tap Go live again.`);
     const all = this.w.rules().list();
-    const why = `You tapped Go live after a paper result of +${st.ready.result_pct}% over ${st.ready.trades} trades; now trading with real money.`;
-    const ok = await this.restage(st, "live", why, all);
+    const small = !st.owner_set, full = st.params;
+    const why = `You tapped Go live after a paper result of +${st.ready.result_pct}% over ${st.ready.trades} trades; now trading with real money${small ? `, at ${TRIAL.canaryShare * 100}% of its size until the live test passes too` : ""}.`;
+    const ok = await this.restage(st, "live", why, all, small ? this.clampParams(s, st.template, canaryParams(full)).params : full);
     if (!ok.applied) throw new Error(`It stayed on paper: ${ok.outcome.replace(/^stayed on paper: /, "")}.`);
-    await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = null; if (small) y.canary = { full, since: nowIso(this.now()) }; } });
     await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`paper ${st.ready.result_pct}%`, "owner tapped Go live"], applied: true, outcome: ok.outcome }]);
     return this.view();
   }
@@ -1184,6 +1233,7 @@ export class SuperBot {
   private rebuiltLately(st: Strategy) { return !!st.rebuilt_at && this.now() - Date.parse(st.rebuilt_at) < REBUILD_MS; }
   private async restage(st: Strategy, stage: "paper" | "live", why: string, all: Rule[], params = st.params, keepClock = false): Promise<{ applied: boolean; outcome: string }> {
     const s = this.load();
+    if (stage === "paper" && st.canary && params === st.params) params = st.canary.full; // back to paper at its full size
     if (stage === "live") {
       const fit = this.fitsBudget(s, st, params);
       if (fit) return { applied: false, outcome: `stayed on paper: ${fit}` };
@@ -1202,7 +1252,8 @@ export class SuperBot {
       y.prev_bots = keepClock && y.stage === stage && y.bot ? [...(y.prev_bots ?? []), y.bot].slice(-200) : []; // Nov 7: 200, so a re-armed dip keeps its whole record
       if (y.bot) y.old_bots = [...(y.old_bots ?? []).filter((b) => b !== y.bot), y.bot].slice(-40);
       if (keepClock) y.rebuilt_at = nowIso(this.now());
-      y.no_buys = false; y.stage = stage; if (!keepClock) y.stage_since = nowIso(this.now()); y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
+      y.no_buys = false; y.stage = stage; if (!keepClock) { y.stage_since = nowIso(this.now()); if (price && price > 0) y.stage_px = price; }
+      if (stage === "paper") y.canary = null; y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
       if (stage === "paper") x.paper_rules.push(...made.map((r) => r.id));
     });
     if (stage === "live") await this.handToAlwaysOn(made);
@@ -1248,12 +1299,12 @@ export class SuperBot {
   private context(s: State, all: Rule[], prices: Record<string, number | null>) {
     const t = this.now();
     return {
-      limits: { budget_usd: s.settings.budget_usd, per_trade_usd: s.settings.per_trade_usd, max_token_pct: s.settings.max_token_pct, max_strategies: s.settings.max_strategies, slippage_bps: s.settings.slippage_bps, paper_period: `${s.settings.paper_days} days or ${s.settings.paper_trades} trades`, pace: s.settings.pace ?? "steady" },
+      limits: { budget_usd: s.settings.budget_usd, per_trade_usd: s.settings.per_trade_usd, max_token_pct: s.settings.max_token_pct, max_strategies: s.settings.max_strategies, slippage_bps: s.settings.slippage_bps, paper_period: `at least ${Math.max(TRIAL.minDays, s.settings.paper_days)} days and ${Math.max(TRIAL.minTrades, s.settings.paper_trades)} trades; it must beat holding USDC and keeping half in the coin; it goes live at ${TRIAL.canaryShare * 100}% of its size first`, pace: s.settings.pace ?? "steady" },
       // 0.9.12 Adaptive pace: each coin's market, measured by the wallet (the strategist follows it per coin).
       ...(this.adaptive(s) ? { market_states: Object.fromEntries(s.settings.tokens.map((x) => { const m = this.market[`${x.chain}:${x.token.toLowerCase()}`]; return [`${x.chain}:${x.token}`, m ? { state: m.state, chg_24h_pct: m.d1, chg_3d_pct: m.d3 } : { state: "unknown" }]; })) } : {}),
       allowed: { chains: s.settings.chains, tokens: s.settings.tokens.map((x) => ({ ...x, price_usd: prices[`${x.chain}:${x.token}`] ?? null })) },
       templates: [...TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap" && x.id !== "range"), AP_CUSTOM].map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
-      strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, ...(x.tested ? { past_test: x.tested } : {}), days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
+      strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, ...(x.canary ? { live_size: "small first test" } : {}), ...(x.tested ? { past_test: x.tested } : {}), days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
       recent_decisions: s.decisions.filter((d) => d.by === "strategist").slice(-3).map((d) => ({ ts: d.ts, view: d.market_view, actions: d.actions.map((a) => `${a.type}${a.strategy_id ? ` ${a.strategy_id}` : ""}${a.applied ? "" : " (not applied)"}`) })),
@@ -1448,7 +1499,7 @@ export class SuperBot {
           // The bot's name ends with the coin (a long address is shortened): show the meme's $SYMBOL there instead.
           const sym = String(meme?.symbol ?? "").slice(0, 16).toUpperCase();
           const name = !meme ? built.name : built.name.includes(tok!.token) ? built.name.split(tok!.token).join(sym) : built.name.replace(/ · [^·]*$/, ` · ${sym}`);
-          x.strategies.push({ id, name, template: a.template, chain, token: tok!.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t,
+          x.strategies.push({ id, name, template: a.template, chain, token: tok!.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t, ...(price && price > 0 ? { stage_px: price } : {}),
             history: [{ ts: t, note: a.owner ? `You asked for it: ${a.reason}` : meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }, ...(tested ? [{ ts: t, note: tested }] : [])], ...(tested ? { tested } : {}), ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}), ...(a.owner ? { owner_set: true } : {}), ...(a.sizing ? { sizing: a.sizing, sizing_base: Number(params.params.amount_usd) || undefined, sizing_seen: 0 } : {}) });
           x.paper_rules.push(...made.map((r) => r.id));
         });

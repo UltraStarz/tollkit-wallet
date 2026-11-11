@@ -142,7 +142,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   await new Promise((r) => setTimeout(r, 30));
   const st = W.bot.view().strategies[0];
   // Give its paper rule a winning record.
-  await W.store.mutate((rules) => { const r = rules.find((x) => x.bot === st.bot)!; r.state.ok_count = 5; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = 2700; r.state.fills = [{ ts: "2026-10-21T01:00:00Z", ok: true, paper: true, usd: 10 }]; });
+  await W.store.mutate((rules) => { const r = rules.find((x) => x.bot === st.bot)!; r.state.ok_count = 25; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = 2700; r.state.fills = [{ ts: "2026-10-21T01:00:00Z", ok: true, paper: true, usd: 10 }]; });
   W.setDecision(() => ({ assessment: "quiet", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
   W.advance(3 * 86_400_000);
   await W.bot.cycle(true);
@@ -160,7 +160,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
     await D.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 7, paper_trades: 20, max_token_pct: 50 });
     await new Promise((r) => setTimeout(r, 30));
     const ds = D.bot.view().strategies[0];
-    await D.store.mutate((rules) => { const r = rules.find((x) => x.bot === ds.bot)!; r.state.ok_count = 5; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = 2700; });
+    await D.store.mutate((rules) => { const r = rules.find((x) => x.bot === ds.bot)!; r.state.ok_count = 25; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = 2700; });
     D.setDecision(() => ({ assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] }));
     D.advance(8 * 86_400_000); await D.bot.cycle(true);
     check(!!(D.bot.view().strategies[0] as any).ready, "twin: passed and waiting");
@@ -179,6 +179,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   await W.bot.goLive(v.strategies[0].id);
   v = W.bot.view();
   check(v.strategies[0].stage === "live" && v.strategies[0].past?.[0]?.stage === "paper" && (v.strategies[0].past?.[0]?.result_pct ?? 0) > 0, "Go live moves it to real money", v.strategies[0]);
+  check((v.strategies[0] as any).canary?.full?.amount_usd > 0 && v.strategies[0].params.amount_usd === Math.floor((v.strategies[0] as any).canary.full.amount_usd * 25) / 100, "Phase 3: it starts live at a quarter of its size, its full size kept for later", v.strategies[0].params);
   const liveRule = W.store.list().find((r) => r.bot === v.strategies[0].bot && r.status === "active")!;
   check(!!liveRule && !W.bot.isPaperRule(liveRule.id), "its new rule is a live rule");
   check(W.always.on.size === 0, "Always On stays off unless the owner turned it on");
@@ -783,6 +784,86 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(twin.applied === false && /already running/.test(twin.outcome), "the same bot with only unused settings changed is still a copy", twin);
   const many = sizeToShare("custom", { ...flat, max_buys: 40 }, 30) as any;
   check(many.max_buys === 30 && many.amount_usd === 1 && committedUsd("custom", many) === 30, "more buys than dollars: fewer buys, never sized past its share", many);
+}
+
+// ─── Phase 3 (Nov 11, 2026): the trial needs days AND trades, beats USDC and half the coin, and goes live small first ───
+{
+  const { TRIAL, trialBar, canaryParams } = await import("../src/superbot.js");
+  check(TRIAL.minDays === 3 && TRIAL.minTrades === 10 && trialBar(null) === 0 && trialBar(-8) === 0 && trialBar(20) === 10 && (canaryParams({ amount_usd: 3 }) as any).amount_usd === 1 && (canaryParams({ amount_usd: 40, levels: 8 }) as any).amount_usd === 10 && (canaryParams({ sell_percent: 50 }) as any).amount_usd === undefined, "the bar: holding USDC, or half the coin's rise; the first live size is a quarter, at least $1");
+  const prop = { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dca", chain: "base", token: "ETH", params: { amount_usd: 10, every: "day", times: 3 }, reason: "Steady.", sources: ["s"] }] };
+  const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
+  const record = async (W: any, n: number, last: number) => { const st = W.bot.view().strategies[0]; await W.store.mutate((rules: any[]) => { const r = rules.find((x) => x.bot === st.bot)!; r.state.ok_count = n; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = last; }); };
+  // 1. The owner (or a pace preset) asked for 1 day and 1 trade: never under 3 days and 10 trades.
+  const A = world({ decision: () => prop });
+  await A.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 1, paper_trades: 1, max_token_pct: 50 });
+  await new Promise((r) => setTimeout(r, 30));
+  check(A.bot.view().settings.paper_days === 3 && A.bot.view().settings.paper_trades === 10, "settings can't go under 3 days and 10 trades", A.bot.view().settings);
+  await record(A, 1, 2700); A.setDecision(() => keep);
+  A.advance(1.2 * 86_400_000); await A.bot.cycle(true);
+  check(!(A.bot.view().strategies[0] as any).ready, "one winning trade after a day: not enough");
+  await record(A, 9, 2700); A.advance(3 * 86_400_000); await A.bot.cycle(true);
+  check(!(A.bot.view().strategies[0] as any).ready && A.bot.view().strategies[0].stage === "paper", "four days but nine trades: still not enough (both, never either)");
+  await record(A, 10, 2700); A.advance(3_600_000); await A.bot.cycle(true);
+  check(!!(A.bot.view().strategies[0] as any).ready && /keeping half|beat holding USDC/.test(A.bot.view().strategies[0].history.at(-1)!.note), "ten trades in four days, ahead: it passes", A.bot.view().strategies[0].history.at(-1));
+  // 2. Too few trades for too long: retired as not enough to judge, never sent live.
+  const B = world({ decision: () => prop });
+  await B.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 3, paper_trades: 10, max_token_pct: 50 });
+  await new Promise((r) => setTimeout(r, 30));
+  await record(B, 4, 3000); B.setDecision(() => keep);
+  B.advance(6.1 * 86_400_000); await B.bot.cycle(true);
+  const bs = B.bot.view().strategies[0];
+  check(bs.stage === "retired" && /not enough to judge \(it needs 10 trades in 3 days\)/.test(bs.history.at(-1)!.note), "four trades in six days, even well ahead: retired as not enough to judge", bs.history.at(-1));
+  // 3. The coin rose 20% while it practised: +5% is not a pass (the bar is +10%); +12% is.
+  let px = 2500;
+  const C = world({ decision: () => prop });
+  (C.bot as any).d.price = async () => px;
+  await C.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 3, paper_trades: 10, max_token_pct: 50 });
+  await new Promise((r) => setTimeout(r, 30));
+  check((C.bot.view().strategies[0] as any).stage_px === 2500, "the coin's price is kept when the trial starts");
+  C.setDecision(() => keep); px = 3000;
+  await record(C, 12, 2625); // +5%
+  C.advance(3.5 * 86_400_000); await C.bot.cycle(true);
+  check(C.bot.view().strategies[0].stage === "retired" && /did not beat holding USDC and keeping half in the coin \(\+10%\)/.test(C.bot.view().strategies[0].history.at(-1)!.note), "+5% while the coin rose 20%: not a pass, retired", C.bot.view().strategies[0].history.at(-1));
+  const C2 = world({ decision: () => prop });
+  px = 2500; (C2.bot as any).d.price = async () => px;
+  await C2.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 3, paper_trades: 10, max_token_pct: 50 });
+  await new Promise((r) => setTimeout(r, 30));
+  C2.setDecision(() => keep); px = 3000;
+  await record(C2, 12, 2800); // +12%
+  C2.advance(3.5 * 86_400_000); await C2.bot.cycle(true);
+  const c2 = C2.bot.view().strategies[0] as any;
+  check(!!c2.ready && /\+12% .* beat holding USDC and keeping half in ETH \(\+10%\)/.test(c2.history.at(-1).note), "+12% while the coin rose 20%: a pass", c2.history.at(-1));
+  // 4. Active mode: it goes live small, then to full size once the live test passes too.
+  const D = world({ decision: () => prop });
+  px = 2500; (D.bot as any).d.price = async () => px;
+  await D.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 3, paper_trades: 10, max_token_pct: 50, active_mode: true });
+  await new Promise((r) => setTimeout(r, 30));
+  D.setDecision(() => keep);
+  await record(D, 12, 2700);
+  D.advance(3.5 * 86_400_000); await D.bot.cycle(true);
+  let d = D.bot.view().strategies[0] as any;
+  check(d.stage === "live" && d.canary?.full?.amount_usd > 0 && d.params.amount_usd === Math.floor(d.canary.full.amount_usd * 25) / 100 && /at 25% of its size/.test(d.history.at(-1).note), "Active mode: live at a quarter of its size", { st: d.stage, p: d.params, c: d.canary });
+  const full = d.canary.full.amount_usd, liveRule = D.store.list().find((r) => r.bot === d.bot && r.status === "active")!;
+  check(liveRule.amount_usd === d.params.amount_usd && (liveRule.amount_usd ?? 0) < full / 3 && !D.bot.isPaperRule(liveRule.id), "its live rule spends the small size, not the full one", liveRule.amount_usd);
+  D.advance(86_400_000); await D.bot.cycle(true);
+  check((D.bot.view().strategies[0] as any).canary && D.bot.view().strategies[0].stage === "live", "the small test needs its own days and trades");
+  await D.store.mutate((rules) => { const r = rules.find((x) => x.id === liveRule.id)!; r.state.ok_count = 11; r.state.spent_usd = 7.5; r.state.bought_units = 0.003; r.state.last_price = 2700; });
+  D.advance(2.6 * 86_400_000); await D.bot.cycle(true);
+  d = D.bot.view().strategies[0] as any;
+  check(d.stage === "live" && !d.canary && d.params.amount_usd === full && D.notes.some((n) => /passed its small live test/.test(n)) && D.bot.view().decisions.some((x: any) => /Now at full size/.test(x.assessment)), "the live test passed: full size", { p: d.params, c: d.canary, n: D.notes.at(-1) });
+  // 5. A small test that loses goes back to paper at its full settings.
+  const E = world({ decision: () => prop });
+  px = 2500; (E.bot as any).d.price = async () => px;
+  await E.bot.enable({ budget_usd: 100, per_trade_usd: 20, paper_days: 3, paper_trades: 10, max_token_pct: 50, active_mode: true });
+  await new Promise((r) => setTimeout(r, 30));
+  E.setDecision(() => keep);
+  await record(E, 12, 2700);
+  E.advance(3.5 * 86_400_000); await E.bot.cycle(true);
+  const e0 = E.bot.view().strategies[0] as any, eFull = e0.canary?.full?.amount_usd, eRule = E.store.list().find((r) => r.bot === e0.bot && r.status === "active")!;
+  await E.store.mutate((rules) => { const r = rules.find((x) => x.id === eRule.id)!; r.state.ok_count = 4; r.state.spent_usd = 7.5; r.state.bought_units = 0.003; r.state.last_price = 2000; });
+  E.advance(2 * 86_400_000); await E.bot.cycle(true);
+  const e1 = E.bot.view().strategies[0] as any;
+  check(e1.stage === "paper" && !e1.canary && eFull > 0 && e1.params.amount_usd === eFull, "a losing small test goes back to paper at its full settings", { st: e1.stage, p: e1.params, c: e1.canary });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

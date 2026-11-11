@@ -99,17 +99,17 @@ function world(price = 100) {
 // ─── Active mode on the device ────────────────────────────────────────────
 {
   const x = world();
-  await x.bot.enable({ chains: ["solana"], tokens: [{ chain: "solana", token: "SOL" }], paper_days: 1, active_mode: true });
+  await x.bot.enable({ chains: ["solana"], tokens: [{ chain: "solana", token: "SOL" }], paper_days: 3, paper_trades: 10, active_mode: true });
   x.setDecision({ assessment: "Steady.", market_view: "neutral", confidence: 0.6, actions: [{ type: "propose", template: "dca", chain: "solana", token: "SOL", params: { amount_usd: 5, every: "day", times: 2 }, reason: "Steady.", sources: [] }] });
   await x.bot.cycle(true);
   const st = x.bot.view().strategies[0]!;
   // A paper buy at $90, now worth more at $100: it beat holding USDC.
-  await x.store.mutate((rs) => { for (const r of rs) if (r.bot === st.bot) { r.state.fills.push({ ts: new Date().toISOString(), ok: true, usd: 5, units: 0.0556, side: "buy", paper: true }); r.state.spent_usd = 5; r.state.bought_units = 0.0556; r.state.ok_count = 1; r.state.last_price = 100; } });
+  await x.store.mutate((rs) => { for (const r of rs) if (r.bot === st.bot) { r.state.fills.push({ ts: new Date().toISOString(), ok: true, usd: 5, units: 0.0556, side: "buy", paper: true }); r.state.spent_usd = 5; r.state.bought_units = 0.0556; r.state.ok_count = 10; r.state.last_price = 100; } }); // Phase 3: a trial is at least 3 days and 10 trades
   x.setDecision({ assessment: "Flat.", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "-", sources: [] }] });
-  x.advance(25 * 3600_000);
+  x.advance(3.1 * 86_400_000);
   await x.bot.cycle(true);
   const after = x.bot.view().strategies.find((z: any) => z.id === st.id)!;
-  check(after.stage === "live" && !after.ready, "Active mode: it went live by itself", after);
+  check(after.stage === "live" && !after.ready && !!(after as any).canary, "Active mode: it went live by itself, at a small size first", after);
   check(x.bot.view().decisions.some((d: any) => /Active mode is on/.test(d.assessment)), "and the log says why");
 }
 
