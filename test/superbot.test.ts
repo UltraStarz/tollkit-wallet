@@ -332,7 +332,8 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   W.setSignals(() => ({ id: "same", at: "x", changes: { moved: false } }));
   const c0 = W.calls.length;
   W.advance(15 * 60_000); await W.bot.tick();
-  check(W.calls.length === c0 + 1, "Active decides at every rethink, even when nothing moved", W.calls.length - c0);
+  check(W.calls.length === c0, "Phase 4: nothing moved and nothing of its own changed: no decision at the next rethink", W.calls.length - c0);
+
   W.advance(24 * 3_600_000); await W.bot.tick();
   const v = W.bot.view(), st = v.strategies[0]!, rd = v.decisions.find((d: any) => d.by === "rule");
   check(st.params.drop_pct === 3 && st.params.profit_pct === 6.4 && st.stage === "paper" && st.stage_since === since, "a day with no trade: tightened by a plain rule, still on paper, its paper clock kept", st);
@@ -737,7 +738,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const keep = { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "keep", reason: "Quiet.", sources: [] }] };
   let n = 0; const asked: any[] = [];
   const W = world({ decision: () => (n++ === 0 ? propose : keep) });
-  (W.bot as any).d.backtest = async (x: any) => { asked.push(x); return { days: 90, result_usd: 4.21, baseline_usd: -12.5, worst_drop_usd: 6.3, trades: 14 }; };
+  (W.bot as any).d.backtest = async (x: any) => { if (x.menu) return null; asked.push(x); return { days: 90, result_usd: 4.21, baseline_usd: -12.5, worst_drop_usd: 6.3, trades: 14 }; };
   await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
   await new Promise((r) => setTimeout(r, 30));
   const v = W.bot.view(), st = v.strategies[0]!, rule = W.store.list().find((r: any) => r.bot === st?.bot);
@@ -767,7 +768,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   let q = 0; const runs: any[] = [];
   const adj = (params: any) => ({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "adjust", strategy_id: "", params, reason: "Tighter.", sources: [] }] });
   const W4 = world({ decision: () => (q++ === 0 ? propose : keep) });
-  (W4.bot as any).d.backtest = async (x: any) => { runs.push(x); return runs.length === 1 ? { days: 90, result_usd: 4.21, baseline_usd: -12.5, worst_drop_usd: 6.3, trades: 14 } : x.custom.buy.type === "rsi" ? { days: 90, result_usd: 0, baseline_usd: 1, worst_drop_usd: 0, trades: 0 } : { days: 90, result_usd: 9.5, baseline_usd: -12.5, worst_drop_usd: 4, trades: 30 }; };
+  (W4.bot as any).d.backtest = async (x: any) => { if (x.menu) return null; runs.push(x); return runs.length === 1 ? { days: 90, result_usd: 4.21, baseline_usd: -12.5, worst_drop_usd: 6.3, trades: 14 } : x.custom.buy.type === "rsi" ? { days: 90, result_usd: 0, baseline_usd: 1, worst_drop_usd: 0, trades: 0 } : { days: 90, result_usd: 9.5, baseline_usd: -12.5, worst_drop_usd: 4, trades: 30 }; };
   await W4.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
   await new Promise((r) => setTimeout(r, 30));
   const id4 = W4.bot.view().strategies[0]!.id;
@@ -905,7 +906,7 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
   let n = 0; const seen: any[] = [];
   const W = world({ decision: () => (n++ === 0 ? dip : keep) });
-  (W.bot as any).d.backtest = async (x: any) => { seen.push(x); return pt(-4.2, -15); };
+  (W.bot as any).d.backtest = async (x: any) => { if (x.menu) return null; seen.push(x); return pt(-4.2, -15); };
   await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
   await new Promise((r) => setTimeout(r, 30));
   const v = W.bot.view();
@@ -957,6 +958,49 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const rr = roundReturns([f("buy", 10, 1, 1), f("buy", 10, 1, 2), f("sell", 11, 1, 3), f("sell", 10.5, 0.995, 4), f("buy", 5, 1, 5), f("sell", 4, 1, 6, { paper: true }), f("buy", 4, 0.5, 7, { ok: false }), f("sell", 4.5, 1, 8)]);
   check(rr.length === 2 && Math.abs(rr[0]! - 7.75) < 0.01 && Math.abs(rr[1]! - (-10)) < 0.01, "rounds: two buys sold in two parts is one round (+7.75%); practice and failed trades are left out", rr);
   check(edgeConfidence([1, 2, 3, 4]) === null && edgeConfidence([2, 3, 2.5, 3.2, 2.8])! > 0.99 && Math.abs(edgeConfidence([5, -5, 4, -4, 0])! - 0.5) < 0.01 && edgeConfidence([-1, -2, -1.5, -3, -2])! < 0.01, "confidence: none with under five rounds; near certain for a steady edge, a coin flip for none, near zero for losses");
+}
+
+// ─── Phase 4: the AI gets a daily menu of setups already tested on each coin ───
+{
+  const { IDEAS } = await import("../src/superbot.js");
+  const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
+  const W = world({ decision: () => keep });
+  let calls = 0;
+  (W.bot as any).d.backtest = async (x: any) => { calls++; const trend = x.template === "custom" && x.custom?.buy?.type === "trend"; return { days: 90, result_usd: trend ? 12 : -3, baseline_usd: 8, worst_drop_usd: 5, trades: trend ? 2 : 20 }; };
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  const ctx = W.calls.at(-1)?.body?.context, eth = ctx?.tested_ideas?.["base:ETH"];
+  check(Array.isArray(eth) && eth.length === IDEAS.length && eth.filter((i: any) => i.passes).length === 2 && eth.find((i: any) => i.passes)?.params?.buy === "trend" && eth[0].made_usd === 12 && eth[0].holding_usd === 8, "the AI sees each idea's 90-day result and whether it passes", eth);
+  const n = calls;
+  W.advance(3 * 3_600_000); W.setSignals(() => ({ id: "s2", at: "x", changes: { moved: true, notes: ["n"] } })); await W.bot.tick();
+  check(calls === n && n === IDEAS.length, "the menu is tested once a day, not every decision", { n, calls });
+  W.advance(24 * 3_600_000); W.setSignals(() => ({ id: "s3", at: "y", changes: { moved: true, notes: ["n"] } })); await W.bot.tick();
+  check(calls === 2 * IDEAS.length, "and again the next day", calls);
+  // A coin the test can't read gets no menu.
+  const W2 = world({ decision: () => keep });
+  (W2.bot as any).d.backtest = async () => null;
+  await W2.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  check(W2.calls.at(-1)?.body?.context?.tested_ideas === undefined, "no history to test on: no menu");
+}
+
+// ─── Phase 4: the AI is asked when something changed, the market moved, or an hour passed ───
+{
+  let n = 0;
+  const W = world({ decision: () => (n++ === 0 ? { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 20, drop_pct: 5, profit_pct: 8 }, reason: "Flat market.", sources: ["ETH +0.1%"] }] } : { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "keep", reason: "Quiet.", sources: [] }] }) });
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], pace: "active", rethink_minutes: 15 });
+  await new Promise((r) => setTimeout(r, 30));
+  W.setSignals(() => ({ id: "same", at: "x", changes: { moved: false } }));
+  const c0 = W.calls.length;
+  W.advance(15 * 60_000); await W.bot.tick();
+  check(W.calls.length === c0, "nothing changed: no decision", W.calls.length - c0);
+  { const st0 = W.bot.view().strategies[0]!; await W.store.mutate((rules) => { const r = rules.find((x) => x.bot === st0.bot)!; r.state.ok_count = (r.state.ok_count ?? 0) + 1; }); }
+  W.advance(15 * 60_000); await W.bot.tick();
+  check(W.calls.length === c0 + 1, "one of its strategies traded: it decides at the next rethink", W.calls.length - c0);
+  W.advance(15 * 60_000); await W.bot.tick(); W.advance(15 * 60_000); await W.bot.tick();
+  check(W.calls.length === c0 + 1, "and not again while nothing changes", W.calls.length - c0);
+  W.advance(45 * 60_000); await W.bot.tick();
+  check(W.calls.length === c0 + 2, "until an hour has passed", W.calls.length - c0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

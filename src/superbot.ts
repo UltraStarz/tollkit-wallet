@@ -93,6 +93,20 @@ export function tradeCosts(all: Rule[], ownerSlippageBps: number, now = Date.now
   for (const [k, fs] of by) { const st = shortfallStats(fs, now); if (st) out[k] = { fills: st.n, typical_cost_bps: st.median_bps, bad_cost_bps: st.p90_bps, cost_ex_fee_bps: st.median_ex_fee_bps, median_ms: st.median_ms, slippage_limit_bps: adaptiveSlippage(st, ownerSlippageBps) }; }
   return out;
 }
+/**
+ * Phase 4 (trading brief, workstream I: give the strategist a backtest). Once a day the wallet replays this menu on
+ * each allowed coin's last 90 days, each sized to about $100, and hands the AI the results (tested_ideas), so it can
+ * pick a setup that passes the same test its proposal will face. The wallet still sizes whatever it picks.
+ */
+export const IDEAS: { template: string; params: Record<string, unknown> }[] = [
+  { template: "custom", params: { amount_usd: 100, buy: "trend", trend_days: 50, buy_pct: 3, sell_gain_pct: 0, trail_pct: 0, downtrend_days: 0, vol_target_pct: 3 } },
+  { template: "custom", params: { amount_usd: 100, buy: "trend", trend_days: 100, buy_pct: 3, sell_gain_pct: 0, trail_pct: 0, downtrend_days: 0, vol_target_pct: 3 } },
+  { template: "custom", params: { amount_usd: 16.66, buy: "levels", buy_pct: 1.5, max_buys: 6, sell_gain_pct: 3, sell_share_pct: 50, trail_pct: 3, downtrend_days: 10, downtrend_gap_pct: 3, vol_target_pct: 3 } },
+  { template: "grid", params: { amount_usd: 9, range_pct: 8, levels: 12 } },
+  { template: "dca", params: { amount_usd: 10, every: "day", times: 10 } },
+  { template: "signal", params: { side: "buy", signal: "rsi_below", tf: "1h", level: 40, amount_usd: 33, times: 3 } },
+  { template: "dip", params: { amount_usd: 100, drop_pct: 3, profit_pct: 3 } },
+];
 export const TRIAL = { minDays: 3, minTrades: 10, canaryShare: 0.25 };
 /** The result a strategy must beat over a stretch in which its coin moved coinPct: holding USDC (0) or half in the coin. */
 export function trialBar(coinPct: number | null): number { return Math.max(0, (coinPct ?? 0) / 2); }
@@ -213,6 +227,8 @@ export interface AppliedAction { type: string; strategy_id?: string; template?: 
 export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" | "away" | "server" }
 export interface Report { date: string; text: string; live_result_usd: number | null; trades: number; decisions: number }
 interface State {
+  /** Phase 4: the daily menu of setups tested on each coin's last 90 days (see IDEAS). */
+  ideas?: { day: string; by: Record<string, { template: string; params: Record<string, unknown>; made_usd: number; holding_usd: number; trades: number; passes: boolean }[]> };
   /** Phase 3, step 4: proposals the past-prices test refused (the last 8). */
   refused?: { ts: string; template: string; chain: Chain; token: string; params: Record<string, unknown>; why: string }[];
   enabled: boolean; since: string | null; settings: SuperbotSettings; strategies: Strategy[]; decisions: Decision[]; reports: Report[];
@@ -235,7 +251,7 @@ interface State {
   range_idea_until?: string;
   /** 0.9.10: the server's decisions already copied into the log. */
   server_seen?: string[];
-  stats: { cycles: number; steps: number; step_usd: number; last_cycle: string | null; last_step: string | null; last_snapshot: string | null; last_error: string | null; last_report: string | null; snap_fails?: number };
+  stats: { cycles: number; steps: number; step_usd: number; last_cycle: string | null; last_step: string | null; last_snapshot: string | null; last_error: string | null; last_report: string | null; snap_fails?: number; /** Phase 4: what its own strategies looked like at the last decision (see fingerprint). */ last_fp?: string };
 }
 
 export interface SuperBotDeps {
@@ -266,7 +282,7 @@ export interface SuperBotDeps {
   /** Nov 11, 2026: tests a custom bot on past prices before it starts (tests pass their own; by default the wallet's replay on Coinbase's hourly prices). Null: this coin has no price history to test on. */
   backtest?: (a: PastTestIn) => Promise<PastTest | null>;
 }
-export interface PastTestIn { chain: Chain; token: string; template: string; params: Record<string, unknown>; custom?: CustomSpec; days: number }
+export interface PastTestIn { chain: Chain; token: string; template: string; params: Record<string, unknown>; custom?: CustomSpec; days: number; /** Phase 4: a run for the daily menu (IDEAS), not a proposal. */ menu?: boolean }
 export interface PastTest { days: number; result_usd: number; baseline_usd: number; worst_drop_usd: number; trades: number }
 /** Phase 3, step 4: templates that only sell what the owner already holds. Their job is protection, so they are tested and shown, never refused for the result. */
 export const SELL_ONLY = (template: string, params: Record<string, unknown>) => ["protect", "trail", "ladder"].includes(template) || (template === "signal" && params.side === "sell");
@@ -846,7 +862,11 @@ export class SuperBot {
       if (active) await this.tightenIdle(this.w.rules().list());
       if (this.adaptive(after)) await this.rideRising(this.w.rules().list());
       if (this.mv(after).on) await this.bigMoves(this.w.rules().list());
-      if (force || moved || stale || active) { await this.step(snap); await this.endRangeIdeas(); }
+      // Phase 4 (event-driven): a paced Autopilot used to decide at every rethink (every 15 minutes) even when nothing had
+      // changed; 14 of 18 decisions on Nov 10 changed nothing. Now it decides when the market moved, its own strategies
+      // changed (a trade, a stage, a stop), or an hour passed. A refused proposal is not a change, so it doesn't re-ask.
+      const changed = this.fingerprint(this.load(), this.w.rules().list()) !== after.stats.last_fp;
+      if (force || moved || stale || (active && changed)) { await this.step(snap); await this.endRangeIdeas(); await this.update((x) => { x.stats.last_fp = this.fingerprint(x, this.w.rules().list()); }); }
     } catch (e) {
       await this.update((x) => { x.stats.last_error = (e as Error).message.slice(0, 300); });
     } finally { this.busy = false; }
@@ -1015,6 +1035,30 @@ export class SuperBot {
     const fails = pt ? pastFails(pt, template, params) : null;
     if (pt && fails) return { refuse: fails, tested: "" };
     return { tested: pt ? `Tested on the last ${pt.days} days of prices: ${signed(pt.result_usd)} after fees in ${pt.trades} trades, against ${signed(pt.baseline_usd)} for holding; worst drop $${pt.worst_drop_usd.toFixed(2)}.` : "" };
+  }
+  /** Phase 4: its strategies, their stage, trades and status, whether a loss stop holds, and its slots and coins: a decision is only worth asking for when this changed (or the market moved, or an hour passed). */
+  private fingerprint(s: State, all: Rule[]): string {
+    const st = s.strategies.filter((x) => x.stage !== "retired").map((x) => { const m = this.summaryOf(x, all); return `${x.id}:${x.stage}:${m?.trades_ok ?? 0}:${m?.status ?? ""}:${x.owner_paused ? 1 : 0}`; }).sort().join("|");
+    return `${st}#${s.halted ? 1 : 0}#${s.settings.max_strategies}#${s.settings.budget_usd}#${s.settings.tokens.map((t) => `${t.chain}:${t.token}`).join(",")}`;
+  }
+  /** Phase 4: the daily tested menu (IDEAS) for each allowed coin the test can read; once a day. No test hook: nothing. */
+  private async refreshIdeas() {
+    if (!this.d.backtest) return;
+    const s = this.load(), today = day(this.now());
+    if (s.ideas?.day === today) return;
+    const by: NonNullable<State["ideas"]>["by"] = {};
+    for (const x of s.settings.tokens) {
+      const items: NonNullable<State["ideas"]>["by"][string] = [];
+      for (const idea of IDEAS) {
+        let custom: CustomSpec | undefined;
+        try { if (idea.template === "custom") custom = buildBot("custom", x.token, x.chain, idea.params, undefined).rules[0]!.custom!; } catch { continue; }
+        const pt = await this.d.backtest({ chain: x.chain, token: x.token, template: idea.template, params: idea.params, ...(custom ? { custom } : {}), days: 90, menu: true }).catch(() => null);
+        if (!pt) break; // a coin the test can't read: none of its ideas can be tested
+        items.push({ template: idea.template, params: idea.params, made_usd: r2(pt.result_usd), holding_usd: r2(pt.baseline_usd), trades: pt.trades, passes: !pastFails(pt, idea.template, idea.params) });
+      }
+      if (items.length) by[`${x.chain}:${x.token}`] = items;
+    }
+    await this.update((y) => { y.ideas = { day: today, by }; });
   }
   /** Phase 3, step 4: proposals the past-prices test refused, kept for the AI so it doesn't propose them again. */
   private async noteRefusal(template: string, chain: Chain, token: string, params: Record<string, unknown>, why: string) {
@@ -1379,6 +1423,7 @@ export class SuperBot {
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       // Phase 4: what live trades really cost per coin (decision price to fill, in bps), so it can weigh a strategy's turnover.
       trade_costs: tradeCosts(all, s.settings.slippage_bps, t),
+      ...(s.ideas?.by && Object.keys(s.ideas.by).length ? { tested_ideas: s.ideas.by } : {}),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
       recent_decisions: s.decisions.filter((d) => d.by === "strategist").slice(-3).map((d) => ({ ts: d.ts, view: d.market_view, actions: d.actions.map((a) => `${a.type}${a.strategy_id ? ` ${a.strategy_id}` : ""}${a.applied ? "" : " (not applied)"}`) })),
       // 0.9.13: the owner's standing instructions from the AI chat.
@@ -1399,9 +1444,10 @@ export class SuperBot {
     const s = this.load(), all = this.w.rules().list();
     const prices: Record<string, number | null> = {};
     for (const x of s.settings.tokens) prices[`${x.chain}:${x.token}`] = (await this.d.price(x.chain, x.token).catch(() => undefined)) ?? null;
-    const context = this.context(s, all, prices);
+    await this.refreshIdeas().catch(() => {});
+    const context = this.context(this.load(), all, prices);
     let body = JSON.stringify({ snapshot_id: snap.id, context });
-    if (body.length > SUPERBOT.maxContextChars) { context.recent_decisions = []; context.retired_recently = []; body = JSON.stringify({ snapshot_id: snap.id, context }); }
+    if (body.length > SUPERBOT.maxContextChars) { context.recent_decisions = []; context.retired_recently = []; if ((context as any).tested_ideas) for (const k of Object.keys((context as any).tested_ideas)) (context as any).tested_ideas[k] = (context as any).tested_ideas[k].filter((i: any) => i.passes); body = JSON.stringify({ snapshot_id: snap.id, context }); }
     if (this.d.decide) return this.stepOwn(snap, context);
     const r = await this.w.pay(`${this.d.proxy}${SUPERBOT.stepPath}`, { method: "POST", headers: { "content-type": "application/json" }, body }, { publicOnly: true, by: "superbot" });
     const j: any = r.response ? await r.response.json().catch(() => null) : null;
