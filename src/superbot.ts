@@ -950,9 +950,9 @@ export class SuperBot {
           if (s.settings.active_mode && !st.paper_only && !st.owner_set) { // Nov 7: one the owner set up waits for their Go live
             const why = `Paper result +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC${vs}. Active mode is on, so it went live with real money, at ${TRIAL.canaryShare * 100}% of its size until the live test passes too.`;
             const full = st.params, fitFull = this.fitsBudget(s, st, full); // Review 2: its full size must fit too, or it could never leave the small size
-            const ok = fitFull ? { applied: false, outcome: `stayed on paper: ${fitFull}` } : await this.restage(st, "live", why, all, this.clampParams(s, st.template, canaryParams(full)).params);
+            const ok = fitFull ? { applied: false, outcome: `stayed on paper: ${fitFull}` } : await this.restage(st, "live", why, all, this.clampParams(s, st.template, canaryParams(full)).params, false, false, full);
             if (ok.applied) {
-              await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = null; y.canary = { full, since: nowIso(t) }; } });
+              await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
               await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`paper ${pct}%`, "Active mode"], applied: true, outcome: ok.outcome }]);
               await this.d.notify?.(`Autopilot: ${st.name} passed its paper trial (+${pct}%) and went live (Active mode).`).catch(() => {});
               continue;
@@ -1369,15 +1369,15 @@ export class SuperBot {
     const small = !st.owner_set, full = st.params;
     { const fit = this.fitsBudget(s, st, full); if (fit) throw new Error(`It stayed on paper: ${fit}.`); }
     const why = `You tapped Go live after a paper result of +${st.ready.result_pct}% over ${st.ready.trades} trades; now trading with real money${small ? `, at ${TRIAL.canaryShare * 100}% of its size until the live test passes too` : ""}.`;
-    const ok = await this.restage(st, "live", why, all, small ? this.clampParams(s, st.template, canaryParams(full)).params : full);
+    const ok = await this.restage(st, "live", why, all, small ? this.clampParams(s, st.template, canaryParams(full)).params : full, false, false, small ? full : undefined);
     if (!ok.applied) throw new Error(`It stayed on paper: ${ok.outcome.replace(/^stayed on paper: /, "")}.`);
-    await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) { y.ready = null; if (small) y.canary = { full, since: nowIso(this.now()) }; } });
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; });
     await this.log("rule", why, [{ type: "promote", strategy_id: st.id, reason: why, sources: [`paper ${st.ready.result_pct}%`, "owner tapped Go live"], applied: true, outcome: ok.outcome }]);
     return this.view();
   }
 
   private rebuiltLately(st: Strategy) { return !!st.rebuilt_at && this.now() - Date.parse(st.rebuilt_at) < REBUILD_MS; }
-  private async restage(st: Strategy, stage: "paper" | "live", why: string, all: Rule[], params = st.params, keepClock = false, scaleUp = false): Promise<{ applied: boolean; outcome: string }> {
+  private async restage(st: Strategy, stage: "paper" | "live", why: string, all: Rule[], params = st.params, keepClock = false, scaleUp = false, /** Review 3: going live small: the full-size settings to keep, written in the same step as the rebuild. */ startCanary?: Record<string, unknown>): Promise<{ applied: boolean; outcome: string }> {
     const s = this.load();
     if (stage === "paper" && st.canary && params === st.params) params = st.canary.full; // back to paper at its full size
     // Review 2 (Nov 11, 2026): a live strategy on its small test stays small whoever rebuilds it (an AI tweak, a
@@ -1387,6 +1387,11 @@ export class SuperBot {
     if (stage === "live" && st.stage === "live" && st.canary && !scaleUp) {
       canaryFull = st.canary.full.amount_usd !== undefined && params.amount_usd !== undefined ? { ...params, amount_usd: st.canary.full.amount_usd } : { ...params };
       params = this.clampParams(s, st.template, canaryParams(canaryFull)).params;
+      // Review 3: more levels or buys multiply the dollars too. The full-size copy must still fit the budget and the
+      // coin's cap, and the money on the small test may not grow before it has passed.
+      const fitFull = this.fitsBudget(s, st, canaryFull);
+      if (fitFull) return { applied: false, outcome: `not changed: at full size ${fitFull}` };
+      if (committedUsd(st.template, params) > committedUsd(st.template, st.params) + 0.01) return { applied: false, outcome: "not changed: it can't put more money to work while on its small live test" };
     }
     if (stage === "live") {
       const fit = this.fitsBudget(s, st, params);
@@ -1408,7 +1413,8 @@ export class SuperBot {
       if (keepClock) y.rebuilt_at = nowIso(this.now());
       y.no_buys = false; y.stage = stage; if (!keepClock) { y.stage_since = nowIso(this.now()); if (price && price > 0) y.stage_px = price; }
       if (stage === "paper" || scaleUp) y.canary = null;
-      else if (canaryFull && y.canary) y.canary = { ...y.canary, full: canaryFull }; y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
+      else if (canaryFull && y.canary) y.canary = { ...y.canary, full: canaryFull };
+      else if (startCanary && stage === "live") y.canary = { full: startCanary, since: nowIso(this.now()) }; y.bot = built.bot; y.params = params; y.name = built.name; y.history.push({ ts: nowIso(this.now()), note: why });
       if (stage === "paper") x.paper_rules.push(...made.map((r) => r.id));
     });
     if (stage === "live") await this.handToAlwaysOn(made);
@@ -1703,7 +1709,7 @@ export class SuperBot {
     const s = this.load();
     if (s.halted) return;
     for (const st of s.strategies) {
-      if (!st.sizing || st.stage === "retired" || st.owner_paused || st.params.amount_usd === undefined || (st.stage === "live" && st.canary)) continue; // Review 2: sized once its small test passes
+      if (!st.sizing || st.stage === "retired" || st.owner_paused || st.params.amount_usd === undefined) continue; // (a strategy on its small live test is rebuilt at the small size: see restage)
       const sum = this.summaryOf(st, all);
       if (!sum || (sum.units_held ?? 0) > 1e-9) continue;
       const rules = this.rulesOf(s, st, all), oneShot = st.template === "dip";
@@ -1744,7 +1750,7 @@ export class SuperBot {
     const st = this.load().strategies.find((x) => x.id === id && x.stage !== "retired");
     if (!st) throw new Error("No such running strategy.");
     const sum = this.summaryOf(st, this.w.rules().list());
-    await this.update((x) => { const y = x.strategies.find((z) => z.id === id); if (y) { y.sizing = mode; y.sizing_base ??= Number(y.params.amount_usd) || undefined; y.sizing_seen = r2(sum?.result_usd ?? 0); y.history.push({ ts: nowIso(this.now()), note: `You set its trade size to ${mode === "compound" ? "add profits" : mode === "step_up" ? "bet bigger on wins" : "stay the same"}.` }); } });
+    await this.update((x) => { const y = x.strategies.find((z) => z.id === id); if (y) { y.sizing = mode; y.sizing_base ??= Number((y.canary?.full ?? y.params).amount_usd) || undefined; y.sizing_seen = r2(sum?.result_usd ?? 0); y.history.push({ ts: nowIso(this.now()), note: `You set its trade size to ${mode === "compound" ? "add profits" : mode === "step_up" ? "bet bigger on wins" : "stay the same"}.` }); } });
   }
 
   /** Last share per network, for Think 24/7 (brainInfo is synchronous). */

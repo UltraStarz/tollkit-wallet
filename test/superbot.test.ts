@@ -1028,11 +1028,20 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   st = W.bot.view().strategies[0] as any;
   const liveRule = W.store.list().find((r) => r.bot === st.bot && r.status === "active")!;
   check(adj.applied === true && st.params.amount_usd === small && liveRule.amount_usd === small && st.params.range_pct === 4 && st.canary.full.range_pct === 4 && st.canary.full.amount_usd === full, "an AI adjust can't lift it off the small size; its new setting is kept for full size too", { p: st.params, c: st.canary });
+  // Review 3: more levels would multiply the dollars: refused, at full size past the budget or just bigger than now.
+  W.advance(13 * 3_600_000);
+  const big = await (W.bot as any).apply({ type: "adjust", strategy_id: st.id, params: { levels: 40 }, reason: "More.", sources: [] });
+  const more = await (W.bot as any).apply({ type: "adjust", strategy_id: st.id, params: { levels: 7 }, reason: "One more.", sources: [] });
+  st = W.bot.view().strategies[0] as any;
+  check(big.applied === false && /at full size .*budget/.test(big.outcome) && more.applied === false && /can't put more money to work/.test(more.outcome) && st.params.levels === 6 && st.canary.full.levels === 6, "an adjust can't grow the money on a small test, by size or by count", { big: big.outcome, more: more.outcome });
   // The resize passes leave it alone.
   await (W.bot as any).update((x: any) => { x.sized = 2; const y = x.strategies[0]; y.sizing = "fixed"; y.sizing_base = full; y.sizing_seen = 5; y.rebuilt_at = undefined; });
   await W.bot.cycle(true);
   st = W.bot.view().strategies[0] as any;
   check(st.params.amount_usd === small && !!st.canary, "neither the balance resize nor the owner's sizing mode rebuilds it at full size", st.params);
+  await (W.bot as any).update((x: any) => { const y = x.strategies[0]; y.sizing = undefined; y.sizing_base = undefined; });
+  await W.bot.setSizing(st.id, "fixed");
+  check((W.bot.view().strategies[0] as any).sizing_base === full, "a sizing mode set during the small test starts from the full size, not the small one", (W.bot.view().strategies[0] as any).sizing_base);
   // Its full size is what counts against the budget.
   const s = (W.bot as any).load();
   check(/budget/.test((W.bot as any).fitsBudget(s, { id: "other", token: "SOL", chain: "base", template: "dip" }, { amount_usd: 200 - full * 5 + 1 }) ?? "") && (W.bot as any).fitsBudget(s, { id: "other", token: "SOL", chain: "base", template: "dip" }, { amount_usd: 200 - full * 5 - 1 }) === null, "the budget counts it at its full size, so its scale-up can't be crowded out");

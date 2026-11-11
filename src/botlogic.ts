@@ -411,7 +411,7 @@ function applyCustom(c: CustomSpec, s: BotState, a: Exclude<BotAction, null | { 
     cs.buys = 0; cs.step = 0; cs.peak = undefined; cs.round = 0; cs.anchor = price;
     if (a.tag === "downtrend") cs.out = true;
     if (a.tag === "stop") cs.rest_until = nowMs + STOP_REST_MS;
-    if (c.buy.type === "trend" && a.tag !== "trend") cs.wait_trend = true;
+    if (c.buy.type === "trend" && (a.tag === "step" || a.tag === "trail" || a.tag === "stop")) cs.wait_trend = true; // Review 3: not after a downtrend exit, which buys back when it lifts
     if (a.tag === "loss") s.done = true;
   }
   return { state: s, done: !!s.done, profit };

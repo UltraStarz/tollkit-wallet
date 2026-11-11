@@ -271,6 +271,14 @@ async function both(label: string, o: SimOptions, custom: CustomSpec, min: numbe
   s = applyFill(P, s, m, { usd: 0, got: 0n }, 101, 0, D).state;
   check(m?.side === "mark" && s.c?.wait_trend === false && decide(P, s, 101, 0, { decimals: D, daily: mid }) === null && (decide(P, s, 105, 0, { decimals: D, daily: up }) as any)?.side === "buy", "once the trend has paused it buys the next one", m);
   check(cleanCustomState({ wait_trend: true, anchor: 1 })?.wait_trend === true, "the wait survives the hand-off to the server");
+  // Review 3: a downtrend exit is not a profit exit: when the downtrend lifts it buys back.
+  { const TD: CustomSpec = { buy: { type: "trend", days: 100, gap_pct: 3 }, size: { usd: 100 }, protect: { downtrend: { hours: 24, gap_pct: 3 } }, limits: { max_usd: 100 } }, PD = { kind: "custom", custom: TD };
+    let d = applyFill(PD, {}, decide(PD, {}, 120, 0, { decimals: D, daily: up, closes: flat(30, 120) }) as any, { usd: 100, got: 833_333_333n }, 120, 0, D).state;
+    const out = decide(PD, d, 115, 0, { decimals: D, daily: up, closes: flat(30, 120) }) as any;
+    d = applyFill(PD, d, out, { usd: 95.8, got: 833_333_333n }, 115, 0, D).state;
+    const lift = decide(PD, d, 125, 0, { decimals: D, daily: up, closes: flat(30, 120) }) as any;
+    d = applyFill(PD, d, lift, { usd: 0, got: 0n }, 125, 0, D).state;
+    check(out?.tag === "downtrend" && d.c?.wait_trend !== true && lift?.side === "mark" && (decide(PD, d, 125, 0, { decimals: D, daily: up, closes: flat(30, 120) }) as any)?.side === "buy", "a trend bot that stepped out of a downtrend buys back when it lifts", d.c); }
   // A little short history still gives a trend reading; far too little doesn't.
   check(trendState([...flat(79, 100), 104], 100, 3)?.side === "in" && trendState([...flat(60, 100), 104], 100, 3) === null, "80 of 100 days is enough for the trend; 61 is not");
   // Scaling never takes a buy under $1, and a buy grown past the limit is cut to the room left.
