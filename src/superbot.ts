@@ -54,6 +54,36 @@ import { marketState, volScale, type MarketState } from "./botlogic.js";
  */
 /** Phase 3, step 3: the daily swing (%) above which Autopilot sizes a strategy down (see volScale; scripts/vol-size.mts). */
 export const VOL_TARGET_PCT = 3;
+/** Phase 3 (brief F, drawdown control): new strategies are sized by the room left under the loss limits: the full share with no loss, half when half the limit is used, never under a quarter. The stops themselves stay the hard floor. */
+export function lossScale(used: number | undefined): number { return used && used > 0 ? Math.max(0.25, 1 - used) : 1; }
+/**
+ * Phase 3, Gate 3 (Nov 11, 2026): rounds from a strategy's trades. A round runs from its first buy until what it
+ * bought is sold (under 1% left); its return is what it made over what it spent, in %. Practice and failed trades
+ * are left out.
+ */
+export function roundReturns(fills: { ts: string; ok: boolean; usd?: number; units?: number; side: "buy" | "sell"; paper?: boolean }[]): number[] {
+  const fs = fills.filter((f) => f.ok && !f.paper && (f.usd ?? 0) > 0 && (f.units ?? 0) > 0).sort((a, b) => a.ts.localeCompare(b.ts));
+  let u = 0, cost = 0, spent = 0, pnl = 0, top = 0; const out: number[] = [];
+  for (const f of fs) {
+    if (f.side === "buy") { u += f.units!; cost += f.usd!; spent += f.usd!; top = Math.max(top, u); continue; }
+    if (u <= 0) continue;
+    const q = Math.min(f.units!, u), c = (cost * q) / u;
+    pnl += f.usd! * (q / f.units!) - c; cost -= c; u -= q;
+    if (u <= top * 0.01) { if (spent > 0) out.push((pnl / spent) * 100); u = 0; cost = 0; spent = 0; pnl = 0; top = 0; }
+  }
+  return out;
+}
+/** How sure we are that the average round makes money: the normal approximation to a one-sided t-test (Φ(t)). Null with under five rounds. */
+export function edgeConfidence(rs: number[]): number | null {
+  const n = rs.length; if (n < 5) return null;
+  const m = rs.reduce((a, x) => a + x, 0) / n, sd = Math.sqrt(rs.reduce((a, x) => a + (x - m) ** 2, 0) / (n - 1));
+  if (!(sd > 0)) return m > 0 ? 1 : 0;
+  const z = m / (sd / Math.sqrt(n)), t = 1 / (1 + 0.2316419 * Math.abs(z)), d = 0.3989423 * Math.exp((-z * z) / 2);
+  const tail = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return z >= 0 ? 1 - tail : tail;
+}
+/** Phase 3, Gate 3: full size only with at least five finished live rounds and this much confidence their average makes money. */
+export const SCALE_UP_CONFIDENCE = 0.8;
 export const TRIAL = { minDays: 3, minTrades: 10, canaryShare: 0.25 };
 /** The result a strategy must beat over a stretch in which its coin moved coinPct: holding USDC (0) or half in the coin. */
 export function trialBar(coinPct: number | null): number { return Math.max(0, (coinPct ?? 0) / 2); }
@@ -181,6 +211,8 @@ interface State {
   moves_seen?: Record<string, MoveAlert>;
   halted: { reason: string; at: string; until: string | null } | null;
   marks: { day: string; day_start: number; week: string; week_start: number } | null;
+  /** Phase 3: how much of today's or this week's loss limit is used (0 to 1, the larger), for lossScale. */
+  loss_used?: number;
   /** Nov 8 (money audit): what strategies made or lost live before they left live (retired, back to paper), so the live
    * total and the loss stops don't jump when one leaves. */
   live_banked?: { result: number; earned: number };
@@ -828,6 +860,9 @@ export class SuperBot {
     if (s.halted) return;
     const dayLoss = s.marks.day_start - liveResult, weekLoss = s.marks.week_start - liveResult;
     const dayCap = s.settings.budget_usd * s.settings.daily_loss_pct / 100, weekCap = s.settings.budget_usd * s.settings.weekly_loss_pct / 100;
+    // Phase 3: the share of the loss limits used, so new strategies are sized down as a stop gets closer (lossScale).
+    const used = Math.round(Math.min(1, Math.max(0, dayCap > 0 ? dayLoss / dayCap : 0, weekCap > 0 ? weekLoss / weekCap : 0)) * 100) / 100;
+    if (used !== (s.loss_used ?? 0)) await this.update((x) => { x.loss_used = used; });
     let why: string | null = null, until: string | null = null;
     if (weekLoss >= weekCap) { why = `Weekly loss stop: down $${r2(weekLoss)} this week (limit $${r2(weekCap)}).`; const d = new Date(t); d.setUTCDate(d.getUTCDate() + 7 - ((d.getUTCDay() + 6) % 7)); /* Nov 10 (audit): next Monday, never today */ d.setUTCHours(0, 0, 0, 0); until = d.toISOString(); }
     else if (dayLoss >= dayCap) { why = `Daily loss stop: down $${r2(dayLoss)} today (limit $${r2(dayCap)}).`; until = `${today}T00:00:00.000Z`; until = nowIso(Date.parse(until) + 86_400_000); }
@@ -853,8 +888,10 @@ export class SuperBot {
       const beat = pct !== null && pct > bar, vs = coin !== null && coin > 0 ? ` and keeping half in ${st.symbol ? `$${st.symbol}` : st.token.length > 12 ? "the coin" : st.token} (+${r2(bar)}%)` : "";
       if (st.stage === "live" && st.canary) {
         // Phase 3, Gate 3: the small first live test. Passed: full size (once it holds nothing waiting on a sell).
-        if (enough && beat && !this.holds(st, all)) {
-          const why = `Live test at ${TRIAL.canaryShare * 100}% size: +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC${vs}. Now at full size.`;
+        const ids = new Set([st.bot, ...(st.prev_bots ?? [])].filter(Boolean)), rr = roundReturns(all.filter((r) => r.bot && ids.has(r.bot)).flatMap((r) => r.state.fills as any[]));
+        const conf = edgeConfidence(rr), avg = rr.length ? r2(rr.reduce((a, x) => a + x, 0) / rr.length) : 0;
+        if (enough && beat && conf !== null && conf >= SCALE_UP_CONFIDENCE && !this.holds(st, all)) {
+          const why = `Live test at ${TRIAL.canaryShare * 100}% size: +${pct}% after ${trades} trades in ${r2(days)} days beat holding USDC${vs}, and its ${rr.length} finished rounds averaged ${avg >= 0 ? "+" : ""}${avg}% (about ${Math.round(conf * 100)}% sure the average is above zero). Now at full size.`;
           const ok = await this.restage(st, "live", why, all, st.canary.full);
           if (ok.applied) {
             await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.canary = null; });
@@ -1628,6 +1665,7 @@ export class SuperBot {
     // Phase 3, step 3 (Nov 11, 2026): smaller when the coin is wild. The share is scaled by 3% / the coin's daily swing
     // over the last week, between a quarter and all of it. A custom strategy scales each buy itself (its size part).
     if (token && template !== "custom" && this.d.closes) { try { share = Math.floor(share * volScale(VOL_TARGET_PCT, await this.d.closes(chain, token)) * 100) / 100; } catch { /* full share */ } }
+    { const ls = lossScale(s.loss_used); if (ls < 1) share = Math.floor(share * ls * 100) / 100; } // Phase 3: closer to a loss stop, smaller
     this.shares[chain] = share;
     // Nov 7: a size the owner named in the AI chat ("a $100 first buy") is kept, inside the per-trade cap and the cash
     // still free; before, it was always replaced by the equal share ($1.81).

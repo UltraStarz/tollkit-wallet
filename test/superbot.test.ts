@@ -852,8 +852,14 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check((D.bot.view().strategies[0] as any).canary && D.bot.view().strategies[0].stage === "live", "the small test needs its own days and trades");
   await D.store.mutate((rules) => { const r = rules.find((x) => x.id === liveRule.id)!; r.state.ok_count = 11; r.state.spent_usd = 7.5; r.state.bought_units = 0.003; r.state.last_price = 2700; });
   D.advance(2.6 * 86_400_000); await D.bot.cycle(true);
+  check((D.bot.view().strategies[0] as any).canary && D.bot.view().strategies[0].stage === "live", "ahead of the bar but no finished rounds yet: it stays small");
+  // Five finished rounds, each a $4 buy sold for a little more: a steady edge.
+  const fills: any[] = []; let ts = Date.parse("2026-10-24T00:00:00Z");
+  for (const sell of [4.1, 4.15, 4.08, 4.2, 4.12]) { fills.push({ ts: new Date(ts += 3_600_000).toISOString(), ok: true, side: "buy", usd: 4, units: 0.0016 }, { ts: new Date(ts += 3_600_000).toISOString(), ok: true, side: "sell", usd: sell, units: 0.0016 }); }
+  await D.store.mutate((rules) => { const r = rules.find((x) => x.id === liveRule.id)!; r.state.fills = fills; });
+  D.advance(3_600_000); await D.bot.cycle(true);
   d = D.bot.view().strategies[0] as any;
-  check(d.stage === "live" && !d.canary && d.params.amount_usd === full && D.notes.some((n) => /passed its small live test/.test(n)) && D.bot.view().decisions.some((x: any) => /Now at full size/.test(x.assessment)), "the live test passed: full size", { p: d.params, c: d.canary, n: D.notes.at(-1) });
+  check(/5 finished rounds averaged \+3\.25% \(about \d+% sure/.test(d.history.at(-1).note) && d.stage === "live" && !d.canary && d.params.amount_usd === full && D.notes.some((n) => /passed its small live test/.test(n)) && D.bot.view().decisions.some((x: any) => /Now at full size/.test(x.assessment)), "the live test passed: full size", { p: d.params, c: d.canary, n: D.notes.at(-1) });
   // 5. A small test that loses goes back to paper at its full settings.
   const E = world({ decision: () => prop });
   px = 2500; (E.bot as any).d.price = async () => px;
@@ -925,6 +931,32 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   await W3.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
   await new Promise((r) => setTimeout(r, 30));
   check(W3.bot.view().strategies.length === 1 && !(W3.bot.view().strategies[0] as any).tested, "without a test hook it starts on paper untested");
+}
+
+// ─── Phase 3: closer to a loss stop, smaller new strategies ───
+{
+  const { lossScale } = await import("../src/superbot.js");
+  check(lossScale(0) === 1 && lossScale(undefined) === 1 && lossScale(0.4) === 0.6 && lossScale(0.9) === 0.25 && lossScale(1) === 0.25, "the scale: full with no loss, the room left otherwise, never under a quarter");
+  const prop = { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 50, drop_pct: 3, profit_pct: 3 }, reason: "Dip.", sources: [] }] };
+  const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
+  const size = async (used: number) => {
+    let n = 0; const W = world({ decision: () => (n++ === 0 ? prop : keep) });
+    await (W.bot as any).update((x: any) => { x.loss_used = used; });
+    await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 100, max_token_pct: 100 });
+    await new Promise((r) => setTimeout(r, 30));
+    return Number(W.bot.view().strategies[0]?.params.amount_usd);
+  };
+  const full = await size(0), half = await size(0.5);
+  check(full > 0 && Math.abs(half - full / 2) <= 0.02, "half the loss limit used: a new strategy gets half its share", { full, half });
+}
+
+// ─── Phase 3, Gate 3: rounds and how sure we are of their average ───
+{
+  const { roundReturns, edgeConfidence } = await import("../src/superbot.js");
+  const f = (side: "buy" | "sell", usd: number, units: number, i: number, extra: any = {}) => ({ ts: new Date(Date.UTC(2026, 9, 1, i)).toISOString(), ok: true, side, usd, units, ...extra });
+  const rr = roundReturns([f("buy", 10, 1, 1), f("buy", 10, 1, 2), f("sell", 11, 1, 3), f("sell", 10.5, 0.995, 4), f("buy", 5, 1, 5), f("sell", 4, 1, 6, { paper: true }), f("buy", 4, 0.5, 7, { ok: false }), f("sell", 4.5, 1, 8)]);
+  check(rr.length === 2 && Math.abs(rr[0]! - 7.75) < 0.01 && Math.abs(rr[1]! - (-10)) < 0.01, "rounds: two buys sold in two parts is one round (+7.75%); practice and failed trades are left out", rr);
+  check(edgeConfidence([1, 2, 3, 4]) === null && edgeConfidence([2, 3, 2.5, 3.2, 2.8])! > 0.99 && Math.abs(edgeConfidence([5, -5, 4, -4, 0])! - 0.5) < 0.01 && edgeConfidence([-1, -2, -1.5, -3, -2])! < 0.01, "confidence: none with under five rounds; near certain for a steady edge, a coin flip for none, near zero for losses");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

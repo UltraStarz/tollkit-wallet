@@ -14,7 +14,21 @@ import { describeRule, gridLevels, ruleProblem, type Rule, type RuleInput } from
 import type { CustomSpec } from "./botlogic.js";
 
 export interface TemplateField { key: string; label: string; kind: "usd" | "pct" | "int" | "choice"; default: number | string; min?: number; max?: number; choices?: [string, string][] }
-export interface Template { id: string; name: string; blurb: string; fields: TemplateField[]; risk: string }
+export interface Template { id: string; name: string; blurb: string; fields: TemplateField[]; risk: string;
+  /** Phase 3 (honest labels): how it did on the last year of prices at its default settings (tollkit-research/data/template-year.json). */
+  evidence?: string }
+/** Phase 3: the last year at default settings, Nov 2025 to Nov 2026, SOL and ETH (both fell), 0.1% bot fee. */
+const YEAR = (sol: string, eth: string, what: string) => `Last year at these settings: ${sol} on SOL, ${eth} on ETH (both coins fell). ${what}`;
+const EVIDENCE: Record<string, string> = {
+  dca: YEAR("−$124.45", "−$115.54", "Less than a quarter of what buying it all at once lost: it spreads your buys, it doesn't make money in a fall."),
+  dip: YEAR("−$22.89", "−$19.57", "About what buying at the start lost: one buy, and the price kept falling."),
+  grid: YEAR("−$90.55", "−$83.79", "Less than buying at once, because it buys slowly on the way down; it is not a way to beat holding cash."),
+  smart_dca: YEAR("−$108.12", "−$79.66", "Each round buys more as the price falls, so in a long fall it holds the coin at a loss."),
+  rebalance: YEAR("−$24.91", "−$19.87", "It keeps only part of the pot in the coin, so it lost less than buying at once, but it still lost."),
+  infinity_grid: YEAR("−$56.36", "−$47.46", "Many small trades; in a fall it ends up holding more of the coin."),
+  signal: YEAR("−$9.18", "−$8.12", "It bought once, and the price kept falling."),
+};
+
 
 /** Owner-facing catalog. Each builds plain rules the owner can read before turning them on. */
 export const TEMPLATES: Template[] = [
@@ -97,6 +111,8 @@ export function customFromFlat(v: Record<string, number | string>): CustomSpec {
   const vt = n("vol_target_pct") > 0 ? Math.min(20, Math.max(0.5, n("vol_target_pct"))) : 0;
   return { buy, size: { usd, ...(vt ? { vol_target_pct: vt } : {}) }, ...(trail || gain ? { sell } : {}), ...(Object.keys(protect).length ? { protect } : {}), limits: { max_usd: Math.round(usd * customBuys(v) * 100) / 100 } };
 }
+
+for (const t of TEMPLATES) if (EVIDENCE[t.id]) t.evidence = EVIDENCE[t.id];
 
 const round = (n: number) => Number(n.toPrecision(6));
 
