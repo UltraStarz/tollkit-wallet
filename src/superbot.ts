@@ -40,7 +40,7 @@ import { solRunnable } from "./alwayson-sol.js";
 import { describeRule, type Rule, type RuleStore } from "./rules.js";
 import type { TollkitWallet } from "./wallet.js";
 import { SUPERBOT_SYSTEM, DECIDE_TOOL, checkDecision, strategistUser } from "./strategist.js";
-import { marketState, type MarketState } from "./botlogic.js";
+import { marketState, volScale, type MarketState } from "./botlogic.js";
 
 /**
  * Phase 3, Nov 11, 2026 (trading brief, Gate 2 and Gate 3). Before: a paper strategy went live once it reached
@@ -52,6 +52,8 @@ import { marketState, type MarketState } from "./botlogic.js";
  *  - it goes live at canaryShare of its size first, and moves to full size only after the live test passes the same
  *    gate. A live strategy that loses goes back to paper as before.
  */
+/** Phase 3, step 3: the daily swing (%) above which Autopilot sizes a strategy down (see volScale; scripts/vol-size.mts). */
+export const VOL_TARGET_PCT = 3;
 export const TRIAL = { minDays: 3, minTrades: 10, canaryShare: 0.25 };
 /** The result a strategy must beat over a stretch in which its coin moved coinPct: holding USDC (0) or half in the coin. */
 export function trialBar(coinPct: number | null): number { return Math.max(0, (coinPct ?? 0) / 2); }
@@ -1600,6 +1602,9 @@ export class SuperBot {
     let share = shareUsd(s.settings.budget_usd, stable, liveSlots(s.settings.max_strategies), o);
     // ...and never more than the per-token cap leaves, so a practice strategy can still go live at its size.
     if (token) share = Math.max(0, Math.min(share, Math.floor((s.settings.budget_usd * s.settings.max_token_pct / 100 - s.strategies.filter((x) => x.stage !== "retired" && x.id !== self && x.chain === chain && x.token.toLowerCase() === token.toLowerCase()).reduce((a, x) => a + committedUsd(x.template, x.params), 0)) * 100) / 100));
+    // Phase 3, step 3 (Nov 11, 2026): smaller when the coin is wild. The share is scaled by 3% / the coin's daily swing
+    // over the last week, between a quarter and all of it. A custom strategy scales each buy itself (its size part).
+    if (token && template !== "custom" && this.d.closes) { try { share = Math.floor(share * volScale(VOL_TARGET_PCT, await this.d.closes(chain, token)) * 100) / 100; } catch { /* full share */ } }
     this.shares[chain] = share;
     // Nov 7: a size the owner named in the AI chat ("a $100 first buy") is kept, inside the per-trade cap and the cash
     // still free; before, it was always replaced by the equal share ($1.81).

@@ -240,5 +240,20 @@ async function both(label: string, o: SimOptions, custom: CustomSpec, min: numbe
   check(sides === "buy,sell" && buyDay > 120 && buyDay < 130 && sellDay > 160 && sellDay < 190 && r.pnl_usd > 0, "in the engine: buys early in the rise, sells to cash in the fall, once each, ahead", { sides, buyDay, sellDay, pnl: r.pnl_usd });
 }
 
+// ── Phase 3, step 3 (Nov 11, 2026): smaller when the market is wild ───────────────────────────────────────────────
+{
+  const { dailyVolPct, volScale } = await import("../src/botlogic.js");
+  // Hourly closes that swing a fixed amount: log returns alternate ±x, so the daily swing is x·√24 (a sample std, close to it).
+  const swing = (dailyPct: number, n = 200) => { const x = dailyPct / 100 / Math.sqrt(24); let p = 100; const out = [p]; for (let i = 1; i < n; i++) { p *= Math.exp(i % 2 ? x : -x); out.push(p); } return out; };
+  const v6 = dailyVolPct(swing(6))!, v2 = dailyVolPct(swing(2))!;
+  check(Math.abs(v6 - 6) < 0.1 && Math.abs(v2 - 2) < 0.1 && dailyVolPct(swing(6, 40)) === null && dailyVolPct(null) === null, "the daily swing from a week of hourly closes; nothing with under two days", { v6, v2 });
+  check(Math.abs(volScale(3, swing(6)) - 0.5) < 0.01 && volScale(3, swing(2)) === 1 && volScale(3, swing(30)) === 0.25 && volScale(undefined, swing(6)) === 1 && volScale(3, null) === 1, "the scale: target / swing, between a quarter and the full size; off or without history: full size");
+  const V: CustomSpec = { buy: { type: "price", at: 200 }, size: { usd: 40, vol_target_pct: 3 }, limits: { max_usd: 40 } };
+  const P = { kind: "custom", custom: V };
+  const calm = decide(P, {}, 100, 0, { decimals: D, closes: swing(2) }) as any, wild = decide(P, {}, 100, 0, { decimals: D, closes: swing(6) }) as any, none = decide(P, {}, 100, 0, { decimals: D, closes: null }) as any;
+  check(calm?.usd === 40 && Math.abs(wild?.usd - 20) < 0.5 && none?.usd === 40, "a custom bot's buy: full size when calm, about half at a 6% daily swing, full size without history", { calm: calm?.usd, wild: wild?.usd });
+  check(customProblem(V) === null && /0\.5% to 20%/.test(customProblem({ ...V, size: { usd: 40, vol_target_pct: 50 } }) ?? "") && describeCustom(V, "SOL")[1] === "$40 a time, smaller when daily swings pass 3%", "checked, and the card says it", describeCustom(V, "SOL")[1]);
+}
+
 console.log(`\ncustom: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

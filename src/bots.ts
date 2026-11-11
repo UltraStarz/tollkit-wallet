@@ -70,6 +70,7 @@ export const AP_CUSTOM: Template = { id: "custom", name: "Custom bot", blurb: "A
     { key: "max_buys", label: "Buys at most", kind: "int", default: 6, min: 1, max: 40 },
     { key: "hours", label: "Hours (the drop's window, or the schedule)", kind: "int", default: 24, min: 1, max: 720 },
     { key: "rsi_below", label: "RSI at or under", kind: "int", default: 40, min: 5, max: 60 },
+    { key: "vol_target_pct", label: "Smaller when the daily swing passes (%), 0 = off", kind: "pct", default: 3, min: 0, max: 20 },
     { key: "trend_days", label: "Trend: average of days (the gap is buy_pct)", kind: "int", default: 100, min: 20, max: 200 },
     { key: "sell_gain_pct", label: "Sell step at a gain of (%), 0 = none", kind: "pct", default: 3, min: 0, max: 1000 },
     { key: "sell_share_pct", label: "The step sells (%)", kind: "pct", default: 50, min: 1, max: 100 },
@@ -93,7 +94,8 @@ export function customFromFlat(v: Record<string, number | string>): CustomSpec {
   if (!trail && !gain && v.buy !== "trend") throw new Error("A custom bot needs a way to sell: a sell step or a trail."); // a trend bot sells when the trend turns
   const sell: NonNullable<CustomSpec["sell"]> = { ...(gain ? { steps: [{ gain_pct: gain, share_pct: trail ? n("sell_share_pct") || 50 : 100 }] } : {}), ...(trail ? { trail_pct: trail } : {}) };
   const days = Math.round(n("downtrend_days")), protect: NonNullable<CustomSpec["protect"]> = { ...(n("stop_pct") > 0 ? { stop_pct: Math.max(1, n("stop_pct")) } : {}), ...(days > 0 ? { downtrend: { hours: days * 24, gap_pct: n("downtrend_gap_pct") || 3 } } : {}) };
-  return { buy, size: { usd }, ...(trail || gain ? { sell } : {}), ...(Object.keys(protect).length ? { protect } : {}), limits: { max_usd: Math.round(usd * customBuys(v) * 100) / 100 } };
+  const vt = n("vol_target_pct") > 0 ? Math.min(20, Math.max(0.5, n("vol_target_pct"))) : 0;
+  return { buy, size: { usd, ...(vt ? { vol_target_pct: vt } : {}) }, ...(trail || gain ? { sell } : {}), ...(Object.keys(protect).length ? { protect } : {}), limits: { max_usd: Math.round(usd * customBuys(v) * 100) / 100 } };
 }
 
 const round = (n: number) => Number(n.toPrecision(6));

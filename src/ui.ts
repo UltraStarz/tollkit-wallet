@@ -1732,7 +1732,7 @@ function botRead(){var c=document.getElementById("bot_chain"),t=document.getElem
 // Nov 11, 2026: Build a bot. One bot from five parts (src/botlogic.ts kind "custom"). The words on each row come from
 // the wallet itself (/bots/preview), so the screen and the rule always say the same thing.
 var CB={chain:"solana",token:"SOL",edit:null,pick:{},keep:{},last:null,seq:0,pseq:0,parts:null,asked:false,err:null,busy:false,rp:null,rpDays:90,rpBusy:false,rpErr:null,
-spec:{buy:{type:"levels",step_pct:1,levels:10},size:{usd:25,grow:"none"},sell:{steps:[{gain_pct:5,share_pct:50}],trail_pct:4},protect:{downtrend:{hours:240,gap_pct:3}},limits:{max_usd:300}}};
+spec:{buy:{type:"levels",step_pct:1,levels:10},size:{usd:25,grow:"none",vol_target_pct:3},sell:{steps:[{gain_pct:5,share_pct:50}],trail_pct:4},protect:{downtrend:{hours:240,gap_pct:3}},limits:{max_usd:300}}};
 var CBP=[["buy","When to buy",'<path d="M12 5v14M6 13l6 6 6-6"/>'],["size","How much",'<circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10h4a1.5 1.5 0 010 3h-3a1.5 1.5 0 000 3h4"/>'],["sell","When to sell",'<path d="M12 19V5M6 11l6-6 6 6"/>'],["protect","Protection",'<path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/>'],["limits","Limits",'<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/>']];
 // Nov 11, 2026 (polish): fields carry their unit, choices are buttons, an empty box means "off", and only the fields a choice needs are shown.
 function cbF(id,label,val,unit,ph){var v=CB.keep[id]!==undefined?CB.keep[id]:(val===undefined||val===null||val===0?"":val);return '<label class="botf"><span>'+label+'</span><span class="cbu"><input id="'+id+'" type="number" step="any" min="0" inputmode="decimal" placeholder="'+(ph||"")+'" value="'+esc(String(v))+'">'+(unit?'<i>'+unit+'</i>':'')+'</span></label>'}
@@ -1751,7 +1751,7 @@ else if(t==="trend")h+=cbF("cb_b1","Average of",b.days||100,"days")+cbF("cb_b2",
 else h+=cbF("cb_b1","Hourly RSI at or under",b.below||30);
 h+='</div>'+H(CBH[t])}
 else if(k==="size"){var g=CB.pick.sg||s.size.grow||"none";
-h+=G+cbF("cb_s1","Each buy",s.size.usd,"$")+(g==="deeper"?cbF("cb_s2","Each further buy is",s.size.factor||1.5,"×"):"")+'</div>'+L("After that")+cbC("sg",[["none","Same size"],["wins","Bigger after wins"],["deeper","Bigger as it falls"]],g)+
+h+=G+cbF("cb_s1","Each buy",s.size.usd,"$")+(g==="deeper"?cbF("cb_s2","Each further buy is",s.size.factor||1.5,"×"):"")+'</div>'+L("Smaller when it's wild")+G+cbF("cb_s3","When daily swings pass",s.size.vol_target_pct||0,"%","Off")+'</div>'+H("Each buy shrinks (to a quarter at most) while the coin swings more than this in a day. On 2.5 years of prices it cut the worst drops without lowering results.")+L("After that")+cbC("sg",[["none","Same size"],["wins","Bigger after wins"],["deeper","Bigger as it falls"]],g)+
 H(g==="wins"?"25% bigger after each winning round, back to normal after a losing one.":g==="deeper"?"Each further buy in a round is that many times the one before.":"Every buy is the same size.")}
 else if(k==="sell"){var st=(s.sell&&s.sell.steps)||[],a=st[0]||{},c=st[1]||{};
 h+=L("First sale")+G+cbF("cb_l1","At a gain of",a.gain_pct||0,"%","Off")+cbF("cb_l2","Sell",a.share_pct||100,"% of it")+'</div>'+
@@ -1769,7 +1769,7 @@ function cbV(id){var e=document.getElementById(id);return e?e.value:""}
 function cbEdit(k){CB.edit=CB.edit===k?null:k;CB.pick={};CB.keep={};render()}
 function cbDone(){var k=CB.edit,s=CB.spec;
 if(k==="buy"){var t=CB.pick.bt||s.buy.type;s.buy=t==="schedule"?{type:t,every_hours:cbN("cb_b1")}:t==="drop"?{type:t,pct:cbN("cb_b1"),hours:cbN("cb_b2")||24}:t==="levels"?{type:t,step_pct:cbN("cb_b1"),levels:Math.round(cbN("cb_b2"))}:t==="price"?{type:t,at:cbN("cb_b1")}:t==="trend"?{type:"trend",days:Math.round(cbN("cb_b1")),gap_pct:cbN("cb_b2")}:{type:"rsi",below:cbN("cb_b1")}}
-else if(k==="size"){var g=CB.pick.sg||s.size.grow||"none";s.size={usd:cbN("cb_s1"),grow:g};if(g==="deeper")s.size.factor=cbN("cb_s2")||1.5}
+else if(k==="size"){var g=CB.pick.sg||s.size.grow||"none";s.size={usd:cbN("cb_s1"),grow:g};if(g==="deeper")s.size.factor=cbN("cb_s2")||1.5;if(cbN("cb_s3")>0)s.size.vol_target_pct=cbN("cb_s3")}
 else if(k==="sell"){var st=[],o={};if(cbN("cb_l1")>0)st.push({gain_pct:cbN("cb_l1"),share_pct:cbN("cb_l2")||100});if(cbN("cb_l3")>0)st.push({gain_pct:cbN("cb_l3"),share_pct:cbN("cb_l4")||100});if(st.length)o.steps=st;if(cbN("cb_l5")>0){o.trail_pct=cbN("cb_l5");if(cbN("cb_l6")>0)o.trail_after_pct=cbN("cb_l6")}s.sell=o}
 else if(k==="protect"){var pr={},pd=CB.pick.pd||(s.protect&&s.protect.downtrend?"on":"off");if(cbN("cb_p1")>0)pr.stop_pct=cbN("cb_p1");if(pd==="on")pr.downtrend={hours:Math.round((cbN("cb_p2")||10)*24),gap_pct:cbN("cb_p3")||3};s.protect=pr}
 else if(k==="limits"){s.limits={max_usd:cbN("cb_m1")};if(cbN("cb_m2")>0)s.limits.max_loss_usd=cbN("cb_m2")}

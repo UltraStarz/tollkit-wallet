@@ -57,7 +57,9 @@ export interface CustomSpec {
   buy: { type: "schedule"; every_hours: number } | { type: "drop"; pct: number; hours?: number } | { type: "levels"; step_pct: number; levels: number } | { type: "price"; at: number } | { type: "rsi"; below: number }
     /** Phase 3 (Nov 11, 2026): long or flat with the slow trend. Decided once a day from finished daily closes: holds the coin while the close is gap_pct over its `days`-day average, and sells everything to USDC once it is gap_pct under it. */
     | { type: "trend"; days: number; gap_pct: number };
-  size: { usd: number; grow?: "none" | "wins" | "deeper"; factor?: number };
+  size: { usd: number; grow?: "none" | "wins" | "deeper"; factor?: number;
+    /** Phase 3 (Nov 11, 2026): smaller when the market is wild. Each buy is scaled by target / the coin's daily swing over the last week (from hourly closes), between a quarter and the full size. */
+    vol_target_pct?: number };
   sell?: { steps?: { gain_pct: number; share_pct: number }[]; trail_pct?: number; trail_after_pct?: number };
   protect?: { stop_pct?: number; downtrend?: { hours: number; gap_pct: number } };
   limits: { max_usd: number; max_loss_usd?: number };
@@ -223,7 +225,7 @@ export function cleanCustom(x: any): CustomSpec | undefined {
   const b = x.buy, t = b.type;
   const buy = t === "schedule" ? { type: t, every_hours: n(b.every_hours) } : t === "drop" ? { type: t, pct: n(b.pct), ...opt("hours", n(b.hours)) } : t === "levels" ? { type: t, step_pct: n(b.step_pct), levels: n(b.levels) }
     : t === "trend" ? { type: t, days: n(b.days), gap_pct: n(b.gap_pct) } : t === "price" ? { type: t, at: n(b.at) } : t === "rsi" ? { type: t, below: n(b.below) } : { type: "none" };
-  const g = x.size.grow, size = { usd: n(x.size.usd), ...(g === "wins" || g === "deeper" || g === "none" ? { grow: g } : {}), ...opt("factor", n(x.size.factor)) };
+  const g = x.size.grow, size = { usd: n(x.size.usd), ...(g === "wins" || g === "deeper" || g === "none" ? { grow: g } : {}), ...opt("factor", n(x.size.factor)), ...opt("vol_target_pct", n(x.size.vol_target_pct)) };
   const sl = x.sell && typeof x.sell === "object" ? x.sell : undefined, steps = Array.isArray(sl?.steps) ? sl.steps.slice(0, 7).map((s: any) => ({ gain_pct: n(s?.gain_pct), share_pct: n(s?.share_pct) })) : undefined;
   const sell = sl ? { ...(steps ? { steps } : {}), ...opt("trail_pct", n(sl.trail_pct)), ...opt("trail_after_pct", n(sl.trail_after_pct)) } : undefined;
   const pr = x.protect && typeof x.protect === "object" ? x.protect : undefined, dt = pr?.downtrend && typeof pr.downtrend === "object" ? { hours: n(pr.downtrend.hours), gap_pct: n(pr.downtrend.gap_pct) } : undefined;
@@ -243,9 +245,24 @@ export function cleanCustomState(x: any): CustomState | undefined {
   return out as CustomState;
 }
 /** The dollars a custom bot's next buy spends. */
-export function customSize(c: CustomSpec, cs: CustomState): number {
+export function customSize(c: CustomSpec, cs: CustomState, closes?: number[] | null): number {
   const f = c.size.grow === "wins" ? Math.pow(1.25, Math.min(5, cs.wins ?? 0)) : c.size.grow === "deeper" ? Math.pow(c.size.factor ?? 1.5, cs.buys ?? 0) : 1;
-  return +(c.size.usd * f).toFixed(2);
+  return +(c.size.usd * f * volScale(c.size.vol_target_pct, closes)).toFixed(2);
+}
+/** Phase 3: a coin's typical daily swing, in %: the standard deviation of hourly log returns over the last `hours`, times √24. Null with under two days of closes. */
+export function dailyVolPct(closes: number[] | null | undefined, hours = 168): number | null {
+  if (!closes || closes.length < 49) return null;
+  const xs = closes.slice(-(hours + 1)), r: number[] = [];
+  for (let i = 1; i < xs.length; i++) if (xs[i]! > 0 && xs[i - 1]! > 0) r.push(Math.log(xs[i]! / xs[i - 1]!));
+  if (r.length < 48) return null;
+  const m = r.reduce((a, x) => a + x, 0) / r.length, v = r.reduce((a, x) => a + (x - m) ** 2, 0) / (r.length - 1);
+  return Math.sqrt(v) * Math.sqrt(24) * 100;
+}
+/** Phase 3: target / the daily swing, between 0.25 and 1. Without a target or enough history: 1 (the full size). */
+export function volScale(targetPct: number | undefined, closes: number[] | null | undefined): number {
+  if (!targetPct) return 1;
+  const v = dailyVolPct(closes);
+  return v && v > 0 ? Math.min(1, Math.max(0.25, targetPct / v)) : 1;
 }
 /** Phase 3: where the last finished daily close sits against its average: "in" (gap over), "out" (gap under), "hold" (between), or null without enough days. */
 export function trendState(daily: number[] | null | undefined, days: number, gapPct: number): { side: "in" | "out" | "hold"; close: number; mean: number } | null {
@@ -296,7 +313,7 @@ function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, 
   // 3. Buying.
   if (cs.out || (cs.rest_until && nowMs < cs.rest_until)) return null;
   if (c.limits.max_loss_usd && (cs.realized ?? 0) <= -c.limits.max_loss_usd) return null; // past its loss limit: no new round
-  const usd = customSize(c, cs), b = c.buy, n = cs.buys ?? 0;
+  const usd = customSize(c, cs, closes), b = c.buy, n = cs.buys ?? 0;
   if (usd < MIN_TRADE_USD || cost + usd > c.limits.max_usd * 1.005 + 0.005) return null; // 0.5% of room: a fee paid beside the swap counts in the cost and must not cancel the last buy
   const buy = (why: string): BotAction => ({ side: "buy", usd, why });
   switch (b.type) {
@@ -471,6 +488,7 @@ export function customProblem(c: CustomSpec | undefined): string | null {
   else if (b.type === "rsi") { if (!num(b.below, 5, 60)) return "Buy on RSI: a level from 5 to 60."; }
   else return "Pick when to buy: on a schedule, after a drop, at levels, at a price, on RSI, or with the trend.";
   if (!num(c.size.usd, MIN_TRADE_USD, 1_000_000)) return `Each buy needs at least $${MIN_TRADE_USD}.`;
+  if (c.size.vol_target_pct !== undefined && !num(c.size.vol_target_pct, 0.5, 20)) return "Smaller when it's wild: a daily swing of 0.5% to 20%.";
   if (c.size.grow !== undefined && !["none", "wins", "deeper"].includes(c.size.grow)) return "Pick how the size changes: the same, bigger after wins, or bigger as it falls.";
   if (c.size.grow === "deeper" && c.size.factor !== undefined && !num(c.size.factor, 1, 3)) return "Each further buy can be 1 to 3 times the one before.";
   if (!num(c.limits.max_usd, c.size.usd, 10_000_000)) return "The limit must be at least one buy.";

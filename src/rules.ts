@@ -177,7 +177,7 @@ export function describeCustom(c: CustomSpec | undefined, t: string): string[] {
     : b.type === "price" ? `Buys ${t} at ${$(b.at)} or under`
     : b.type === "trend" ? `Holds ${t} while its daily close is ${b.gap_pct}% over its ${b.days}-day average; sells to USDC ${b.gap_pct}% under it`
     : `Buys ${t} when hourly RSI is ${b.below} or under`);
-  out.push(`${$(c.size.usd)} a time${c.size.grow === "wins" ? ", growing with wins" : c.size.grow === "deeper" ? `, ${c.size.factor ?? 1.5}× on each further buy` : ""}`);
+  out.push(`${$(c.size.usd)} a time${c.size.grow === "wins" ? ", growing with wins" : c.size.grow === "deeper" ? `, ${c.size.factor ?? 1.5}× on each further buy` : ""}${c.size.vol_target_pct ? `, smaller when daily swings pass ${c.size.vol_target_pct}%` : ""}`);
   const st = c.sell?.steps ?? [], tr = c.sell?.trail_pct;
   out.push(!st.length && !tr ? (b.type === "trend" ? "Sells only when the trend turns" : "Never sells for profit") : `Sells ${st.map((x) => `${x.share_pct >= 100 ? "the rest" : `${x.share_pct}%`} at +${x.gain_pct}%`).join(", then ")}${st.length && tr ? ", then " : ""}${tr ? `${st.length ? "trails the rest" : "trails"} ${tr}% under its high${c.sell?.trail_after_pct ? ` once it is up ${c.sell.trail_after_pct}%` : ""}` : ""}`);
   if (c.protect?.stop_pct) out.push(`Stops ${c.protect.stop_pct}% under its cost, then waits a day`);

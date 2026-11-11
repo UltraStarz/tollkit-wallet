@@ -869,5 +869,24 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(e1.stage === "paper" && !e1.canary && eFull > 0 && e1.params.amount_usd === eFull, "a losing small test goes back to paper at its full settings", { st: e1.stage, p: e1.params, c: e1.canary });
 }
 
+// ─── Phase 3, step 3: Autopilot sizes a strategy down while its coin is wild ───
+{
+  const { VOL_TARGET_PCT } = await import("../src/superbot.js");
+  const swing = (dailyPct: number, n = 200) => { const x = dailyPct / 100 / Math.sqrt(24); let p = 2500; const out = [p]; for (let i = 1; i < n; i++) { p *= Math.exp(i % 2 ? x : -x); out.push(p); } return out; };
+  const prop = { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 50, drop_pct: 3, profit_pct: 3 }, reason: "Dip.", sources: [] }] };
+  const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
+  const size = async (daily: number | null) => {
+    let n = 0; const W = world({ decision: () => (n++ === 0 ? prop : keep), ...(daily === null ? {} : { closes: async () => swing(daily) }) });
+    await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 100, max_token_pct: 100 });
+    await new Promise((r) => setTimeout(r, 30));
+    return Number(W.bot.view().strategies[0]?.params.amount_usd);
+  };
+  const full = await size(null), calm = await size(2), wild = await size(6);
+  check(VOL_TARGET_PCT === 3 && full > 0 && calm === full && Math.abs(wild - full / 2) <= 1, "a dip strategy: the full share when ETH is calm or there's no history; about half at a 6% daily swing", { full, calm, wild });
+  const { buildBot } = await import("../src/bots.js");
+  const cb = buildBot("custom", "ETH", "base", { amount_usd: 20, buy: "levels", buy_pct: 1, max_buys: 5, trail_pct: 3 }, undefined).rules[0]!.custom!;
+  check(cb.size.vol_target_pct === 3 && buildBot("custom", "ETH", "base", { amount_usd: 20, buy: "levels", buy_pct: 1, max_buys: 5, trail_pct: 3, vol_target_pct: 0 }, undefined).rules[0]!.custom!.size.vol_target_pct === undefined, "Autopilot's custom bots shrink each buy themselves (3% by default, 0 turns it off)", cb.size);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
