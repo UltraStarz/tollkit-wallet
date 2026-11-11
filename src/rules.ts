@@ -16,9 +16,9 @@ import { z } from "zod";
 import { CHAIN_ENUM } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
-import { botProblem, type BotState } from "./botlogic.js";
+import { botProblem, type BotState, type CustomSpec } from "./botlogic.js";
 
-export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid", "alert", "smart_dca", "rebalance", "infinity_grid", "twap", "signal_buy", "signal_sell", "range"] as const;
+export const RULE_KINDS = ["limit_buy", "limit_sell", "stop_loss", "take_profit", "trailing_stop", "dca", "grid", "alert", "smart_dca", "rebalance", "infinity_grid", "twap", "custom", "signal_buy", "signal_sell", "range"] as const;
 /** 0.9.9: momentum signals a signal_buy / signal_sell rule waits for (src/indicators.ts checkSignal). */
 export const SIGNALS = ["rsi_below", "rsi_above", "macd_up", "macd_down", "breakout_up", "breakout_down"] as const;
 export type Signal = (typeof SIGNALS)[number];
@@ -93,6 +93,8 @@ export const RuleInput = z.object({
   side: z.enum(["buy", "sell"]).optional(),
   pieces: z.number().int().min(2).max(100).optional(),
   hours: z.number().min(0.25).max(168).optional(),
+  /** Nov 11, 2026, custom: a bot built from five parts (src/botlogic.ts CustomSpec), checked by customProblem. */
+  custom: z.custom<CustomSpec>((v) => v === undefined || (typeof v === "object" && v !== null)).optional(),
   /** 0.9.9, signal_buy / signal_sell: trade when a momentum signal fires on hourly or 4-hour closes. value: the RSI
    *  level (default 30 / 70) or, for a breakout, how many candles back (default 20). times: how often (default 1). */
   when: z.object({ signal: z.enum(SIGNALS), tf: z.enum(["1h", "4h"]).optional(), value: z.number().positive().max(200).optional() }).optional(),
@@ -165,6 +167,23 @@ export interface Rule extends RuleInput {
 }
 
 /** Plain-language summary, shown to the owner before a rule is turned on. */
+/** A custom bot's five parts in plain words, one short phrase each (the Bots screen shows them as tags). */
+export function describeCustom(c: CustomSpec | undefined, t: string): string[] {
+  if (!c) return ["Custom bot"];
+  const b = c.buy, $ = (n: number) => `$${n.toLocaleString("en-US", { maximumFractionDigits: n < 1 ? 6 : 2 })}`, out: string[] = [];
+  out.push(b.type === "schedule" ? `Buys ${t} every ${b.every_hours % 24 === 0 ? `${b.every_hours / 24 === 1 ? "day" : `${b.every_hours / 24} days`}` : `${b.every_hours} hours`}`
+    : b.type === "drop" ? `Buys ${t} after a ${b.pct}% drop in ${(b.hours ?? 24) === 24 ? "a day" : `${b.hours} hours`}`
+    : b.type === "levels" ? `Buys ${t} every ${b.step_pct}% down, up to ${b.levels} times`
+    : b.type === "price" ? `Buys ${t} at ${$(b.at)} or under` : `Buys ${t} when hourly RSI is ${b.below} or under`);
+  out.push(`${$(c.size.usd)} a time${c.size.grow === "wins" ? ", growing with wins" : c.size.grow === "deeper" ? `, ${c.size.factor ?? 1.5}× on each further buy` : ""}`);
+  const st = c.sell?.steps ?? [], tr = c.sell?.trail_pct;
+  out.push(!st.length && !tr ? "Never sells for profit" : `Sells ${st.map((x) => `${x.share_pct >= 100 ? "the rest" : `${x.share_pct}%`} at +${x.gain_pct}%`).join(", then ")}${st.length && tr ? ", then " : ""}${tr ? `${st.length ? "trails the rest" : "trails"} ${tr}% under its high` : ""}`);
+  if (c.protect?.stop_pct) out.push(`Stops ${c.protect.stop_pct}% under its cost`);
+  if (c.protect?.downtrend) out.push("Sells to USDC in a downtrend");
+  out.push(`${$(c.limits.max_usd)} at most${c.limits.max_loss_usd ? `, stops for good after ${$(c.limits.max_loss_usd)} lost` : ""}`);
+  return out;
+}
+
 export function describeRule(r: RuleInput): string {
   const t = r.token.length > 12 ? `${r.token.slice(0, 6)}…${r.token.slice(-4)}` : r.token.toUpperCase();
   const $ = (n?: number) => (n === undefined ? "?" : n > 0 && n < 0.01 ? `$${n.toPrecision(2)}` : `$${n.toLocaleString("en-US", Number.isInteger(n) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`); // 0.9.9: dollars to the cent
@@ -186,6 +205,7 @@ export function describeRule(r: RuleInput): string {
     case "smart_dca": return `Smart DCA: buy ${$(r.amount_usd)} of ${t}, then ${r.safety} more ${r.safety === 1 ? "time" : "times"} every ${r.step_pct}% lower (each ${r.scale}× the last); sell it all ${r.profit_pct}% above the average cost, and repeat${on}`;
     case "rebalance": return `Rebalance ${$(r.amount_usd)} to ${r.target_pct}% ${t} / ${100 - (r.target_pct ?? 0)}% USDC whenever it drifts ${r.band_pct} points${on}`;
     case "infinity_grid": return `Infinity grid: keep ${$(r.amount_usd)} of ${t}, selling the extra every ${r.step_pct}% up and buying back every ${r.step_pct}% down${r.lower_price ? ` (no buys under ${$(r.lower_price)})` : ""}${on}`;
+    case "custom": return `${describeCustom(r.custom, t).join("; ")}${on}`;
     case "twap": return r.side === "sell" ? `Split sell: ${sell} in ${r.pieces} parts over ${r.hours} ${r.hours === 1 ? "hour" : "hours"}${on}` : `Split buy: ${$(r.amount_usd)} of ${t} in ${r.pieces} parts over ${r.hours} ${r.hours === 1 ? "hour" : "hours"}${on}`;
     case "signal_buy": case "signal_sell": {
       const w = r.when, tf = w?.tf === "4h" ? "4-hour" : "hourly", v = w?.value;
@@ -237,7 +257,7 @@ export function ruleProblem(r: RuleInput): string | null {
     if (/^(USDC|USDT)$/i.test(r.token)) return "Rules trade an asset against USDC; the token can't be a stablecoin.";
     return null;
   }
-  if (["smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind)) {
+  if (["smart_dca", "rebalance", "infinity_grid", "twap", "custom"].includes(r.kind)) {
     if (/^(USDC|USDT)$/i.test(r.token)) return "Bots trade an asset against USDC; the token can't be a stablecoin.";
     if (r.kind === "twap" && r.side === "sell" && r.amount_usd) return "A split sell takes sell_percent, not amount_usd.";
     return botProblem(r as any);

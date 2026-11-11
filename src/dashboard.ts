@@ -43,7 +43,7 @@ import { Setups, showSetup, needsPassword, type SetupRequest } from "./setups.js
 import { catalogView, refreshCatalog, setHidden } from "./tollkit-tools.js";
 import { SuperBot, type SuperBotDeps } from "./superbot.js";
 import { solRunnable } from "./alwayson-sol.js";
-const BOT_KINDS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"];
+const BOT_KINDS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap", "custom"];
 import { serverRunnable } from "./alwayson.js";
 import { loadTelegram } from "./wallet.js";
 import { notify } from "./telegram.js";

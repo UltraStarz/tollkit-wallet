@@ -76,6 +76,7 @@ export function serverRunnable(r: Rule, chains: EvmChain[], kinds?: string[]): s
   if (r.token.toUpperCase() !== "ETH") return "Only ETH rules can run while the app is closed for now.";
   if (isBotKind(r.kind)) {
     if (!(kinds ?? []).includes(r.kind)) return `Tollkit's server doesn't run this bot 24/7 on ${chainName(r.chain)} yet; it runs while the app is open.`;
+    if (r.kind === "custom") return "Custom bots run while the app is open for now; 24/7 for them is coming.";
     return r.kind === "twap" && r.side === "sell" ? null : r.amount_usd ? null : "Needs a dollar amount.";
   }
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";

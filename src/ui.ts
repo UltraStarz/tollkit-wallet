@@ -1417,7 +1417,7 @@ return devBanner()+apStat()+msg()+(S.trade_mode==="python"?pyCard():"")+(prop.le
 var BOTK=["dip","ladder","grid","smart_dca","rebalance","infinity_grid","range"];
 function isBotTpl(t){return BOTK.indexOf(t)>=0}
 // 0.9.7: a new bot can be switched to Run 24/7 as it starts: SOL bots on Solana, ETH bots on the networks TOLLkit's server lists.
-function bot247(){if(!isBotTpl(BOT.tpl))return false;if(BOT.chain==="solana")return !!aoSol()&&(String(BOT.token).toUpperCase()==="SOL"||aoCoin(BOT.token))&&(aoSol().config.kinds||[]).indexOf(BOT.tpl)>=0;var A=aoCfg();return !!A&&A.config.chains.indexOf(BOT.chain)>=0&&String(BOT.token).toUpperCase()==="ETH"&&(A.config.kinds||[]).indexOf(BOT.tpl)>=0}
+function bot247(){if(!isBotTpl(BOT.tpl))return false;if(BOT.chain==="solana")return !!aoSol()&&(String(BOT.token).toUpperCase()==="SOL"||aoCoin(BOT.token))&&(aoSol().config.kinds||[]).indexOf(BOT.tpl)>=0;var A=aoCfg();return !!A&&(A.config.chains||[]).indexOf(BOT.chain)>=0&&String(BOT.token).toUpperCase()==="ETH"&&(A.config.kinds||[]).indexOf(BOT.tpl)>=0}
 // 0.9.13: every rule of an Autopilot strategy lives on the Autopilot and Bots tabs, never under My orders.
 function ruleIsBot(r){return (!!r.bot&&isBotTpl(r.template))||rIsAP(r)}
 function myBots(){return (S.bots||[]).filter(function(b){return isBotTpl(b.template)})}

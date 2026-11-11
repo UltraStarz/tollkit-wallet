@@ -94,6 +94,7 @@ export function coinMint(r: Pick<Rule, "token">): string | null {
 export function solRunnable(r: Rule): string | null {
   if (r.chain !== "solana") return "Not a Solana rule.";
   if (!isSolRule(r) && !coinMint(r)) return "Only SOL and Solana coins (by their address) can run 24/7.";
+  if (r.kind === "custom") return "Custom bots run while the app is open for now; 24/7 for them is coming."; // Nov 11, 2026: the server doesn't run the five-part bot yet
   if (isBot(r)) return r.kind === "twap" && r.side === "sell" ? null : r.amount_usd ? null : "Needs a dollar amount.";
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
   // 0.9.13: a step that waits for another (a dip buy's take-profit) runs 24/7 on SOL; on other coins only while the app is open.

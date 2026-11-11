@@ -124,7 +124,7 @@ export class Market {
   }
 
   /**
-   * Hourly closes as the app would have them at time t (src/indicators.ts hourlyCloses): up to 199 finished hours
+   * Hourly closes as the app would have them at time t (src/indicators.ts hourlyCloses): up to 263 finished hours
    * and the hour in progress, read at most every 10 minutes. Oldest first. Null before any hour has finished.
    */
   hourly(t: number): number[] | null {
@@ -141,7 +141,7 @@ export class Market {
     this.hBucket = bucket;
     if (done < 1) return (this.hCloses = null);
     const out: number[] = [];
-    for (let j = Math.max(0, done - 199); j < done; j++) out.push(this.hours[j]!);
+    for (let j = Math.max(0, done - 263); j < done; j++) out.push(this.hours[j]!);
     out.push(this.priceAt(at));
     return (this.hCloses = out);
   }
@@ -438,9 +438,11 @@ export class Sim {
     if (isBotKind(r.kind)) {
       // A split sell fixes its total from the wallet's balance on its first part: the engine looks.
       if (r.kind === "twap" && r.side === "sell" && r.state.bot?.sell_total === undefined) return (now) => next > now;
-      const st: BotState = { ...(r.state.bot ?? {}), ...(r.kind === "grid" && r.state.grid ? { grid: r.state.grid } : {}) }, opt = { decimals: m.token.decimals };
+      const st: BotState = { ...(r.state.bot ?? {}), ...(r.kind === "grid" && r.state.grid ? { grid: r.state.grid } : {}) }, opt: { decimals: number; closes?: number[] | null } = { decimals: m.token.decimals };
+      const custom = r.kind === "custom";
       return (now) => {
         if (next > now) return true;
+        if (custom) opt.closes = m.hourly(now); // the same closes the engine would be handed at this moment
         const a = decide(r as any, st, m.seen, now, opt);
         return !a || (a.side === "buy" && !!holdBuy?.(r));
       };

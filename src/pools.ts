@@ -15,7 +15,7 @@
  * may take in total.
  */
 export type Tier = 0 | 1 | 2 | 3;
-const BOTS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"];
+const BOTS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap", "custom"];
 
 export function sellTier(kind: string): Tier {
   if (kind === "stop_loss" || kind === "trailing_stop") return 0;

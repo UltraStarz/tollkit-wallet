@@ -13,8 +13,11 @@
  *                  down it buys back to amount_usd; never buys below `lower_price`. No top.
  *   twap           one big buy (amount_usd) or sell (sell_percent of the coin) in `pieces` equal parts spread
  *                  over `hours`.
+ *   custom         Nov 11, 2026: a bot built from five parts the owner (or the AI) chooses: when to buy, how much,
+ *                  when to sell, protection, limits. See CustomSpec. It works in rounds: a round starts with a buy
+ *                  while it holds nothing and ends when everything is sold.
  */
-export const BOT_KINDS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"] as const;
+export const BOT_KINDS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap", "custom"] as const;
 export type BotKind = (typeof BOT_KINDS)[number];
 export const isBotKind = (k: string): k is BotKind => (BOT_KINDS as readonly string[]).includes(k);
 /** Smallest trade a bot makes, in dollars: below this, rounding and fees eat it. */
@@ -27,6 +30,48 @@ export interface BotParams {
   step_pct?: number; safety?: number; scale?: number; profit_pct?: number;
   target_pct?: number; band_pct?: number;
   side?: "buy" | "sell"; sell_percent?: number; pieces?: number; hours?: number;
+  custom?: CustomSpec;
+}
+/**
+ * The five parts of a custom bot. Percentages are plain numbers (5 = 5%).
+ *   buy      when a round starts, and (levels, schedule) when it adds to one:
+ *            schedule  every `every_hours`
+ *            drop      when the price is `pct` below where it was `hours` ago (24 unless given)
+ *            levels    each `step_pct` below the anchor, up to `levels` buys a round. The anchor is the highest price
+ *                      seen while it holds nothing (the price it last sold everything at, to begin with)
+ *            price     when the price is at or below `at`
+ *            rsi       when hourly RSI(14) is at or below `below`
+ *   size     `usd` a buy. grow "wins": 25% bigger after each winning round (up to 5 in a row), back to `usd` after a
+ *            losing one. grow "deeper": each further buy in a round is `factor` times the one before.
+ *   sell     steps: when the price is `gain_pct` over the average cost, sell `share_pct` of what it holds (the last
+ *            step should be 100 unless a trail takes the rest). trail_pct: once the steps are done (and the gain has
+ *            reached `trail_after_pct`, if given), sell everything when the price falls that far from its high.
+ *            Neither: it only sells for protection.
+ *   protect  stop_pct: sell everything when the price is that far under the average cost. downtrend: sell everything
+ *            and stop buying when the price is `gap_pct` under its `hours`-hour average; buy again once it is
+ *            `gap_pct` over it.
+ *   limits   max_usd: the most it may have in the coin (at cost). max_loss_usd: when it is down this much in all, it
+ *            sells everything and stops for good.
+ */
+export interface CustomSpec {
+  buy: { type: "schedule"; every_hours: number } | { type: "drop"; pct: number; hours?: number } | { type: "levels"; step_pct: number; levels: number } | { type: "price"; at: number } | { type: "rsi"; below: number };
+  size: { usd: number; grow?: "none" | "wins" | "deeper"; factor?: number };
+  sell?: { steps?: { gain_pct: number; share_pct: number }[]; trail_pct?: number; trail_after_pct?: number };
+  protect?: { stop_pct?: number; downtrend?: { hours: number; gap_pct: number } };
+  limits: { max_usd: number; max_loss_usd?: number };
+}
+/** What a custom bot remembers between checks. */
+export interface CustomState {
+  /** Levels: the price its buys are measured from. */
+  anchor?: number;
+  /** This round: buys made, sell steps done, the highest price seen since the steps finished. */
+  buys?: number; step?: number; peak?: number;
+  /** Schedule: when the next buy is due (ms). */
+  next_at?: number;
+  /** Stepped out of a downtrend: no buys until the price is back over its average. */
+  out?: boolean;
+  /** Dollars made on everything sold so far, this round's share of it, and winning rounds in a row. */
+  realized?: number; round?: number; wins?: number;
 }
 export interface GridSlots { units: (number | null)[]; cost: (number | null)[]; atomic: (string | null)[] }
 export interface BotState {
@@ -44,13 +89,15 @@ export interface BotState {
   /** Split order: parts done, when the next is due (ms), and the total to sell once fixed. */
   pieces?: number; next_at?: number; sell_total?: string;
   grid?: GridSlots;
+  /** Custom bot (see CustomState). */
+  c?: CustomState;
   /** Counts every applied fill, so the newer copy (app or server) wins. */
   v?: number;
 }
 export type BotAction =
   | { side: "buy"; usd: number; slot?: number; why: string }
-  | { side: "sell"; atomic: string; slot?: number; why: string; sell_total?: string }
-  | { side: "mark"; ref: number; why: string }
+  | { side: "sell"; atomic: string; slot?: number; why: string; sell_total?: string; /** Custom bot: why it sold ("step", "trail", "stop", "downtrend", "loss"). */ tag?: string }
+  | { side: "mark"; ref: number; why: string; /** Custom bot: what to remember. */ c?: Partial<CustomState> }
   | null;
 
 const big = (s?: string | null) => BigInt(s ?? "0");
@@ -71,6 +118,7 @@ export function largestBuy(p: BotParams): number {
     case "smart_dca": return a * Math.pow(p.scale ?? 1, p.safety ?? 0);
     case "rebalance": return a * Math.max(pct(p.target_pct), 1 - pct(p.target_pct));
     case "twap": return p.side === "sell" ? 0 : a / Math.max(1, p.pieces ?? 1);
+    case "custom": { const c = p.custom; if (!c) return 0; const f = c.size.grow === "wins" ? Math.pow(1.25, 5) : c.size.grow === "deeper" && c.buy.type === "levels" ? Math.pow(c.size.factor ?? 1.5, Math.max(0, c.buy.levels - 1)) : 1; return Math.min(c.limits.max_usd, c.size.usd * f); }
     default: return a;
   }
 }
@@ -88,10 +136,11 @@ export function avgCost(s: BotState, decimals: number): number | null {
  * What to do now. `avail`: the most of the coin the bot may sell right now (its balance after the gas reserve, or
  * on the server the allowance); a split sell fixes its total from it on the first part.
  */
-export function decide(p: BotParams, s: BotState, price: number, nowMs: number, o: { decimals: number; avail?: bigint }): BotAction {
+export function decide(p: BotParams, s: BotState, price: number, nowMs: number, o: { decimals: number; avail?: bigint; /** Hourly closes, oldest first (a custom bot's drop, RSI and downtrend parts read them). */ closes?: number[] | null }): BotAction {
   if (s.done || !(price > 0)) return null;
   const d = o.decimals, held = big(s.units), heldU = toUnits(held, d), value = heldU * price;
   switch (p.kind) {
+    case "custom": return decideCustom(p.custom!, s, price, nowMs, held, value, o.closes ?? null);
     case "grid": {
       const L = gridLevels(p), g = s.grid ?? emptyGrid(L.length - 1);
       const sellAt = g.atomic.findIndex((a, i) => a !== null && price >= L[i + 1]!);
@@ -151,6 +200,70 @@ export function decide(p: BotParams, s: BotState, price: number, nowMs: number, 
   return null;
 }
 
+/** Wilder's RSI(14) over closes (oldest first), or null with too few. The same sum as the wallet's indicators. */
+export function rsi14(c: number[]): number | null {
+  const n = 14; if (c.length < n + 1) return null;
+  let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const x = c[i]! - c[i - 1]!; if (x > 0) g += x; else l -= x; }
+  g /= n; l /= n;
+  for (let i = n + 1; i < c.length; i++) { const x = c[i]! - c[i - 1]!; g = (g * (n - 1) + Math.max(0, x)) / n; l = (l * (n - 1) + Math.max(0, -x)) / n; }
+  return l === 0 ? (g === 0 ? 50 : 100) : 100 - 100 / (1 + g / l);
+}
+/** The dollars a custom bot's next buy spends. */
+export function customSize(c: CustomSpec, cs: CustomState): number {
+  const f = c.size.grow === "wins" ? Math.pow(1.25, Math.min(5, cs.wins ?? 0)) : c.size.grow === "deeper" ? Math.pow(c.size.factor ?? 1.5, cs.buys ?? 0) : 1;
+  return +(c.size.usd * f).toFixed(2);
+}
+function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, held: bigint, value: number, closes: number[] | null): BotAction {
+  const cs = s.c ?? {}, cost = s.cost ?? 0, holding = held > 0n && cost > 0, avg = holding ? cost / (value / price) : 0, gain = holding ? (price / avg - 1) * 100 : 0;
+  const all = (why: string, tag: string): BotAction => ({ side: "sell", atomic: held.toString(), why, tag });
+  // 1. Protection comes first.
+  if (holding && c.limits.max_loss_usd && (cs.realized ?? 0) + value - cost <= -c.limits.max_loss_usd) return all(`Down $${c.limits.max_loss_usd} in all: sells everything and stops`, "loss");
+  if (holding && c.protect?.stop_pct && gain <= -c.protect.stop_pct) return all(`Stop: ${c.protect.stop_pct}% under its average cost`, "stop");
+  const dt = c.protect?.downtrend;
+  if (dt && closes && closes.length >= dt.hours) {
+    let sum = 0; for (let i = closes.length - dt.hours; i < closes.length; i++) sum += closes[i]!;
+    const mean = sum / dt.hours;
+    if (!cs.out && price < mean * (1 - dt.gap_pct / 100)) return holding ? all(`Downtrend: ${dt.gap_pct}% under its ${Math.round(dt.hours / 24)}-day average, so it sells to USDC`, "downtrend") : { side: "mark", ref: price, why: "Downtrend: waiting in USDC", c: { out: true } };
+    if (cs.out && price > mean * (1 + dt.gap_pct / 100)) return { side: "mark", ref: price, why: "The downtrend lifted: buying again", c: { out: false, anchor: price } };
+  }
+  // 2. Selling what it holds.
+  if (holding && c.sell) {
+    const steps = c.sell.steps ?? [], i = cs.step ?? 0;
+    if (i < steps.length) {
+      if (gain >= steps[i]!.gain_pct) {
+        const share = Math.min(100, steps[i]!.share_pct), part = share >= 100 ? held : (held * BigInt(Math.round(share * 100))) / 10_000n;
+        if (part > 0n) return { side: "sell", atomic: part.toString(), why: `Up ${steps[i]!.gain_pct}% on its average cost: sells ${share >= 100 ? "the rest" : `${share}%`}`, tag: "step" };
+      }
+    } else if (c.sell.trail_pct) {
+      const armed = cs.peak !== undefined || gain >= (c.sell.trail_after_pct ?? -Infinity);
+      if (armed) {
+        const peak = cs.peak ?? price;
+        if (price <= peak * (1 - c.sell.trail_pct / 100)) return all(`Fell ${c.sell.trail_pct}% from its high: sells`, "trail");
+        // A new high is remembered once it is 0.2% above the last one kept, so the state isn't rewritten on every tick.
+        if (cs.peak === undefined || price > peak * 1.002) return { side: "mark", ref: price, why: "New high", c: { peak: price } };
+      }
+    }
+  }
+  // 3. Buying.
+  if (cs.out) return null;
+  const usd = customSize(c, cs), b = c.buy, n = cs.buys ?? 0;
+  if (usd < MIN_TRADE_USD || cost + usd > c.limits.max_usd + 0.005) return null;
+  const buy = (why: string): BotAction => ({ side: "buy", usd, why });
+  switch (b.type) {
+    case "schedule": return !cs.next_at || nowMs >= cs.next_at ? buy("Scheduled buy") : null;
+    case "levels": {
+      if (!holding && (cs.anchor === undefined || price > cs.anchor * 1.002)) return { side: "mark", ref: price, why: "Following the price up", c: { anchor: price } };
+      if (n >= b.levels) return null;
+      return price <= cs.anchor! * (1 - (b.step_pct / 100) * (n + 1)) ? buy(`Level ${n + 1} of ${b.levels}: ${(b.step_pct * (n + 1)).toFixed(1)}% under $${+cs.anchor!.toPrecision(6)}`) : null;
+    }
+    case "drop": { if (holding || !closes) return null; const h = b.hours ?? 24, was = closes[closes.length - 1 - h]; return was && price <= was * (1 - b.pct / 100) ? buy(`Down ${b.pct}% in ${h} hours`) : null; }
+    case "price": return !holding && price <= b.at ? buy(`At or under $${b.at}`) : null;
+    case "rsi": { if (holding || !closes) return null; const v = rsi14([...closes, price]); return v !== null && v <= b.below ? buy(`Hourly RSI ${v.toFixed(0)}, at or under ${b.below}`) : null; }
+  }
+  return null;
+}
+
 /**
  * Record a trade that went through. `got`: for a buy, the coin received (smallest units); for a sell, what was
  * sold. `usd`: dollars spent (buy) or received (sell). Returns the new state, whether the bot is finished, and the
@@ -159,7 +272,8 @@ export function decide(p: BotParams, s: BotState, price: number, nowMs: number, 
 export function applyFill(p: BotParams, s0: BotState, a: Exclude<BotAction, null>, fill: { usd: number; got: bigint }, price: number, nowMs: number, decimals: number): { state: BotState; done: boolean; profit?: number } {
   const s: BotState = JSON.parse(JSON.stringify(s0 ?? {}));
   s.v = (s.v ?? 0) + 1;
-  if (a.side === "mark") { s.ref = a.ref; s.v -= 1; return { state: s, done: false }; }
+  if (a.side === "mark") { s.ref = a.ref; s.v -= 1; if (a.c) s.c = { ...(s.c ?? {}), ...a.c }; return { state: s, done: false }; }
+  if (p.kind === "custom") return applyCustom(p.custom!, s, a, fill, price, nowMs);
   const held = big(s.units), usd = fill.usd;
   let profit: number | undefined;
   if (p.kind === "grid") {
@@ -189,6 +303,29 @@ export function applyFill(p: BotParams, s0: BotState, a: Exclude<BotAction, null
     s.pieces = (s.pieces ?? 0) + 1;
     s.next_at = nowMs + ((p.hours ?? 1) * 3_600_000) / n;
     if (s.pieces >= n) s.done = true;
+  }
+  return { state: s, done: !!s.done, profit };
+}
+
+function applyCustom(c: CustomSpec, s: BotState, a: Exclude<BotAction, null | { side: "mark" }>, fill: { usd: number; got: bigint }, price: number, nowMs: number): { state: BotState; done: boolean; profit?: number } {
+  const held = big(s.units), cs: CustomState = (s.c = { ...(s.c ?? {}) });
+  if (a.side === "buy") {
+    s.units = (held + fill.got).toString(); s.cost = (s.cost ?? 0) + fill.usd; s.ref = price;
+    cs.buys = (cs.buys ?? 0) + 1; cs.peak = undefined;
+    if (cs.anchor === undefined) cs.anchor = price;
+    if (c.buy.type === "schedule") cs.next_at = nowMs + c.buy.every_hours * 3_600_000;
+    return { state: s, done: false };
+  }
+  const sold = fill.got > held ? held : fill.got, share = held > 0n ? Number(sold) / Number(held) : 0, costOut = (s.cost ?? 0) * share, profit = fill.usd - costOut;
+  s.units = (held - sold).toString(); s.cost = Math.max(0, (s.cost ?? 0) - costOut); s.ref = price;
+  cs.realized = (cs.realized ?? 0) + profit; cs.round = (cs.round ?? 0) + profit;
+  if (a.tag === "step") cs.step = (cs.step ?? 0) + 1;
+  if (big(s.units) <= 0n) { // the round is over
+    s.units = "0"; s.cost = 0; s.cycles = (s.cycles ?? 0) + 1;
+    cs.wins = (cs.round ?? 0) > 0 ? (cs.wins ?? 0) + 1 : 0;
+    cs.buys = 0; cs.step = 0; cs.peak = undefined; cs.round = 0; cs.anchor = price;
+    if (a.tag === "downtrend") cs.out = true;
+    if (a.tag === "loss") s.done = true;
   }
   return { state: s, done: !!s.done, profit };
 }
@@ -241,6 +378,7 @@ export function botProblem(p: BotParams): string | null {
       if (!a) return "A split buy needs amount_usd.";
       if (a / p.pieces < MIN_TRADE_USD) return `Each part would be under $${MIN_TRADE_USD}; use fewer parts.`;
       return null;
+    case "custom": return customProblem(p.custom);
   }
   return "Unknown bot.";
 }
@@ -261,4 +399,33 @@ export function marketState(closes: number[]): { state: MarketState; d1: number;
     : d1 <= -MARKET.dayPct || (d3 <= -MARKET.threeDayPct && d1 < MARKET.quietPct) ? "falling"
     : Math.abs(d1) < MARKET.quietPct ? "quiet" : "normal";
   return { state, d1, d3 };
+}
+
+/** Checks a custom bot's five parts. Returns a plain reason, or null. */
+export function customProblem(c: CustomSpec | undefined): string | null {
+  const num = (v: unknown, lo: number, hi: number) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+  if (!c || !c.buy || !c.size || !c.limits) return "A custom bot needs when to buy, how much, and its limits.";
+  const b = c.buy;
+  if (b.type === "schedule") { if (!num(b.every_hours, 1, 24 * 30)) return "Buy on a schedule: every 1 hour to 30 days."; }
+  else if (b.type === "drop") { if (!num(b.pct, 0.5, 90) || (b.hours !== undefined && !num(b.hours, 1, 168))) return "Buy after a drop: 0.5% to 90%, over 1 to 168 hours."; }
+  else if (b.type === "levels") { if (!num(b.step_pct, 0.4, 50) || !Number.isInteger(b.levels) || !num(b.levels, 1, 40)) return "Buy at levels: steps of 0.4% to 50%, 1 to 40 levels."; }
+  else if (b.type === "price") { if (!num(b.at, 1e-12, 1e12)) return "Buy at a price: give the price."; }
+  else if (b.type === "rsi") { if (!num(b.below, 5, 60)) return "Buy on RSI: a level from 5 to 60."; }
+  else return "Pick when to buy: on a schedule, after a drop, at levels, at a price, or on RSI.";
+  if (!num(c.size.usd, MIN_TRADE_USD, 1_000_000)) return `Each buy needs at least $${MIN_TRADE_USD}.`;
+  if (c.size.grow === "deeper" && c.size.factor !== undefined && !num(c.size.factor, 1, 3)) return "Each further buy can be 1 to 3 times the one before.";
+  if (!num(c.limits.max_usd, c.size.usd, 10_000_000)) return "The limit must be at least one buy.";
+  if (c.limits.max_loss_usd !== undefined && !num(c.limits.max_loss_usd, 0.01, 10_000_000)) return "The loss limit must be more than zero.";
+  const steps = c.sell?.steps ?? [];
+  if (steps.length > 6) return "At most 6 sell steps.";
+  for (let i = 0; i < steps.length; i++) {
+    if (!num(steps[i]!.gain_pct, 0.3, 1000) || !num(steps[i]!.share_pct, 1, 100)) return "Each sell step needs a gain of 0.3% or more and a share of 1% to 100%.";
+    if (i > 0 && steps[i]!.gain_pct <= steps[i - 1]!.gain_pct) return "Each sell step needs a bigger gain than the one before.";
+  }
+  if (c.sell?.trail_pct !== undefined && !num(c.sell.trail_pct, 0.5, 90)) return "Trail by 0.5% to 90%.";
+  if (steps.length && steps[steps.length - 1]!.share_pct < 100 && !c.sell?.trail_pct) return "The last sell step should sell the rest (100%), or add a trail for what's left.";
+  if (c.protect?.stop_pct !== undefined && !num(c.protect.stop_pct, 0.5, 90)) return "Stop at 0.5% to 90% under the average cost.";
+  const dt = c.protect?.downtrend;
+  if (dt && (!Number.isInteger(dt.hours) || !num(dt.hours, 24, 240) || !num(dt.gap_pct, 0.5, 20))) return "Downtrend exit: an average of 1 to 10 days, and a gap of 0.5% to 20%.";
+  return null;
 }

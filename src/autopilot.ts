@@ -329,7 +329,10 @@ export class Autopilot {
       if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
       avail = sellableFor(r, bal, this.store.list(), t, this.exec.mode === "paper");
     }
-    const a = decide(r as any, st, p, now, { decimals: t.decimals, avail });
+    // Nov 11: a custom bot's drop, RSI and downtrend parts read hourly closes (the same ones alerts and signals use).
+    let closes: number[] | null = null;
+    if (r.kind === "custom") { try { closes = await (this.o.hourly ?? ((c, tk) => hourlyCloses(c, tk)))(r.chain, t); } catch { closes = null; } }
+    const a = decide(r as any, st, p, now, { decimals: t.decimals, avail, closes });
     if (a?.side === "buy" && this.o.holdBuy?.(r)) return;
     if (!a) {
       if (r.kind === "twap" && r.side === "sell" && avail !== undefined && avail <= 0n) await this.hold(r, now + 5 * 60_000, nothingToSell(r, t.symbol, 0n));

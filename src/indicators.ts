@@ -14,7 +14,7 @@ import type { AlertType, Rule, Signal } from "./rules.js";
 
 export const RSI_PERIOD = 14;
 export const MA_HOURS = 50;
-const HOURS = 200; // 0.9.9: enough for a 4-hour MACD (35 four-hour closes) and breakouts; DefiLlama answered 186 points for span=200 on 2026-10-29
+const HOURS = 264; // Nov 11, 2026: 11 days, so a custom bot's downtrend exit can average up to 10 days. Before: 0.9.9: enough for a 4-hour MACD (35 four-hour closes) and breakouts; DefiLlama answered 186 points for span=200 on 2026-10-29
 
 /** Wilder's RSI over closes (oldest first). Null until there are period + 1 closes. */
 export function rsi(closes: number[], period = RSI_PERIOD): number | null {

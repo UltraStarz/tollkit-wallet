@@ -188,7 +188,7 @@ export function summarize(rules: Rule[], livePrice?: LivePrice): BotSummary[] {
     const earned = isGrid ? s((r) => r.state.grid_profit_usd) : sold > 0 && bought > 0 ? got * (Math.min(sold, bought) / sold) - Math.min(sold, bought) * (spent / bought) : 0;
     const value = price !== null ? held * price : null;
     const st = rs.map((r) => r.status);
-    const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => ["grid", "dca", "smart_dca", "rebalance", "infinity_grid", "twap", "range"].includes(r.kind)) ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
+    const status = st.some((x) => x === "error") ? "error" : st.some((x) => x === "active") ? (ok > 0 || rs.some((r) => ["grid", "dca", "smart_dca", "rebalance", "infinity_grid", "twap", "custom", "range"].includes(r.kind)) ? "running" : "waiting") : st.some((x) => x === "paused") ? "paused" : st.every((x) => x === "done" || (x === "cancelled" && st.includes("done"))) ? "done" : "stopped";
     const last = rs.flatMap((r) => r.state.fills.filter((x) => x.ok).map((x) => x.ts)).sort().at(-1) ?? null;
     let result = spent > 0 && value !== null ? got + value - spent : spent > 0 && held === 0 ? got - spent : null;
     // 0.9.9: a Range bot: what its position (or the coins between ranges) is worth now, against what went in.

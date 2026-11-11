@@ -50,7 +50,7 @@ export function sellableFor(r: Rule, bal: bigint, rules: Rule[], tok: { symbol: 
  */
 export function ownerBotUnits(rules: Rule[], chain: string, symbol: string, address: string, paper = false): number {
   const LIVE = ["active", "paused", "proposed", "error"];
-  const BOTS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"];
+  const BOTS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap", "custom"];
   let n = 0;
   for (const r of rules) if (!isAutopilotRule(r) && BOTS.includes(r.kind) && LIVE.includes(r.status) && isPaperRule(r) === paper && sameToken(r, chain, symbol, address)) n += (r.state.bought_units ?? 0) - (r.state.sold_units ?? 0);
   return Math.max(0, n);
