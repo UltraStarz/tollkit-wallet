@@ -26,6 +26,7 @@ import { KNOWN, resolveToken, toAtomic, type Token } from "./tokens.js";
 import type { Price } from "./prices.js";
 import type { SwapRequest } from "./swap.js";
 import type { SwapResult } from "./wallet.js";
+import { adaptiveSlippage, shortfallStats, type FillLike } from "./execution.js";
 
 export interface Executor {
   mode: "live" | "paper";
@@ -80,6 +81,21 @@ export class Autopilot {
   lastTick: string | null = null;
   holdsLease = false;
 
+  /**
+   * Phase 4: the slippage limit for a coin's live trades. The owner's limit, narrowed once 20 real fills of that coin
+   * show a narrower one is enough (src/execution.ts). Worked out at most once a minute per coin.
+   */
+  private slips = new Map<string, { at: number; bps: number }>();
+  slip(chain: Chain, t: Token, protective = false): number {
+    const own = this.exec.slippageBps;
+    if (this.exec.mode !== "live" || protective) return own; // a stop must fill in a fast fall: it keeps the owner's full limit
+    const key = `${chain}:${t.address.toLowerCase()}`, hit = this.slips.get(key), now = this.now();
+    if (hit && now - hit.at < 60_000) return Math.min(own, hit.bps);
+    const same = (r: Rule) => r.chain === chain && (r.token.toLowerCase() === t.address.toLowerCase() || r.token.toUpperCase() === t.symbol.toUpperCase());
+    const bps = adaptiveSlippage(shortfallStats(this.store.list().filter(same).flatMap((r) => r.state.fills as FillLike[]), now), own);
+    this.slips.set(key, { at: now, bps });
+    return bps;
+  }
   constructor(readonly store: RuleStore, private readonly exec: Executor, private readonly prices: PriceSource, private readonly o: AutopilotOptions = {}) {
     this.leaseFile = path.join(walletHome(o.dir), "autopilot.lease");
     this.leaseId = o.leaseId ?? randomUUID();
@@ -257,7 +273,7 @@ export class Autopilot {
     const usdc = KNOWN[r.chain].USDC!;
     let req: SwapRequest;
     if (BUY_KINDS.includes(r.kind)) {
-      req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.exec.slippageBps, bot: true }; // Nov 11: a rule's trade pays the bot fee
+      req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.slip(r.chain, t), bot: true }; // Nov 11: a rule's trade pays the bot fee
     } else {
       let bal = await this.exec.balance(r.chain, t);
       if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
@@ -273,7 +289,7 @@ export class Autopilot {
         if (share !== undefined && held && bal > 0n) { await this.hold(r, this.now() + 5 * 60_000, `The ${t.symbol} it could sell went to a stop or another sell that fired first, or is held by your bots.`); return; }
         await this.fail(r, "insufficient_balance", `No ${t.symbol} to sell.`); return;
       }
-      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps, bot: true };
+      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.slip(r.chain, t, r.kind === "stop_loss" || r.kind === "trailing_stop"), bot: true };
     }
     // Limit orders only fill at their price or better (1% allowance for the fee and spread). Stops always exit.
     if (r.kind === "limit_buy" || r.kind === "limit_sell" || r.kind === "take_profit") {
@@ -352,7 +368,7 @@ export class Autopilot {
     let req: SwapRequest;
     // Nov 11: every bot trade asks for the bot fee (0.10%).
     const bot = { bot: true };
-    if (a.side === "buy") req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(a.usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps, ...bot };
+    if (a.side === "buy") req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(a.usd.toFixed(6), 6), slippage_bps: this.slip(r.chain, t), ...bot };
     else {
       let amt = BigInt(a.atomic);
       // 0.9.9: grids too: a bot never sells more than is held and is its owner's to sell (another rule may have sold it).
@@ -364,7 +380,7 @@ export class Autopilot {
         if (amt > may && may * 10n < amt) { await this.hold(r, now + 5 * 60_000, may > 0n ? `Most of the ${t.symbol} for this level was sold by another rule; waiting.` : nothingToSell(r, t.symbol, bal)); return; }
         if (amt > may) amt = may;
       }
-      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps, ...bot };
+      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.slip(r.chain, t, ["stop", "downtrend", "loss", "trail", "trend"].includes((a as any).tag ?? "")), ...bot };
     }
     if (a.side === "buy" && (await this.overShare(r, a.usd))) return;
     if (a.side === "buy" && await this.cashShort(r, a.usd)) return;
@@ -449,8 +465,8 @@ export class Autopilot {
     if (Math.abs(wantSolUsd - haveSolUsd) >= 1) {
       const buy = wantSolUsd > haveSolUsd, usd = Math.abs(wantSolUsd - haveSolUsd);
       const req: SwapRequest = buy
-        ? { chain: "solana", sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps, bot: true }
-        : { chain: "solana", sell_token: t.address, buy_token: usdc.address, sell_amount: BigInt(Math.floor((usd / pool.price) * 1e9)).toString(), slippage_bps: this.exec.slippageBps, bot: true };
+        ? { chain: "solana", sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(usd.toFixed(6), 6), slippage_bps: this.slip(r.chain, t), bot: true }
+        : { chain: "solana", sell_token: t.address, buy_token: usdc.address, sell_amount: BigInt(Math.floor((usd / pool.price) * 1e9)).toString(), slippage_bps: this.slip(r.chain, t), bot: true };
       const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
       if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed.", (res.refused as any)?.tx); return; }
       const got = BigInt(String(res.quote?.buy_amount ?? "0"));

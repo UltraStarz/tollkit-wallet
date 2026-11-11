@@ -41,6 +41,7 @@ import { describeRule, type Rule, type RuleStore } from "./rules.js";
 import type { TollkitWallet } from "./wallet.js";
 import { SUPERBOT_SYSTEM, DECIDE_TOOL, checkDecision, strategistUser } from "./strategist.js";
 import { marketState, volScale, type MarketState } from "./botlogic.js";
+import { adaptiveSlippage, shortfallStats, type FillLike } from "./execution.js";
 
 /**
  * Phase 3, Nov 11, 2026 (trading brief, Gate 2 and Gate 3). Before: a paper strategy went live once it reached
@@ -84,6 +85,14 @@ export function edgeConfidence(rs: number[]): number | null {
 }
 /** Phase 3, Gate 3: full size only with at least five finished live rounds and this much confidence their average makes money. */
 export const SCALE_UP_CONFIDENCE = 0.8;
+/** Phase 4: what live trades cost per coin from decision to fill, and the slippage limit that gives (src/execution.ts). */
+export function tradeCosts(all: Rule[], ownerSlippageBps: number, now = Date.now()) {
+  const by = new Map<string, FillLike[]>();
+  for (const r of all) { const k = `${r.chain}:${r.token.toUpperCase()}`; by.set(k, [...(by.get(k) ?? []), ...(r.state.fills as FillLike[])]); }
+  const out: Record<string, { fills: number; typical_cost_bps: number; bad_cost_bps: number; cost_ex_fee_bps: number; median_ms: number | null; slippage_limit_bps: number }> = {};
+  for (const [k, fs] of by) { const st = shortfallStats(fs, now); if (st) out[k] = { fills: st.n, typical_cost_bps: st.median_bps, bad_cost_bps: st.p90_bps, cost_ex_fee_bps: st.median_ex_fee_bps, median_ms: st.median_ms, slippage_limit_bps: adaptiveSlippage(st, ownerSlippageBps) }; }
+  return out;
+}
 export const TRIAL = { minDays: 3, minTrades: 10, canaryShare: 0.25 };
 /** The result a strategy must beat over a stretch in which its coin moved coinPct: holding USDC (0) or half in the coin. */
 export function trialBar(coinPct: number | null): number { return Math.max(0, (coinPct ?? 0) / 2); }
@@ -1368,6 +1377,8 @@ export class SuperBot {
       strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, ...(x.canary ? { live_size: "small first test" } : {}), ...(x.tested ? { past_test: x.tested } : {}), days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
       refused_recently: (s.refused ?? []).filter((x) => this.now() - Date.parse(x.ts) < 7 * 86_400_000).slice(-5).map((x) => ({ template: x.template, token: x.token, params: x.params, why: x.why })),
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
+      // Phase 4: what live trades really cost per coin (decision price to fill, in bps), so it can weigh a strategy's turnover.
+      trade_costs: tradeCosts(all, s.settings.slippage_bps, t),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
       recent_decisions: s.decisions.filter((d) => d.by === "strategist").slice(-3).map((d) => ({ ts: d.ts, view: d.market_view, actions: d.actions.map((a) => `${a.type}${a.strategy_id ? ` ${a.strategy_id}` : ""}${a.applied ? "" : " (not applied)"}`) })),
       // 0.9.13: the owner's standing instructions from the AI chat.
@@ -1821,6 +1832,8 @@ export class SuperBot {
       `AI: ${decisions.filter((d) => d.by === "strategist").length} decision${decisions.filter((d) => d.by === "strategist").length === 1 ? "" : "s"} ($${Math.round(decisions.reduce((a, d) => a + d.cost_usd, 0) * 1000) / 1000}).`,
       ...(changes.length ? ["Changes:", ...changes.slice(0, 8).map((c) => `- ${c}`)] : ["No changes."]),
       ...(s.halted ? [`Stopped: ${s.halted.reason}`] : []),
+      // Phase 4: what yesterday's real trades cost from the price acted on to the price got (fee included).
+      ...((): string[] => { const c = shortfallStats(fills as FillLike[], t, 1); return c ? [`Trade cost: typically ${(c.median_bps / 100).toFixed(2)}% from the price acted on to the fill, fee included (${c.n} trade${c.n === 1 ? "" : "s"}).`] : []; })(),
     ];
     const text = lines.join("\n");
     await this.update((x) => { x.stats.last_report = today; x.reports.push({ date: yday, text, live_result_usd: liveResult, day_change_usd: dayChange, trades, decisions: decisions.length } as any); if (x.reports.length > SUPERBOT.keepReports) x.reports.splice(0, x.reports.length - SUPERBOT.keepReports); });
