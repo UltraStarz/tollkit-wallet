@@ -4,6 +4,8 @@
  * the owner's policy; nothing here can change limits, keys or withdrawal
  * addresses.
  */
+import { randomUUID } from "node:crypto";
+import { replay } from "./botviz.js";
 import { z } from "zod";
 import { isLocalUrl } from "./netguard.js";
 export { isLocalUrl } from "./netguard.js";
@@ -60,11 +62,21 @@ export const HistoryArgs = z.object({
 });
 
 export const TokenArgs = z.object({ chain: z.enum(CHAIN_ENUM), address: z.string().min(32).max(64).describe("Contract address (0x…) or Solana mint") });
+/** What the AI is told about the five parts of a custom bot (src/botlogic.ts CustomSpec). */
+const CUSTOM_HELP = `Only with template "custom": a bot built from five parts. JSON object:
+{ "buy": one of {"type":"levels","step_pct":1,"levels":10} (a buy at each step_pct below the price it last sold at, or the high since) | {"type":"drop","pct":5,"hours":24} (after falling pct in that many hours) | {"type":"schedule","every_hours":24} | {"type":"price","at":80} | {"type":"rsi","below":30} (hourly RSI),
+  "size": {"usd":25,"grow":"none"|"wins"|"deeper","factor":1.5} (wins: 25% bigger after each winning round; deeper: each further buy in a round is factor times the last),
+  "sell": {"steps":[{"gain_pct":5,"share_pct":50}],"trail_pct":4,"trail_after_pct":0} (steps sell share_pct of what it holds at gain_pct over its average cost; the last step is 100 unless a trail takes the rest; trail_pct sells everything that far under its high once the steps are done; leave sell out and it never sells for profit),
+  "protect": {"stop_pct":10,"downtrend":{"hours":240,"gap_pct":3}} (both optional. stop_pct: sell all that far under its average cost. downtrend: sell everything to USDC when the price is gap_pct under its average of that many hours, 24 to 240, and buy again once it is gap_pct over it),
+  "limits": {"max_usd":300,"max_loss_usd":30} (max_usd: the most it may have in the coin; max_loss_usd, optional: sell everything and stop for good once it is down that much) }
+Percentages are plain numbers (5 means 5%). Each buy and sell pays the 0.1% bot fee.`;
 export const BotArgs = z.object({
   chain: z.enum(CHAIN_ENUM),
   token: z.string().min(2).max(64).describe("ETH, SOL, POL or a token address/mint the owner has added"),
-  template: z.enum(["dca", "dip", "protect", "trail", "ladder", "grid", "smart_dca", "rebalance", "infinity_grid", "twap"]),
+  template: z.enum(["dca", "dip", "protect", "trail", "ladder", "grid", "smart_dca", "rebalance", "infinity_grid", "twap", "custom"]),
   params: z.record(z.union([z.number(), z.string()])).optional().describe("The template's fields (bot_templates); defaults otherwise"),
+  custom: z.any().optional().describe(CUSTOM_HELP),
+  name: z.string().max(40).optional().describe("Custom bots: a short name for the bot, such as 'SOL dip rider'"),
 });
 
 const GRAN = { "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400 } as const;
@@ -183,8 +195,16 @@ export const ACTIONS = [
   def({ name: "bot_preview", spends: false, sets: false, schema: BotArgs,
     description: "Preview a bot at today's price without starting it: the plain rules it would make. Use it to show the owner what a bot will do.",
     run: async (w, a) => { try { const b = await makeBot(w, a); return { ok: true, name: b.built.name, price: b.price ?? null, rules: b.built.rules.map(describeRule) }; } catch (e) { return bad(e); } } }),
+  def({ name: "bot_test", spends: false, sets: false, schema: BotArgs.extend({ days: z.number().int().min(7).max(365).optional().describe("How far back: 30 (default), 90 or 365 days") }),
+    description: "Test a bot's settings on past prices before suggesting it: runs the wallet's own trading engine over the last days of hourly Coinbase prices (ETH, SOL and POL only) with the real fee. Returns what the bot made, what simply holding made over the same stretch, the worst drop along the way, the number of trades and the fees. Nothing is traded or saved. Past results don't predict future ones: quote the numbers plainly, including a loss.",
+    run: async (_w, a) => {
+      try {
+        const r = await replay({ template: a.template, chain: a.chain, token: a.token, params: (a.params ?? {}) as Record<string, unknown>, custom: a.custom, days: a.days ?? 30 });
+        return { ok: true, days: r.days, token: r.token, bot_result_usd: r.result_usd, holding_label: r.baseline_label, holding_result_usd: r.baseline_usd, worst_drop_usd: r.worst_drop_usd, trades: r.trades.length, fees_usd: r.fees_usd, price_change_pct: r.change_pct, rules: r.rules, note: r.note };
+      } catch (e) { return bad(e); }
+    } }),
   def({ name: "bot_start", spends: false, sets: true, schema: BotArgs.extend({ reason: z.string().max(300).optional().describe("One plain sentence on why, shown to the owner") }),
-    description: "Start a ready-made bot for the owner. Its trades follow the owner's limits and this app's weekly budget. The bot waits for the owner to turn it on in the wallet (only Autopilot acts on its own).",
+    description: "Start a ready-made or custom bot for the owner. Its trades follow the owner's limits and this app's weekly budget. The bot waits for the owner to turn it on in the wallet (only Autopilot acts on its own).",
     run: async (w, a, ctx) => {
       try {
         const b = await makeBot(w, a);
@@ -317,6 +337,14 @@ async function makeBot(w: TollkitWallet, a: z.infer<typeof BotArgs>) {
     }
   }
   const sym = tok.symbol && /^[A-Z0-9.]{2,12}$/i.test(tok.symbol) && isCoreToken(a.chain, tok.address) ? tok.symbol : tok.address;
+  // Nov 11, 2026: a custom bot is one rule made of five parts, checked like any rule.
+  if (a.template === "custom") {
+    const T = sym.length > 12 ? `${sym.slice(0, 4)}…` : sym.toUpperCase(), bot = randomUUID().slice(0, 8), name = (a.name ?? "").trim() || `My ${T} bot`;
+    const rule: RuleInput = { kind: "custom", chain: a.chain, token: sym, custom: a.custom, bot, bot_name: name, template: "custom" };
+    const why = ruleProblem(rule);
+    if (why) throw new Error(why);
+    return { tok, price, built: { bot, name, rules: [rule] } };
+  }
   return { tok, price, built: buildBot(a.template, sym, a.chain, a.params ?? {}, price) };
 }
 

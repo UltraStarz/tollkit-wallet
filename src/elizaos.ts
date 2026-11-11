@@ -109,6 +109,7 @@ const ELIZA_NAMES: Record<string, { name: string; similes: string[] }> = {
   // 0.8.0: setting things up for the owner.
   bot_templates: { name: "TOLLKIT_BOT_TEMPLATES", similes: ["LIST_BOTS", "BOT_CATALOG", "TRADING_BOTS"] },
   bot_preview: { name: "TOLLKIT_BOT_PREVIEW", similes: ["PREVIEW_BOT", "WHAT_WOULD_BOT_DO"] },
+  bot_test: { name: "TOLLKIT_BOT_TEST", similes: ["TEST_BOT", "BACKTEST_BOT", "TRY_BOT_ON_PAST_PRICES"] },
   bot_start: { name: "TOLLKIT_BOT_START", similes: ["START_BOT", "RUN_BOT", "MAKE_BOT", "DCA_BOT", "GRID_BOT"] },
   bots_status: { name: "TOLLKIT_BOTS_STATUS", similes: ["BOT_STATUS", "MY_BOTS", "BOT_RESULTS"] },
   bot_control: { name: "TOLLKIT_BOT_CONTROL", similes: ["PAUSE_BOT", "RESUME_BOT", "STOP_BOT", "REMOVE_BOT"] },

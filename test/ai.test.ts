@@ -127,5 +127,31 @@ let badTier = ""; try { setAiTier(dir, "huge"); } catch (e: any) { badTier = e.m
 check(/Fast or Smart/.test(badTier) && aiTier(dir) === "smart", "an unknown tier is refused");
 setAiTier(dir, "fast");
 
+// ── Nov 11, 2026: the AI asks a question with answers to tap, and builds a custom bot from an idea ─────────────────
+{
+  const { splitAsk } = await import("../src/ai.js");
+  const { ACTIONS } = await import("../src/actions.js");
+  const { ADVISOR_TOOLS } = await import("../src/mcp.js");
+  const q = splitAsk("I can build that.\n\n[[ask]] How big a dip should it wait for?\n- A small one | 2% in a day, trades often\n- A real one | 5% in a day\n- A crash\n[[/ask]]\n");
+  check(q.text === "I can build that." && q.ask?.question === "How big a dip should it wait for?" && q.ask.options.length === 3 && q.ask.options[0]!.label === "A small one" && q.ask.options[0]!.detail === "2% in a day, trades often" && q.ask.options[2]!.detail === undefined, "a question block comes off the message as a question and its answers", q);
+  check(splitAsk("No question here.").ask === undefined && splitAsk("[[ask]] Only one?\n- Yes\n[[/ask]]").ask === undefined && splitAsk("[[ask]] Mid?\n- A\n- B\n[[/ask]] and more text").ask === undefined, "no block, a block with one answer, or a block that isn't at the end: the text is left as written");
+  check(splitAsk("[[ask]] Q?\n- A\n- B\n- C\n- D\n- E\n- F\n[[/ask]]").ask?.options.length === 4, "at most four answers");
+  const before = (ai as any).load().messages.length;
+  reply = "Got it.\n[[ask]] How much should it work with?\n- $100 | a small test\n- $300 | about a third of your USDC\n[[/ask]]"; propose = null;
+  const m = await ai.send("build me a bot that buys SOL dips");
+  check(m.text === "Got it." && m.ask?.options.length === 2 && (ai as any).load().messages.length === before + 2 && (ai as any).load().messages.at(-1).ask?.question === "How much should it work with?", "the chat message carries the question for the screen to show as buttons", m);
+  reply = "Sure.";
+  check(/template "custom"/.test(SYSTEM) && /\[\[ask\]\]/.test(SYSTEM) && /bot_test/.test(SYSTEM) && ADVISOR_TOOLS.includes("bot_test") && ADVISOR_TOOLS.includes("bot_start"), "the AI is told how to build a custom bot, to test it first, and how to ask; it has the tools");
+  const tool = (n: string) => (ACTIONS as readonly any[]).find((x) => x.name === n);
+  const custom = { buy: { type: "levels", step_pct: 1, levels: 10 }, size: { usd: 25 }, sell: { steps: [{ gain_pct: 5, share_pct: 50 }], trail_pct: 4 }, protect: { downtrend: { hours: 240, gap_pct: 3 } }, limits: { max_usd: 300 } };
+  const pv = await tool("bot_preview").run(w, { chain: "base", token: "ETH", template: "custom", custom, name: "ETH dip rider" });
+  check(pv.ok === true && pv.name === "ETH dip rider" && /Buys ETH every 1% down, up to 10 times; \$25 a time; Sells 50% at \+5%, then trails the rest 4% under its high; Sells to USDC in a downtrend; \$300 at most/.test(pv.rules?.[0] ?? ""), "bot_preview describes a custom bot in plain words", pv);
+  const st = await tool("bot_start").run(w, { chain: "base", token: "ETH", template: "custom", custom, name: "ETH dip rider", reason: "You asked for a dip buyer." }, { app: "Tollkit AI", advisor: true });
+  const made = w.rules().list().find((r) => r.bot === st.bot);
+  check(st.ok === true && st.status === "proposed" && made?.kind === "custom" && made.status === "proposed" && made.created_by === "agent" && made.custom?.limits.max_usd === 300 && made.reason === "You asked for a dip buyer.", "bot_start makes a custom bot that waits for the owner to turn it on", { st, made });
+  const no = await tool("bot_start").run(w, { chain: "base", token: "ETH", template: "custom", custom: { ...custom, limits: { max_usd: 5 } } }, { app: "Tollkit AI", advisor: true });
+  check(no.ok === false && /at least one buy/.test(JSON.stringify(no)), "a custom bot whose parts don't fit is refused with the reason", no);
+}
+
 console.log(`\nai: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
