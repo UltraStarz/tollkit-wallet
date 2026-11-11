@@ -209,6 +209,32 @@ export function rsi14(c: number[]): number | null {
   for (let i = n + 1; i < c.length; i++) { const x = c[i]! - c[i - 1]!; g = (g * (n - 1) + Math.max(0, x)) / n; l = (l * (n - 1) + Math.max(0, -x)) / n; }
   return l === 0 ? (g === 0 ? 50 : 100) : 100 - 100 / (1 + g / l);
 }
+/**
+ * Nov 11, 2026 (24/7): a custom bot's parts as they arrive in a request: only the known fields, numbers only.
+ * customProblem then checks the ranges. Tollkit's server reads the wallet's bots through this.
+ */
+export function cleanCustom(x: any): CustomSpec | undefined {
+  if (!x || typeof x !== "object" || !x.buy || !x.size || !x.limits) return undefined;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined), opt = <K extends string>(k: K, v: number | undefined) => (v === undefined ? {} : { [k]: v } as Record<K, number>);
+  const b = x.buy, t = b.type;
+  const buy = t === "schedule" ? { type: t, every_hours: n(b.every_hours) } : t === "drop" ? { type: t, pct: n(b.pct), ...opt("hours", n(b.hours)) } : t === "levels" ? { type: t, step_pct: n(b.step_pct), levels: n(b.levels) }
+    : t === "price" ? { type: t, at: n(b.at) } : t === "rsi" ? { type: t, below: n(b.below) } : { type: "none" };
+  const g = x.size.grow, size = { usd: n(x.size.usd), ...(g === "wins" || g === "deeper" || g === "none" ? { grow: g } : {}), ...opt("factor", n(x.size.factor)) };
+  const sl = x.sell && typeof x.sell === "object" ? x.sell : undefined, steps = Array.isArray(sl?.steps) ? sl.steps.slice(0, 7).map((s: any) => ({ gain_pct: n(s?.gain_pct), share_pct: n(s?.share_pct) })) : undefined;
+  const sell = sl ? { ...(steps ? { steps } : {}), ...opt("trail_pct", n(sl.trail_pct)), ...opt("trail_after_pct", n(sl.trail_after_pct)) } : undefined;
+  const pr = x.protect && typeof x.protect === "object" ? x.protect : undefined, dt = pr?.downtrend && typeof pr.downtrend === "object" ? { hours: n(pr.downtrend.hours), gap_pct: n(pr.downtrend.gap_pct) } : undefined;
+  const protect = pr ? { ...opt("stop_pct", n(pr.stop_pct)), ...(dt ? { downtrend: dt } : {}) } : undefined;
+  const limits = { max_usd: n(x.limits.max_usd), ...opt("max_loss_usd", n(x.limits.max_loss_usd)) };
+  return { buy, size, ...(sell ? { sell } : {}), ...(protect ? { protect } : {}), limits } as unknown as CustomSpec;
+}
+/** The same for what a custom bot remembers. */
+export function cleanCustomState(x: any): CustomState | undefined {
+  if (!x || typeof x !== "object") return undefined;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined), out: Record<string, number | boolean> = {};
+  for (const k of ["anchor", "buys", "step", "peak", "next_at", "realized", "round", "wins"]) { const v = n(x[k]); if (v !== undefined) out[k] = v; }
+  if (typeof x.out === "boolean") out.out = x.out;
+  return out as CustomState;
+}
 /** The dollars a custom bot's next buy spends. */
 export function customSize(c: CustomSpec, cs: CustomState): number {
   const f = c.size.grow === "wins" ? Math.pow(1.25, Math.min(5, cs.wins ?? 0)) : c.size.grow === "deeper" ? Math.pow(c.size.factor ?? 1.5, cs.buys ?? 0) : 1;

@@ -110,5 +110,25 @@ check(store.get(tw.id)!.status === "done", "a bot the server finished is done he
 const twSent = calls.filter((c) => c.route === "sync").find((c) => c.body.rules.some((x: any) => x.id === tw.id))!.body.rules.find((x: any) => x.id === tw.id);
 check(twSent.side === "sell" && twSent.sell_percent === 10 && BigInt(twSent.bot.sell_total) > 0n, "a split sell goes with its share, its total fixed here", twSent);
 
+// Nov 11, 2026: a custom bot (five parts) runs 24/7 on Solana once the server says it runs them.
+{
+  const custom = { buy: { type: "levels" as const, step_pct: 1, levels: 10 }, size: { usd: 25 }, sell: { steps: [{ gain_pct: 5, share_pct: 50 }], trail_pct: 4 }, protect: { downtrend: { hours: 240, gap_pct: 3 } }, limits: { max_usd: 300 } };
+  check(solRunnable(rule({ kind: "custom", custom })) === null && /no settings/.test(solRunnable(rule({ kind: "custom" })) ?? ""), "a custom SOL bot can run 24/7");
+  const cb = await store.add({ kind: "custom", chain: "solana", token: "SOL", custom }, "owner", false);
+  await store.mutate((rs) => { const x = rs.find((y) => y.id === cb.id)!; x.state.bot = { units: "0", cost: 0, v: 1, c: { anchor: 100 } }; x.state.last_price = 100; });
+  s.set(cb.id, true, 300);
+  let o = await s.sync();
+  check(!o.running.includes(cb.id) && /doesn't run this bot 24\/7 yet/.test(o.problems[cb.id] ?? ""), "a server that doesn't run custom bots yet: it stays on the device", o.problems);
+  KINDS = [...KINDS, "custom"]; accts[usdcA]!.amount = 500_000_000n;
+  o = await s.sync();
+  const sentC = calls.filter((c) => c.route === "sync").at(-1)!.body.rules.find((x: any) => x.id === cb.id);
+  check(o.running.includes(cb.id) && !o.problems[cb.id] && sentC?.kind === "custom" && sentC.custom?.limits?.max_usd === 300 && sentC.custom.buy.step_pct === 1 && sentC.bot?.c?.anchor === 100, "the server gets its five parts and what it remembers", { o: o.problems, sentC });
+  srvFills = [{ id: "c1", rule_id: cb.id, ts: new Date().toISOString(), ok: true, tx: "ct1", side: "buy", usd: 25, units: 0.2525 }, { id: "c2", rule_id: cb.id, ts: new Date().toISOString(), ok: true, tx: "ct2", side: "sell", usd: 14, units: 0.12625, profit: 1.5 } as any];
+  srvRules = { ...srvRules, [cb.id]: { runs: 2, bot: { units: "126250000", cost: 12.5, ref: 110, v: 3, c: { anchor: 100, buys: 1, step: 1, realized: 1.5, round: 1.5 } } } };
+  await s.sync();
+  const got = store.get(cb.id)!;
+  check(got.status === "active" && got.state.spent_usd === 25 && got.state.received_usd === 14 && got.state.bot?.c?.step === 1 && got.state.bot.units === "126250000" && got.state.grid_profit_usd === 1.5, "its server trades are tallied, it keeps running, and its memory comes back", got.state);
+}
+
 console.log(`\nalwayson-bots: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

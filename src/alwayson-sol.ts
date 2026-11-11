@@ -27,7 +27,7 @@ import { sendAndConfirm } from "./solconfirm.js";
 import { applyFills, type ServerFill } from "./alwayson.js";
 import { autopilotUnits, isAutopilotRule } from "./ownership.js";
 import type { Rule, RuleStore } from "./rules.js";
-import { botBuys, botNewer, isBotKind } from "./botlogic.js";
+import { botBuys, botNewer, customSize, isBotKind } from "./botlogic.js";
 import { solanaInfo } from "./tokenlist.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -94,7 +94,7 @@ export function coinMint(r: Pick<Rule, "token">): string | null {
 export function solRunnable(r: Rule): string | null {
   if (r.chain !== "solana") return "Not a Solana rule.";
   if (!isSolRule(r) && !coinMint(r)) return "Only SOL and Solana coins (by their address) can run 24/7.";
-  if (r.kind === "custom") return "Custom bots run while the app is open for now; 24/7 for them is coming."; // Nov 11, 2026: the server doesn't run the five-part bot yet
+  if (r.kind === "custom") return r.custom ? null : "This bot has no settings."; // Nov 11, 2026: the server runs the five-part bot too (when its kinds list says so)
   if (isBot(r)) return r.kind === "twap" && r.side === "sell" ? null : r.amount_usd ? null : "Needs a dollar amount.";
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
   // 0.9.13: a step that waits for another (a dip buy's take-profit) runs 24/7 on SOL; on other coins only while the app is open.
@@ -418,7 +418,7 @@ export class SolAlwaysOn {
     const buys = active.filter((r) => isBuy(r) || (isBot(r) && botBuys(r as any)));
     const solBuys = buys.filter(isSolRule);
     // A bot's next buy: its first one (a rebalancer's set-up, a split buy's part). Later buys draw on the same cap.
-    const oneBuy = (r: Rule) => usdcAtomic(!isBot(r) ? r.amount_usd! : r.kind === "rebalance" ? (r.amount_usd! * (r.target_pct ?? 50)) / 100 : r.kind === "twap" ? r.amount_usd! / (r.pieces ?? 1) : r.amount_usd!);
+    const oneBuy = (r: Rule) => usdcAtomic(!isBot(r) ? r.amount_usd! : r.kind === "custom" ? customSize(r.custom!, r.state.bot?.c ?? {}) : r.kind === "rebalance" ? (r.amount_usd! * (r.target_pct ?? 50)) / 100 : r.kind === "twap" ? r.amount_usd! / (r.pieces ?? 1) : r.amount_usd!);
     const perTrade = buys.reduce((m, r) => (oneBuy(r) > m ? oneBuy(r) : m), 0n);
     this.update((x) => { x.per_buy_usd = Number(perTrade) / 1e6; });
     if (buys.length) {
@@ -592,7 +592,7 @@ export class SolAlwaysOn {
     // 0.9.10: Think 24/7 (null: off), and the server strategies taken over here since the last sync.
     const brain = this.brainInfo?.() ?? null, adopted = this.load().adopted ?? [];
     const body = { ...(this.paceInfo?.() === "adaptive" ? { ap_pace: "adaptive" } : {}), ...(away ? { away } : {}), ...(brain || adopted.length ? { brain: { ...(brain ?? { on: false }), adopted } } : {}), rules: send.map((r) => isBot(r) ? ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, lower_price: r.lower_price, upper_price: r.upper_price, levels: r.levels, step_pct: r.step_pct, safety: r.safety, scale: r.scale,
-        profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs,
+        profit_pct: r.profit_pct, target_pct: r.target_pct, band_pct: r.band_pct, side: r.side, sell_percent: r.sell_percent, pieces: r.pieces, hours: r.hours, expires_at: r.expires_at, runs: r.state.runs, ...(r.kind === "custom" ? { custom: r.custom } : {}),
         bot: { ...(r.state.bot ?? {}), ...(r.kind === "grid" ? { grid: r.state.grid } : {}), ...(splitTotal[r.id] ? { sell_total: splitTotal[r.id], v: (r.state.bot?.v ?? 0) + 1 } : {}) } })
       : ({ id: r.id, kind: r.kind, ...tok(r), ...apx(r), amount_usd: r.amount_usd, sell_amount: !isBuy(r) && !linked[r.id]?.sell_from ? sellAmt(r) : undefined, trigger_price: r.trigger_price,
       ...(linked[r.id] ?? {}), ...(r.kind === "trailing_stop" ? { trail_pct: r.trail_pct, high: r.state.high } : {}),

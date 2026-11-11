@@ -668,7 +668,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
               const sol = r.chain === "solana", ao = sol ? w.alwaysSol() : w.always();
               if (ao.isOn(r.id)) continue;
               const kinds = (sol ? (sc as any)?.kinds : (ec as any)?.kinds) as string[] | undefined;
-              const why = sol ? (!sc?.enabled ? "Not on Solana yet." : solRunnable(r) ?? (kinds && ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind) && !kinds.includes(r.kind) ? "TOLLkit's server doesn't run this bot 24/7 yet." : null))
+              const why = sol ? (!sc?.enabled ? "Not on Solana yet." : solRunnable(r) ?? (kinds && ["grid", "smart_dca", "rebalance", "infinity_grid", "twap", "custom"].includes(r.kind) && !kinds.includes(r.kind) ? "TOLLkit's server doesn't run this bot 24/7 yet." : null))
                 : (!ec?.enabled ? "Not on this network yet." : serverRunnable(r, (ec as any).chains, kinds));
               if (why) { skipped[r.id] = why; continue; }
               ao.set(r.id, true); turned.push(r.id);

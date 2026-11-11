@@ -76,7 +76,7 @@ export function serverRunnable(r: Rule, chains: EvmChain[], kinds?: string[]): s
   if (r.token.toUpperCase() !== "ETH") return "Only ETH rules can run while the app is closed for now.";
   if (isBotKind(r.kind)) {
     if (!(kinds ?? []).includes(r.kind)) return `Tollkit's server doesn't run this bot 24/7 on ${chainName(r.chain)} yet; it runs while the app is open.`;
-    if (r.kind === "custom") return "Custom bots run while the app is open for now; 24/7 for them is coming.";
+    if (r.kind === "custom") return "Custom bots run 24/7 on Solana. On this network they run while the app is open.";
     return r.kind === "twap" && r.side === "sell" ? null : r.amount_usd ? null : "Needs a dollar amount.";
   }
   if (!KINDS.includes(r.kind)) return "This kind of rule runs only while the app is open.";
@@ -495,7 +495,7 @@ export async function applyFills(store: RuleStore, fills: ServerFill[], dir?: st
     for (const f of fills) {
       const r = rules.find((x) => x.id === f.rule_id);
       if (!r || (f.tx && r.state.fills.some((x) => x.tx === f.tx))) continue;
-      const bot = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind);
+      const bot = isBotKind(r.kind); // Nov 11, 2026: was a hand-kept list that left the custom bot out
       r.state.fills.push({ ts: f.ts, ok: f.ok, tx: f.tx, usd: f.usd, units: f.units, side: f.side, reason: f.ok ? undefined : f.reason, ...((f as any).paper ? { paper: true } : {}),
         ...(f.px !== undefined ? { px: f.px } : {}), ...(f.fee !== undefined ? { fee: f.fee } : {}), ...(f.ms !== undefined ? { ms: f.ms } : {}), ...(f.ok ? { route: "Run 24/7" } : {}) });
       r.state.fills = r.state.fills.slice(-50);
