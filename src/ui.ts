@@ -732,6 +732,7 @@ input:where([type=text],[type=number],[type=password],[type=email],[type=search]
 .bsk{background:none;border:0;border-radius:0;padding:4px 2px}
 .btabs{background:none;border:0;border-radius:0;padding:0;gap:14px;}.btab{flex:0 0 auto;border-radius:0;padding:8px 0;margin-bottom:-1px;border-bottom:2px solid transparent}.btab.on{background:none;box-shadow:none;color:var(--tx);border-bottom-color:var(--tkblue);font-weight:650}.btab .btn{background:none;padding:0 2px}
 .ap.botform{background:none;border:0;border-radius:0;padding:4px 2px;box-shadow:none;animation:botslide .42s var(--ease) both}
+.ap.botform.cbx{animation:none}.cbres{transition:opacity .2s ease}.cbres.ld{opacity:.45;pointer-events:none}.cbsk{height:460px;margin-top:8px;border-radius:12px;background:var(--surf);display:flex;align-items:center;justify-content:center}
 /* 0.9.9: Home: the balance has the full width; Running now is a row of icons under Buy…Bridge, like those buttons */
 .balrow .balcol{width:100%}
 .rbx{display:flex;flex-wrap:wrap;gap:2px;margin:18px 0 4px;padding:0;width:100%;background:none;border:0}
@@ -1773,12 +1774,12 @@ else if(k==="size"){var g=CB.pick.sg||s.size.grow||"none";s.size={usd:cbN("cb_s1
 else if(k==="sell"){var st=[],o={};if(cbN("cb_l1")>0)st.push({gain_pct:cbN("cb_l1"),share_pct:cbN("cb_l2")||100});if(cbN("cb_l3")>0)st.push({gain_pct:cbN("cb_l3"),share_pct:cbN("cb_l4")||100});if(st.length)o.steps=st;if(cbN("cb_l5")>0){o.trail_pct=cbN("cb_l5");if(cbN("cb_l6")>0)o.trail_after_pct=cbN("cb_l6")}s.sell=o}
 else if(k==="protect"){var pr={},pd=CB.pick.pd||(s.protect&&s.protect.downtrend?"on":"off");if(cbN("cb_p1")>0)pr.stop_pct=cbN("cb_p1");if(pd==="on")pr.downtrend={hours:Math.round((cbN("cb_p2")||10)*24),gap_pct:cbN("cb_p3")||3};s.protect=pr}
 else if(k==="limits"){s.limits={max_usd:cbN("cb_m1")};if(cbN("cb_m2")>0)s.limits.max_loss_usd=cbN("cb_m2")}
-CB.last=k;CB.edit=null;CB.pick={};CB.keep={};CB.rp=null;CB.seq++;CB.rpBusy=false;cbPreview()}
-function cbTok(){var c=cbV("cb_chain"),t=cbV("cb_tok");if(c&&c!==CB.chain){CB.chain=c;CB.token=NATIVE[c]||"ETH"}else if(t)CB.token=t;CB.rp=null;CB.seq++;CB.rpBusy=false;cbPreview()}
-function cbPreview(){var q=++CB.pseq;CB.err=null;api("/bots/preview",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec}).then(function(r){if(q!==CB.pseq)return;CB.parts=r.parts;CB.last=null;if(!CB.rp&&!CB.rpBusy&&/^(ETH|WETH|SOL|POL)$/i.test(CB.token||""))cbRun(CB.rpDays);else cbRender()}).catch(function(e){if(q!==CB.pseq)return;CB.err=e.message;if(CB.last){CB.edit=CB.last;CB.last=null}render()})}
+CB.last=k;CB.edit=null;CB.pick={};CB.keep={};CB.stale=true;CB.seq++;CB.rpBusy=false;cbPreview()}
+function cbTok(){var c=cbV("cb_chain"),t=cbV("cb_tok");if(c&&c!==CB.chain){CB.chain=c;CB.token=NATIVE[c]||"ETH"}else if(t)CB.token=t;CB.stale=true;CB.seq++;CB.rpBusy=false;cbPreview()}
+function cbPreview(){var q=++CB.pseq;CB.err=null;api("/bots/preview",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec}).then(function(r){if(q!==CB.pseq)return;CB.parts=r.parts;CB.last=null;if((!CB.rp||CB.stale)&&!CB.rpBusy&&/^(ETH|WETH|SOL|POL)$/i.test(CB.token||""))cbRun(CB.rpDays);else cbRender()}).catch(function(e){if(q!==CB.pseq)return;CB.err=e.message;if(CB.last){CB.edit=CB.last;CB.last=null}render()})}
 function cbRender(){var a=document.activeElement;if(CB.edit&&a&&a.closest&&a.closest(".cbed"))return;render()}
 document.addEventListener("input",function(e){var t=e.target;if(t&&t.id&&t.id.indexOf("cb_")===0&&t.closest&&t.closest(".cbed"))CB.keep[t.id]=t.value});
-function cbRun(d){var q=++CB.seq;CB.rpDays=d;CB.rpBusy=true;CB.rpErr=null;cbRender();api("/bots/replay",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec,days:d}).then(function(r){if(q!==CB.seq)return;CB.rpBusy=false;CB.rp=r;cbRender()}).catch(function(e){if(q!==CB.seq)return;CB.rpBusy=false;CB.rp=null;CB.rpErr=e.message;cbRender()})}
+function cbRun(d){var q=++CB.seq;CB.rpDays=d;CB.rpBusy=true;CB.rpErr=null;cbRender();api("/bots/replay",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec,days:d}).then(function(r){if(q!==CB.seq)return;CB.rpBusy=false;CB.stale=false;CB.rp=r;cbRender()}).catch(function(e){if(q!==CB.seq)return;CB.rpBusy=false;CB.stale=false;CB.rp=null;CB.rpErr=e.message;cbRender()})}
 function cbStart(){CB.busy=true;CB.err=null;render();api("/bots/start",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec}).then(function(){CB.busy=false;CB.rp=null;BOT.tab="live";flash=[1,"Bot started. It shows under My bots."];refresh().then(function(){setPT("bots","mine")})}).catch(function(e){CB.busy=false;CB.err=e.message;render()})}
 function cbReplay(){var ok=/^(ETH|WETH|SOL|POL)$/i.test(CB.token||""),h='<div class="brp"><div class="brph"><b>How it did on past prices</b></div>';
 if(!ok)return h+'<div class="sm mut">Replays use Coinbase’s price history, which has ETH, SOL and POL.</div></div>';
@@ -1786,13 +1787,16 @@ h+='<div class="chr" style="margin:8px 0 0">'+[[30,"30 days"],[90,"90 days"],[36
 if(CB.rpErr)h+='<div class="msg err">'+esc(CB.rpErr)+'</div>';
 var r=CB.rp;
 var dv=r?r.result_usd-r.baseline_usd:0;
-if(r)h+=bchart({key:"cb:"+r.token+r.from,series:r.prices,trades:r.trades.map(function(x){return {ts:x.ts,side:x.side,price:x.price}}),title:r.token+" replay",h:150})+
+// Nov 11: while a change re-tests, the last result stays (dimmed) so the page doesn't shrink and grow back; the
+// first test holds the same room.
+if(!r&&CB.rpBusy)return h+'<div class="cbsk sm mut">Testing on past prices…</div></div>';
+if(r)h+='<div class="cbres'+(CB.rpBusy||CB.stale?" ld":"")+'">'+bchart({key:"cb:"+r.token+r.from,series:r.prices,trades:r.trades.map(function(x){return {ts:x.ts,side:x.side,price:x.price}}),title:r.token+" replay",h:150})+
 (r.trades.length?'<div class="cbv '+(dv>=0?"ok":"warn")+'">'+(dv>=0?(r.result_usd>=0?"The bot beat holding by "+fmtUsd(dv):"The bot lost "+fmtUsd(dv)+" less than holding"):"Holding did "+fmtUsd(-dv)+" better than the bot")+'</div>':'')+
 '<div class="brpk"><div><small>With the bot</small><b>'+sgn(r.result_usd,fmtUsd(Math.abs(r.result_usd)))+'</b><span class="sm mut">'+r.trades.length+' trades</span></div>'+
 '<div><small>'+esc(r.baseline_label)+'</small><b>'+sgn(r.baseline_usd,fmtUsd(Math.abs(r.baseline_usd)))+'</b><span class="sm mut">doing nothing else</span></div>'+
 '<div><small>Worst drop</small><b>'+fmtUsd(r.worst_drop_usd)+'</b><span class="sm mut">along the way</span></div>'+
 '<div><small>Fees</small><b>'+fmtUsd(r.fees_usd)+'</b><span class="sm mut">0.1% a trade</span></div></div>'+
-'<div class="sm mut" style="margin-top:6px">'+(r.trades.length?'':'It never traded in this stretch. ')+esc(r.note)+'</div>';
+'<div class="sm mut" style="margin-top:6px">'+(r.trades.length?'':'It never traded in this stretch. ')+esc(r.note)+'</div></div>';
 else if(!CB.rpBusy&&!CB.rpErr)h+='<div class="sm mut" style="margin-top:6px">Pick a stretch to see what these settings would have done.</div>';
 return h+'</div>'}
 function cbBox(){if(ALLCH.indexOf(CB.chain)<0){CB.chain=ALLCH[0];CB.token=NATIVE[CB.chain]||"ETH"}
@@ -1918,6 +1922,9 @@ lwMountAll();after(m,enter)}
 var LASTW=null,LASTP=null;
 var shown=null;
 function after(m,enter){m.querySelectorAll(".row,.ap").forEach(function(r){r.classList.add("spot")});
+// Nov 11: the small looping charts on the ready-made bots carry on from where they were when the page redraws,
+// instead of starting over on every tap (all loop every 6 s from one shared clock).
+if(!RM){var ph=performance.now()%6000;m.querySelectorAll(".tart .ta-p,.tart .ta-tr,.tart .ta-m").forEach(function(e){var d=parseFloat(getComputedStyle(e).animationDelay)||0;e.style.animationDelay=(d*1000-ph)+"ms"})}
 if(!enter)m.classList.remove("enter");
 if(enter&&!RM){m.classList.remove("enter");void m.offsetWidth;Array.prototype.forEach.call(m.children,function(c,i){c.style.setProperty("--i",Math.min(i,12))});m.classList.add("enter");setTimeout(function(){m.classList.remove("enter")},1400)}
 var bars=m.querySelectorAll(".bar i[data-w]");if(enter&&!RM){requestAnimationFrame(function(){requestAnimationFrame(function(){bars.forEach(function(b){b.style.width=b.getAttribute("data-w")+"%"})})})}else bars.forEach(function(b){b.style.transition="none";b.style.width=b.getAttribute("data-w")+"%"});
