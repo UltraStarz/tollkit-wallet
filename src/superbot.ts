@@ -1735,8 +1735,12 @@ export class SuperBot {
         }
       }
       if (st.sizing_wait) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) delete y.sizing_wait; });
-      const next = { ...st.params, amount_usd: want };
-      const why = oneShot
+      // Review 4: on its small live test the size is fixed, so nothing is resized (and no note claims a size it won't
+      // get). A one-shot dip is still re-armed, at the small size.
+      const smallTest = st.stage === "live" && !!st.canary;
+      if (smallTest && !oneShot) { await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.sizing_seen = made; }); continue; }
+      const next = smallTest ? { ...st.params } : { ...st.params, amount_usd: want };
+      const why = smallTest ? `Sold; buying again at its small test size ($${r2(cur)}).` : oneShot
         ? `Sold; buying again at $${r2(want)}${want !== cur ? ` (was $${r2(cur)}, ${st.sizing === "compound" ? "adding what it made" : st.sizing === "step_up" ? (made > seen ? "25% bigger after a win" : "back to the start after a loss") : "same size"})` : ""}.`
         : `${made >= seen ? "Made" : "Lost"} $${r2(Math.abs(made - seen))} since the last size: next trades $${r2(want)} (was $${r2(cur)}).`;
       const ok = await this.restage(st, st.stage, why, all, next, true);
