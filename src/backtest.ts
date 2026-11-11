@@ -76,6 +76,7 @@ export class Market {
   seen = 0; seenAt = -Infinity;
   private hours: Float64Array | null = null; private hour0 = 0;
   private hBucket = -1; private hCloses: number[] | null = null;
+  private dDay = -1; private dCloses: number[] | null = null;
 
   constructor(spec: MarketSpec, private readonly seed: number, private readonly fixedTiming: boolean) {
     this.symbol = spec.symbol.toUpperCase();
@@ -127,6 +128,15 @@ export class Market {
    * Hourly closes as the app would have them at time t (src/indicators.ts hourlyCloses): up to 263 finished hours
    * and the hour in progress, read at most every 10 minutes. Oldest first. Null before any hour has finished.
    */
+  /** Phase 3: finished daily closes at time t (src/indicators.ts dailyCloses): the last price of each UTC day before t's day, up to 260. */
+  daily(t: number): number[] | null {
+    const day = Math.floor(t / 86_400_000);
+    if (day === this.dDay) return this.dCloses;
+    this.dDay = day;
+    const out: number[] = [], first = Math.floor(this.t0 / 86_400_000);
+    for (let d = Math.max(first, day - 260); d < day; d++) { const end = (d + 1) * 86_400_000 - 1; if (end < this.t0) continue; out.push(this.priceAt(Math.min(end, this.end - 1))); }
+    return (this.dCloses = out.length ? out : null);
+  }
   hourly(t: number): number[] | null {
     const bucket = Math.floor(t / 600_000);
     if (bucket === this.hBucket) return this.hCloses;
@@ -320,6 +330,7 @@ export class Sim {
       ...opts, dir: this.dir, now: () => this.clock, noLease: true,
       resolve: async (_c, sym) => { const m = this.find(sym); if (!m) throw new Error(`No market for ${sym} in the simulation.`); return m.token; },
       hourly: async (_c, t) => this.byAddress(t.address)?.hourly(this.clock) ?? [],
+      daily: async (_c, t) => this.byAddress(t.address)?.daily(this.clock) ?? [],
       onEvent: (e: AutopilotEvent) => {
         this.events[e.type] = (this.events[e.type] ?? 0) + 1;
         if (e.type === "filled" && this.last && !this.last.rule) { this.last.rule = e.rule.id; this.last.bot = e.rule.bot; this.last.template = e.rule.template; this.last.kind = e.rule.kind; }
@@ -438,11 +449,12 @@ export class Sim {
     if (isBotKind(r.kind)) {
       // A split sell fixes its total from the wallet's balance on its first part: the engine looks.
       if (r.kind === "twap" && r.side === "sell" && r.state.bot?.sell_total === undefined) return (now) => next > now;
-      const st: BotState = { ...(r.state.bot ?? {}), ...(r.kind === "grid" && r.state.grid ? { grid: r.state.grid } : {}) }, opt: { decimals: number; closes?: number[] | null } = { decimals: m.token.decimals };
-      const custom = r.kind === "custom";
+      const st: BotState = { ...(r.state.bot ?? {}), ...(r.kind === "grid" && r.state.grid ? { grid: r.state.grid } : {}) }, opt: { decimals: number; closes?: number[] | null; daily?: number[] | null } = { decimals: m.token.decimals };
+      const custom = r.kind === "custom", trend = custom && r.custom?.buy.type === "trend";
       return (now) => {
         if (next > now) return true;
         if (custom) opt.closes = m.hourly(now); // the same closes the engine would be handed at this moment
+        if (trend) opt.daily = m.daily(now);
         const a = decide(r as any, st, m.seen, now, opt);
         return !a || (a.side === "buy" && !!holdBuy?.(r));
       };

@@ -54,7 +54,9 @@ export interface BotParams {
  *            sells everything and stops for good.
  */
 export interface CustomSpec {
-  buy: { type: "schedule"; every_hours: number } | { type: "drop"; pct: number; hours?: number } | { type: "levels"; step_pct: number; levels: number } | { type: "price"; at: number } | { type: "rsi"; below: number };
+  buy: { type: "schedule"; every_hours: number } | { type: "drop"; pct: number; hours?: number } | { type: "levels"; step_pct: number; levels: number } | { type: "price"; at: number } | { type: "rsi"; below: number }
+    /** Phase 3 (Nov 11, 2026): long or flat with the slow trend. Decided once a day from finished daily closes: holds the coin while the close is gap_pct over its `days`-day average, and sells everything to USDC once it is gap_pct under it. */
+    | { type: "trend"; days: number; gap_pct: number };
   size: { usd: number; grow?: "none" | "wins" | "deeper"; factor?: number };
   sell?: { steps?: { gain_pct: number; share_pct: number }[]; trail_pct?: number; trail_after_pct?: number };
   protect?: { stop_pct?: number; downtrend?: { hours: number; gap_pct: number } };
@@ -138,11 +140,11 @@ export function avgCost(s: BotState, decimals: number): number | null {
  * What to do now. `avail`: the most of the coin the bot may sell right now (its balance after the gas reserve, or
  * on the server the allowance); a split sell fixes its total from it on the first part.
  */
-export function decide(p: BotParams, s: BotState, price: number, nowMs: number, o: { decimals: number; avail?: bigint; /** Hourly closes, oldest first (a custom bot's drop, RSI and downtrend parts read them). */ closes?: number[] | null }): BotAction {
+export function decide(p: BotParams, s: BotState, price: number, nowMs: number, o: { decimals: number; avail?: bigint; /** Hourly closes, oldest first (a custom bot's drop, RSI and downtrend parts read them). */ closes?: number[] | null; /** Finished daily closes, oldest first (a custom bot's trend part reads them). */ daily?: number[] | null }): BotAction {
   if (s.done || !(price > 0)) return null;
   const d = o.decimals, held = big(s.units), heldU = toUnits(held, d), value = heldU * price;
   switch (p.kind) {
-    case "custom": return decideCustom(p.custom!, s, price, nowMs, held, value, o.closes ?? null);
+    case "custom": return decideCustom(p.custom!, s, price, nowMs, held, value, o.closes ?? null, o.daily ?? null);
     case "grid": {
       const L = gridLevels(p), g = s.grid ?? emptyGrid(L.length - 1);
       const sellAt = g.atomic.findIndex((a, i) => a !== null && price >= L[i + 1]!);
@@ -220,7 +222,7 @@ export function cleanCustom(x: any): CustomSpec | undefined {
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined), opt = <K extends string>(k: K, v: number | undefined) => (v === undefined ? {} : { [k]: v } as Record<K, number>);
   const b = x.buy, t = b.type;
   const buy = t === "schedule" ? { type: t, every_hours: n(b.every_hours) } : t === "drop" ? { type: t, pct: n(b.pct), ...opt("hours", n(b.hours)) } : t === "levels" ? { type: t, step_pct: n(b.step_pct), levels: n(b.levels) }
-    : t === "price" ? { type: t, at: n(b.at) } : t === "rsi" ? { type: t, below: n(b.below) } : { type: "none" };
+    : t === "trend" ? { type: t, days: n(b.days), gap_pct: n(b.gap_pct) } : t === "price" ? { type: t, at: n(b.at) } : t === "rsi" ? { type: t, below: n(b.below) } : { type: "none" };
   const g = x.size.grow, size = { usd: n(x.size.usd), ...(g === "wins" || g === "deeper" || g === "none" ? { grow: g } : {}), ...opt("factor", n(x.size.factor)) };
   const sl = x.sell && typeof x.sell === "object" ? x.sell : undefined, steps = Array.isArray(sl?.steps) ? sl.steps.slice(0, 7).map((s: any) => ({ gain_pct: n(s?.gain_pct), share_pct: n(s?.share_pct) })) : undefined;
   const sell = sl ? { ...(steps ? { steps } : {}), ...opt("trail_pct", n(sl.trail_pct)), ...opt("trail_after_pct", n(sl.trail_after_pct)) } : undefined;
@@ -245,12 +247,21 @@ export function customSize(c: CustomSpec, cs: CustomState): number {
   const f = c.size.grow === "wins" ? Math.pow(1.25, Math.min(5, cs.wins ?? 0)) : c.size.grow === "deeper" ? Math.pow(c.size.factor ?? 1.5, cs.buys ?? 0) : 1;
   return +(c.size.usd * f).toFixed(2);
 }
-function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, held: bigint, value: number, closes: number[] | null): BotAction {
+/** Phase 3: where the last finished daily close sits against its average: "in" (gap over), "out" (gap under), "hold" (between), or null without enough days. */
+export function trendState(daily: number[] | null | undefined, days: number, gapPct: number): { side: "in" | "out" | "hold"; close: number; mean: number } | null {
+  if (!daily || daily.length < days || days < 1) return null;
+  let sum = 0; for (let i = daily.length - days; i < daily.length; i++) sum += daily[i]!;
+  const mean = sum / days, close = daily[daily.length - 1]!;
+  return { side: close > mean * (1 + gapPct / 100) ? "in" : close < mean * (1 - gapPct / 100) ? "out" : "hold", close, mean };
+}
+function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, held: bigint, value: number, closes: number[] | null, daily: number[] | null): BotAction {
   const cs = s.c ?? {}, cost = s.cost ?? 0, holding = held > 0n && cost > 0, avg = holding ? cost / (value / price) : 0, gain = holding ? (price / avg - 1) * 100 : 0;
   const all = (why: string, tag: string): BotAction => ({ side: "sell", atomic: held.toString(), why, tag });
   // 1. Protection comes first.
+  const tr = c.buy.type === "trend" ? trendState(daily, c.buy.days, c.buy.gap_pct) : null;
   if (holding && c.limits.max_loss_usd && (cs.realized ?? 0) + value - cost <= -c.limits.max_loss_usd) return all(`Down $${c.limits.max_loss_usd} in all: sells everything and stops`, "loss");
   if (holding && c.protect?.stop_pct && gain <= -c.protect.stop_pct) return all(`Stop: ${c.protect.stop_pct}% under its average cost`, "stop");
+  if (holding && tr?.side === "out" && c.buy.type === "trend") return all(`Trend: yesterday's close was ${c.buy.gap_pct}% or more under its ${c.buy.days}-day average, so it sells to USDC`, "trend");
   const dt = c.protect?.downtrend;
   // Review, Nov 11: a price source can return a little less history than asked (186 of 200 points seen). The average
   // then uses what there is, down to 70% of its window, so the exit doesn't switch itself off.
@@ -297,6 +308,7 @@ function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, 
     }
     case "drop": { if (holding || !closes) return null; const h = Math.round(b.hours ?? 24), was = closes[closes.length - 1 - h]; return was && price <= was * (1 - b.pct / 100) ? buy(`Down ${b.pct}% in ${h} hours`) : null; }
     case "price": return !holding && price <= b.at ? buy(`At or under $${b.at}`) : null;
+    case "trend": return !holding && tr?.side === "in" ? buy(`Trend: yesterday's close was ${b.gap_pct}% or more over its ${b.days}-day average`) : null;
     case "rsi": { if (holding || !closes) return null; const v = rsi14([...closes, price]); return v !== null && v <= b.below ? buy(`Hourly RSI ${v.toFixed(0)}, at or under ${b.below}`) : null; }
   }
   return null;
@@ -455,8 +467,9 @@ export function customProblem(c: CustomSpec | undefined): string | null {
   else if (b.type === "drop") { if (!num(b.pct, 0.5, 90) || (b.hours !== undefined && (!Number.isInteger(b.hours) || !num(b.hours, 1, 168)))) return "Buy after a drop: 0.5% to 90%, over 1 to 168 hours."; }
   else if (b.type === "levels") { if (!num(b.step_pct, 0.4, 50) || !Number.isInteger(b.levels) || !num(b.levels, 1, 40)) return "Buy at levels: steps of 0.4% to 50%, 1 to 40 levels."; if (b.step_pct * b.levels >= 95) return "Those levels would reach a price of zero: use fewer or smaller steps."; }
   else if (b.type === "price") { if (!num(b.at, 1e-12, 1e12)) return "Buy at a price: give the price."; }
+  else if (b.type === "trend") { if (!Number.isInteger(b.days) || !num(b.days, 20, 200) || !num(b.gap_pct, 0.5, 20)) return "Follow the trend: an average of 20 to 200 days, and a gap of 0.5% to 20%."; }
   else if (b.type === "rsi") { if (!num(b.below, 5, 60)) return "Buy on RSI: a level from 5 to 60."; }
-  else return "Pick when to buy: on a schedule, after a drop, at levels, at a price, or on RSI.";
+  else return "Pick when to buy: on a schedule, after a drop, at levels, at a price, on RSI, or with the trend.";
   if (!num(c.size.usd, MIN_TRADE_USD, 1_000_000)) return `Each buy needs at least $${MIN_TRADE_USD}.`;
   if (c.size.grow !== undefined && !["none", "wins", "deeper"].includes(c.size.grow)) return "Pick how the size changes: the same, bigger after wins, or bigger as it falls.";
   if (c.size.grow === "deeper" && c.size.factor !== undefined && !num(c.size.factor, 1, 3)) return "Each further buy can be 1 to 3 times the one before.";

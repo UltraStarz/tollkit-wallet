@@ -1638,6 +1638,8 @@ export class SuperBot {
     if (template === "custom") {
       const d = (k: string) => { out[k] = tpl.fields.find((f) => f.key === k)!.default; }, b = out.buy;
       if (b !== "rsi") d("rsi_below");
+      if (b !== "trend") d("trend_days");
+      if (b === "trend") { d("hours"); out.max_buys = 1; }
       if (b === "rsi") { d("buy_pct"); d("hours"); }
       if (b === "levels") d("hours");
       if (b === "schedule") d("buy_pct");

@@ -206,5 +206,39 @@ async function both(label: string, o: SimOptions, custom: CustomSpec, min: numbe
   check(describeCustom({ ...base, sell: { trail_pct: 4, trail_after_pct: 6 }, protect: { stop_pct: 8 } }, "SOL").join("; ").includes("trails 4% under its high once it is up 6%; Stops 8% under its cost, then waits a day"), "the card says when the trail starts and that a stop is followed by a day's wait");
 }
 
+// ── Phase 3 (Nov 11, 2026): the trend part, long or flat with the slow trend, decided once a day ──────────────────
+{
+  const { trendState } = await import("../src/botlogic.js");
+  const flat = (n: number, v: number) => Array(n).fill(v);
+  check(trendState(flat(99, 100), 100, 3) === null && trendState([...flat(99, 100), 104], 100, 3)!.side === "in" && trendState([...flat(99, 100), 96], 100, 3)!.side === "out" && trendState([...flat(99, 100), 102], 100, 3)!.side === "hold", "the last daily close against its average: in over the gap, out under it, hold between, nothing without enough days");
+  const T: CustomSpec = { buy: { type: "trend", days: 100, gap_pct: 3 }, size: { usd: 100 }, limits: { max_usd: 100 } };
+  const P = { kind: "custom", custom: T };
+  check(customProblem(T) === null && /20 to 200 days/.test(customProblem({ ...T, buy: { type: "trend", days: 10, gap_pct: 3 } }) ?? "") && /0\.5% to 20%/.test(customProblem({ ...T, buy: { type: "trend", days: 100, gap_pct: 30 } }) ?? "") && /20 to 200 days/.test(customProblem({ ...T, buy: { type: "trend", days: 100.5, gap_pct: 3 } }) ?? ""), "a trend bot needs no sell part; its average and gap are checked");
+  const up = [...flat(99, 100), 104], down = [...flat(99, 100), 96], mid = [...flat(99, 100), 101];
+  const b1 = decide(P, {}, 104, 0, { decimals: D, daily: up }) as any;
+  check(b1?.side === "buy" && b1.usd === 100 && /over its 100-day average/.test(b1.why), "yesterday's close 4% over its average: it buys", b1);
+  check(decide(P, {}, 104, 0, { decimals: D, daily: mid }) === null && decide(P, {}, 104, 0, { decimals: D, daily: null }) === null && decide(P, {}, 104, 0, { decimals: D, daily: down }) === null, "between the gaps, without history, or under the average: no buy");
+  const held: BotState = { units: "961538461", cost: 100, c: { buys: 1 } };
+  check(decide(P, held, 120, 0, { decimals: D, daily: [...flat(99, 100), 120] }) === null && decide(P, held, 99, 0, { decimals: D, daily: mid }) === null, "holding: no sell while the trend holds, even on a red day inside the gap");
+  const s1 = decide(P, held, 95, 0, { decimals: D, daily: down }) as any;
+  check(s1?.side === "sell" && s1.atomic === "961538461" && s1.tag === "trend", "yesterday's close 4% under its average: sells everything to USDC", s1);
+  const after = applyFill(P, held, s1, { usd: 91.3, got: 961_538_461n }, 95, 0, D).state;
+  check(after.units === "0" && after.cycles === 1 && decide(P, after, 95, 0, { decimals: D, daily: down }) === null && (decide(P, after, 104, 0, { decimals: D, daily: up }) as any)?.side === "buy", "then waits in cash, and buys again once the trend turns up");
+  check(describeCustom(T, "SOL").join("; ") === "Buys SOL while… ".slice(0, 0) + "Holds SOL while its daily close is 3% over its 100-day average; sells to USDC 3% under it; $100 a time; Sells only when the trend turns; $100 at most", "the card says it plainly", describeCustom(T, "SOL"));
+  // The simulator hands it finished days only, and the whole bot runs in the real engine.
+  const day = 86_400_000, bars: Bar[] = [];
+  const px = (d: number) => d < 120 ? 100 : d < 160 ? 100 + (d - 120) * 1.5 : 160 - (d - 160) * 2; // flat, up 60%, then down
+  for (let h = 0; h < 220 * 24; h++) { const v = px(h / 24); bars.push({ t: h * 3_600_000, o: v, h: v, l: v, c: v }); }
+  const sim = new Sim({ markets: [{ symbol: "SOL", decimals: 9, bars, barMs: 3_600_000 }], start: 101 * day, end: 219 * day, cashUsd: 300, pollMs: 60_000, timing: "fixed" });
+  const mk = (sim as any).markets[0];
+  const d0 = mk.daily(130 * day + 5 * 3_600_000);
+  check(d0.length === 130 && d0.at(-1) === px(129 + 23 / 24) && mk.daily(131 * day - 1) === d0, "daily closes: the last price of each finished day, the day in progress left out", d0.at(-1));
+  await sim.addRules([{ kind: "custom", chain: "solana", token: "SOL", custom: T }]);
+  const r = await sim.run();
+  const sides = r.trades.map((x: any) => x.side).join(",");
+  const buyDay = r.trades[0] ? Math.floor(r.trades[0].t / day) : -1, sellDay = r.trades[1] ? Math.floor(r.trades[1].t / day) : -1;
+  check(sides === "buy,sell" && buyDay > 120 && buyDay < 130 && sellDay > 160 && sellDay < 190 && r.pnl_usd > 0, "in the engine: buys early in the rise, sells to cash in the fall, once each, ahead", { sides, buyDay, sellDay, pnl: r.pnl_usd });
+}
+
 console.log(`\ncustom: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

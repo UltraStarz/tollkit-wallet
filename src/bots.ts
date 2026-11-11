@@ -65,11 +65,12 @@ export const TEMPLATES: Template[] = [
  */
 export const AP_CUSTOM: Template = { id: "custom", name: "Custom bot", blurb: "A bot made of five parts: when to buy, how much, when to sell, protection and limits.", risk: "It can hold the coin at a loss until one of its sells or its protection fires.",
   fields: [{ key: "amount_usd", label: "Dollars each buy", kind: "usd", default: 25, min: 1 },
-    { key: "buy", label: "When to buy", kind: "choice", default: "levels", choices: [["levels", "At levels as it falls"], ["drop", "After a drop"], ["schedule", "On a schedule"], ["rsi", "When RSI is low"]] },
+    { key: "buy", label: "When to buy", kind: "choice", default: "levels", choices: [["levels", "At levels as it falls"], ["drop", "After a drop"], ["schedule", "On a schedule"], ["rsi", "When RSI is low"], ["trend", "With the slow trend"]] },
     { key: "buy_pct", label: "Each step down, or the drop (%)", kind: "pct", default: 1.5, min: 0.4, max: 50 },
     { key: "max_buys", label: "Buys at most", kind: "int", default: 6, min: 1, max: 40 },
     { key: "hours", label: "Hours (the drop's window, or the schedule)", kind: "int", default: 24, min: 1, max: 720 },
     { key: "rsi_below", label: "RSI at or under", kind: "int", default: 40, min: 5, max: 60 },
+    { key: "trend_days", label: "Trend: average of days (the gap is buy_pct)", kind: "int", default: 100, min: 20, max: 200 },
     { key: "sell_gain_pct", label: "Sell step at a gain of (%), 0 = none", kind: "pct", default: 3, min: 0, max: 1000 },
     { key: "sell_share_pct", label: "The step sells (%)", kind: "pct", default: 50, min: 1, max: 100 },
     { key: "trail_pct", label: "Trail the rest under its high (%), 0 = none", kind: "pct", default: 3, min: 0, max: 90 },
@@ -86,12 +87,13 @@ export function customBuys(p: Record<string, unknown>): number {
 export function customFromFlat(v: Record<string, number | string>): CustomSpec {
   const n = (k: string) => Number(v[k]) || 0, usd = n("amount_usd");
   const buy: CustomSpec["buy"] = v.buy === "drop" ? { type: "drop", pct: Math.max(0.5, n("buy_pct")), hours: Math.min(168, n("hours") || 24) } : v.buy === "schedule" ? { type: "schedule", every_hours: n("hours") || 24 }
-    : v.buy === "rsi" ? { type: "rsi", below: n("rsi_below") || 40 } : { type: "levels", step_pct: n("buy_pct"), levels: customBuys(v) };
+    : v.buy === "rsi" ? { type: "rsi", below: n("rsi_below") || 40 }
+    : v.buy === "trend" ? { type: "trend", days: Math.round(n("trend_days")) || 100, gap_pct: Math.min(20, Math.max(0.5, n("buy_pct") || 3)) } : { type: "levels", step_pct: n("buy_pct"), levels: customBuys(v) };
   const trail = n("trail_pct") > 0 ? Math.max(0.5, n("trail_pct")) : 0, gain = n("sell_gain_pct") > 0 ? Math.max(0.3, n("sell_gain_pct")) : 0;
-  if (!trail && !gain) throw new Error("A custom bot needs a way to sell: a sell step or a trail.");
+  if (!trail && !gain && v.buy !== "trend") throw new Error("A custom bot needs a way to sell: a sell step or a trail."); // a trend bot sells when the trend turns
   const sell: NonNullable<CustomSpec["sell"]> = { ...(gain ? { steps: [{ gain_pct: gain, share_pct: trail ? n("sell_share_pct") || 50 : 100 }] } : {}), ...(trail ? { trail_pct: trail } : {}) };
   const days = Math.round(n("downtrend_days")), protect: NonNullable<CustomSpec["protect"]> = { ...(n("stop_pct") > 0 ? { stop_pct: Math.max(1, n("stop_pct")) } : {}), ...(days > 0 ? { downtrend: { hours: days * 24, gap_pct: n("downtrend_gap_pct") || 3 } } : {}) };
-  return { buy, size: { usd }, sell, ...(Object.keys(protect).length ? { protect } : {}), limits: { max_usd: Math.round(usd * customBuys(v) * 100) / 100 } };
+  return { buy, size: { usd }, ...(trail || gain ? { sell } : {}), ...(Object.keys(protect).length ? { protect } : {}), limits: { max_usd: Math.round(usd * customBuys(v) * 100) / 100 } };
 }
 
 const round = (n: number) => Number(n.toPrecision(6));

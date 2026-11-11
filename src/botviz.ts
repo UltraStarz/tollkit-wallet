@@ -219,7 +219,9 @@ export async function replay(o: { template: string; chain: Chain; token: string;
   const product = coinbaseProduct(o.token);
   if (!product) throw new Error("Replays use Coinbase's price history, which has ETH, SOL and POL. This token isn't on it.");
   // Nov 11: up to a year. A custom bot gets 11 days of history before its first check, for its downtrend average.
-  const days = Math.min(365, Math.max(3, o.days ?? 30)), warm = o.template === "custom" ? 264 : 0;
+  const days = Math.min(365, Math.max(3, o.days ?? 30)), tb = o.custom?.buy.type === "trend" ? o.custom.buy : null;
+  // Phase 3: a trend bot gets its whole average of days before its first check (a 200-day average: 201 days).
+  const warm = o.template === "custom" ? Math.max(264, tb ? (tb.days + 1) * 24 : 0) : 0;
   const candles = await hourlyCandles(product, days * 24 + warm, o.fetch, o.now);
   if (candles.length <= warm + 24) throw new Error("Not enough price history came back for a replay.");
   const start = candles[warm]!, end = candles.at(-1)!, sym = o.token.toUpperCase();

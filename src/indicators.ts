@@ -60,6 +60,38 @@ export async function hourlyCloses(chain: Chain, t: Token, f: Fetch = fetch, now
   return closes;
 }
 
+/** Phase 3: finished days of daily closes kept for the trend part (a 200-day average and some slack). */
+export const DAYS = 260;
+const dcache = new Map<string, { at: number; closes: number[] }>();
+/**
+ * Phase 3 (Nov 11, 2026): daily closes for a token, oldest first, FINISHED days only (the day in progress is left
+ * out, so a trend bot decides once a day). Coinbase daily candles for ETH, SOL, POL and BTC; DefiLlama's daily
+ * chart for any other token. Cached an hour.
+ */
+export async function dailyCloses(chain: Chain, t: Token, f: Fetch = fetch, now = Date.now()): Promise<number[]> {
+  const key = `${chain}:${t.address.toLowerCase()}`, hit = dcache.get(key);
+  if (hit && now - hit.at < 3_600_000) return hit.closes;
+  const today = Math.floor(now / 86_400_000) * 86_400_000;
+  let rows: [number, number][] = [];
+  const product = coinbaseProduct(t.symbol);
+  if (product) {
+    const u = `https://api.exchange.coinbase.com/products/${product}/candles?granularity=86400&start=${new Date(today - 299 * 86_400_000).toISOString()}&end=${new Date(today).toISOString()}`;
+    const r = await f(u, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) throw new Error(`Price history isn't available right now (HTTP ${r.status}).`);
+    const j = (await r.json()) as number[][];
+    rows = (Array.isArray(j) ? j : []).filter((x) => Array.isArray(x) && x.length >= 5).map((x) => [x[0]! * 1000, x[4]!] as [number, number]);
+  } else {
+    const coin = coinId(chain, t.address);
+    const r = await f(`https://coins.llama.fi/chart/${coin}?span=${DAYS}&period=1d`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(12_000) });
+    if (!r.ok) throw new Error(`Price history isn't available right now (HTTP ${r.status}).`);
+    rows = ((await r.json())?.coins?.[coin]?.prices ?? []).map((x: any) => [Number(x.timestamp) * 1000, Number(x.price)] as [number, number]);
+  }
+  const closes = rows.filter(([ts, p]) => p > 0 && ts < today).sort((a, b) => a[0] - b[0]).map(([, p]) => p).slice(-DAYS);
+  if (!closes.length) throw new Error("No price history came back.");
+  dcache.set(key, { at: now, closes });
+  return closes;
+}
+
 export interface AlertCheck { hit: boolean; clear: boolean; now: string; detail: string }
 
 /**

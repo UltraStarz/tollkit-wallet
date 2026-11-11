@@ -1739,14 +1739,15 @@ function cbF(id,label,val,unit,ph){var v=CB.keep[id]!==undefined?CB.keep[id]:(va
 function cbC(key,opts,val){return '<div class="cbch">'+opts.map(function(o){return '<button type="button" class="chrb'+(val===o[0]?" on":"")+'" onclick="cbPick(\''+key+'\',\''+o[0]+'\')">'+o[1]+'</button>'}).join("")+'</div>'}
 function cbKeep(){var q=document.querySelectorAll(".cbed input");for(var i=0;i<q.length;i++)CB.keep[q[i].id]=q[i].value}
 function cbPick(key,v){if(key==="bt")CB.keep={};else cbKeep();CB.pick[key]=v;render()}
-var CBH={levels:"Buys again each time the price falls another step from where it started.",drop:"Buys once when the price is down this much, then waits until it has sold.",schedule:"Buys on the clock, whatever the price.",price:"Buys once at or under this price, then waits until it has sold.",rsi:"A low RSI usually means it fell fast. Buys once, then waits until it has sold."};
+var CBH={levels:"Buys again each time the price falls another step from where it started.",drop:"Buys once when the price is down this much, then waits until it has sold.",schedule:"Buys on the clock, whatever the price.",price:"Buys once at or under this price, then waits until it has sold.",rsi:"A low RSI usually means it fell fast. Buys once, then waits until it has sold.",trend:"Decided once a day. Holds the coin while yesterday's close is that far over its average, and sells everything to USDC once it is that far under. On 2.5 years of SOL, BTC and ETH it cut the worst drops, but it made money in only 8 of 18 settings tested."};
 function cbForm(k){var s=CB.spec,h="",G='<div class="botgrid">',L=function(t){return '<div class="cbl">'+t+'</div>'},H=function(t){return '<div class="sm mut cbhint">'+t+'</div>'};
 if(k==="buy"){var t=CB.pick.bt||s.buy.type,b=s.buy.type===t?s.buy:{};
-h+=L("How should it buy?")+cbC("bt",[["levels","As it falls"],["drop","After a drop"],["schedule","On a schedule"],["price","At a price"],["rsi","Low RSI"]],t)+G;
+h+=L("How should it buy?")+cbC("bt",[["levels","As it falls"],["drop","After a drop"],["schedule","On a schedule"],["price","At a price"],["rsi","Low RSI"],["trend","With the trend"]],t)+G;
 if(t==="levels")h+=cbF("cb_b1","Each step down",b.step_pct||1,"%")+cbF("cb_b2","Buys at most",b.levels||10,"times");
 else if(t==="drop")h+=cbF("cb_b1","A drop of",b.pct||5,"%")+cbF("cb_b2","Within",b.hours||24,"hours");
 else if(t==="schedule")h+=cbF("cb_b1","Every",b.every_hours||24,"hours");
 else if(t==="price")h+=cbF("cb_b1","At or under",b.at||"","$");
+else if(t==="trend")h+=cbF("cb_b1","Average of",b.days||100,"days")+cbF("cb_b2","Gap either side",b.gap_pct||3,"%");
 else h+=cbF("cb_b1","Hourly RSI at or under",b.below||30);
 h+='</div>'+H(CBH[t])}
 else if(k==="size"){var g=CB.pick.sg||s.size.grow||"none";
@@ -1767,7 +1768,7 @@ function cbN(id){var e=document.getElementById(id);return e?Number(e.value):NaN}
 function cbV(id){var e=document.getElementById(id);return e?e.value:""}
 function cbEdit(k){CB.edit=CB.edit===k?null:k;CB.pick={};CB.keep={};render()}
 function cbDone(){var k=CB.edit,s=CB.spec;
-if(k==="buy"){var t=CB.pick.bt||s.buy.type;s.buy=t==="schedule"?{type:t,every_hours:cbN("cb_b1")}:t==="drop"?{type:t,pct:cbN("cb_b1"),hours:cbN("cb_b2")||24}:t==="levels"?{type:t,step_pct:cbN("cb_b1"),levels:Math.round(cbN("cb_b2"))}:t==="price"?{type:t,at:cbN("cb_b1")}:{type:"rsi",below:cbN("cb_b1")}}
+if(k==="buy"){var t=CB.pick.bt||s.buy.type;s.buy=t==="schedule"?{type:t,every_hours:cbN("cb_b1")}:t==="drop"?{type:t,pct:cbN("cb_b1"),hours:cbN("cb_b2")||24}:t==="levels"?{type:t,step_pct:cbN("cb_b1"),levels:Math.round(cbN("cb_b2"))}:t==="price"?{type:t,at:cbN("cb_b1")}:t==="trend"?{type:"trend",days:Math.round(cbN("cb_b1")),gap_pct:cbN("cb_b2")}:{type:"rsi",below:cbN("cb_b1")}}
 else if(k==="size"){var g=CB.pick.sg||s.size.grow||"none";s.size={usd:cbN("cb_s1"),grow:g};if(g==="deeper")s.size.factor=cbN("cb_s2")||1.5}
 else if(k==="sell"){var st=[],o={};if(cbN("cb_l1")>0)st.push({gain_pct:cbN("cb_l1"),share_pct:cbN("cb_l2")||100});if(cbN("cb_l3")>0)st.push({gain_pct:cbN("cb_l3"),share_pct:cbN("cb_l4")||100});if(st.length)o.steps=st;if(cbN("cb_l5")>0){o.trail_pct=cbN("cb_l5");if(cbN("cb_l6")>0)o.trail_after_pct=cbN("cb_l6")}s.sell=o}
 else if(k==="protect"){var pr={},pd=CB.pick.pd||(s.protect&&s.protect.downtrend?"on":"off");if(cbN("cb_p1")>0)pr.stop_pct=cbN("cb_p1");if(pd==="on")pr.downtrend={hours:Math.round((cbN("cb_p2")||10)*24),gap_pct:cbN("cb_p3")||3};s.protect=pr}

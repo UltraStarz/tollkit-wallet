@@ -782,6 +782,9 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(/not handed to Autopilot/.test(threw4) && W4.bot.view().strategies.length === 1, "a custom bot can't be handed to Autopilot from the chat card", threw4);
   const twin = await (W4.bot as any).apply({ type: "propose", template: "custom", chain: "base", token: "ETH", params: { ...st4.params, rsi_below: 20, hours: 99 }, reason: "copy", sources: [] });
   check(twin.applied === false && /already running/.test(twin.outcome), "the same bot with only unused settings changed is still a copy", twin);
+  // Phase 3: the trend kind as flat settings: no sell part needed, one buy a round, the gap from buy_pct.
+  const tb = buildBot("custom", "ETH", "base", { amount_usd: 50, buy: "trend", trend_days: 100, buy_pct: 3, sell_gain_pct: 0, trail_pct: 0, downtrend_days: 0 }, undefined).rules[0]!.custom!;
+  check(tb.buy.type === "trend" && (tb.buy as any).days === 100 && (tb.buy as any).gap_pct === 3 && tb.sell === undefined && tb.limits.max_usd === 50 && customBuys({ buy: "trend", max_buys: 9 }) === 1 && SUPERBOT_STEP.templates.includes("custom") && /"trend" \(long or flat with the slow trend/.test(SUPERBOT_SYSTEM), "Autopilot can design a trend bot from flat settings; the AI is told what it is and how it did", tb);
   const many = sizeToShare("custom", { ...flat, max_buys: 40 }, 30) as any;
   check(many.max_buys === 30 && many.amount_usd === 1 && committedUsd("custom", many) === 30, "more buys than dollars: fewer buys, never sized past its share", many);
 }

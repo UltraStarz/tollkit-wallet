@@ -8,7 +8,7 @@
  * with `tollkit-wallet autopilot` (for a server that stays on). Only one
  * process runs rules at a time (a lease file), so two copies never double-fill.
  */
-import { checkAlert, checkSignal, hourlyCloses } from "./indicators.js";
+import { checkAlert, checkSignal, dailyCloses, hourlyCloses } from "./indicators.js";
 import { autopilotSpentToday, isAutopilotRule, isPaperRule, nothingToSell, ownerBotUnits, sellableFor, unitsToAtomic } from "./ownership.js";
 import { allocateSells, sellTier, type SellAsk } from "./pools.js";
 import { plainError } from "./errors.js";
@@ -65,7 +65,9 @@ export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () 
   /** 0.9.1: dollars of live trades Autopilot's own rules may make today (its share of the daily limit), or null for no cap. */
   autopilotDailyCap?: () => number | null;
   /** 0.9.1: hourly closes for alert indicators (tests pass their own). */
-  hourly?: (chain: Chain, t: Token) => Promise<number[]> }
+  hourly?: (chain: Chain, t: Token) => Promise<number[]>;
+  /** Phase 3: finished daily closes for a custom bot's trend part (tests pass their own). */
+  daily?: (chain: Chain, t: Token) => Promise<number[]> }
 export interface AutopilotEvent { type: "filled" | "failed" | "skipped" | "expired" | "cancelled" | "alert"; rule: Rule; detail: string }
 
 export class Autopilot {
@@ -332,7 +334,9 @@ export class Autopilot {
     // Nov 11: a custom bot's drop, RSI and downtrend parts read hourly closes (the same ones alerts and signals use).
     let closes: number[] | null = null;
     if (r.kind === "custom") { try { closes = await (this.o.hourly ?? ((c, tk) => hourlyCloses(c, tk)))(r.chain, t); } catch { closes = null; } }
-    const a = decide(r as any, st, p, now, { decimals: t.decimals, avail, closes });
+    let daily: number[] | null = null;
+    if (r.kind === "custom" && r.custom?.buy.type === "trend") { try { daily = await (this.o.daily ?? ((c, tk) => dailyCloses(c, tk)))(r.chain, t); } catch { daily = null; } }
+    const a = decide(r as any, st, p, now, { decimals: t.decimals, avail, closes, daily });
     if (a?.side === "buy" && this.o.holdBuy?.(r)) return;
     if (!a) {
       if (r.kind === "twap" && r.side === "sell" && avail !== undefined && avail <= 0n) await this.hold(r, now + 5 * 60_000, nothingToSell(r, t.symbol, 0n));
