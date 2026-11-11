@@ -210,7 +210,7 @@ async function both(label: string, o: SimOptions, custom: CustomSpec, min: numbe
 {
   const { trendState } = await import("../src/botlogic.js");
   const flat = (n: number, v: number) => Array(n).fill(v);
-  check(trendState(flat(99, 100), 100, 3) === null && trendState([...flat(99, 100), 104], 100, 3)!.side === "in" && trendState([...flat(99, 100), 96], 100, 3)!.side === "out" && trendState([...flat(99, 100), 102], 100, 3)!.side === "hold", "the last daily close against its average: in over the gap, out under it, hold between, nothing without enough days");
+  check(trendState(flat(60, 100), 100, 3) === null && trendState([...flat(99, 100), 104], 100, 3)!.side === "in" && trendState([...flat(99, 100), 96], 100, 3)!.side === "out" && trendState([...flat(99, 100), 102], 100, 3)!.side === "hold", "the last daily close against its average: in over the gap, out under it, hold between, nothing without enough days");
   const T: CustomSpec = { buy: { type: "trend", days: 100, gap_pct: 3 }, size: { usd: 100 }, limits: { max_usd: 100 } };
   const P = { kind: "custom", custom: T };
   check(customProblem(T) === null && /20 to 200 days/.test(customProblem({ ...T, buy: { type: "trend", days: 10, gap_pct: 3 } }) ?? "") && /0\.5% to 20%/.test(customProblem({ ...T, buy: { type: "trend", days: 100, gap_pct: 30 } }) ?? "") && /20 to 200 days/.test(customProblem({ ...T, buy: { type: "trend", days: 100.5, gap_pct: 3 } }) ?? ""), "a trend bot needs no sell part; its average and gap are checked");
@@ -253,6 +253,33 @@ async function both(label: string, o: SimOptions, custom: CustomSpec, min: numbe
   const calm = decide(P, {}, 100, 0, { decimals: D, closes: swing(2) }) as any, wild = decide(P, {}, 100, 0, { decimals: D, closes: swing(6) }) as any, none = decide(P, {}, 100, 0, { decimals: D, closes: null }) as any;
   check(calm?.usd === 40 && Math.abs(wild?.usd - 20) < 0.5 && none?.usd === 40, "a custom bot's buy: full size when calm, about half at a 6% daily swing, full size without history", { calm: calm?.usd, wild: wild?.usd });
   check(customProblem(V) === null && /0\.5% to 20%/.test(customProblem({ ...V, size: { usd: 40, vol_target_pct: 50 } }) ?? "") && describeCustom(V, "SOL")[1] === "$40 a time, smaller when daily swings pass 3%", "checked, and the card says it", describeCustom(V, "SOL")[1]);
+}
+
+// ── Review 2 (Nov 11, 2026) ───────────────────────────────────────────────────────────────────────────────────────
+{
+  const { trendState, cleanCustomState } = await import("../src/botlogic.js");
+  const flat = (n: number, v: number) => Array(n).fill(v), up = [...flat(99, 100), 104], mid = [...flat(99, 100), 101];
+  // A trend bot with a profit step: after the step sells it out it does not buy straight back.
+  const T: CustomSpec = { buy: { type: "trend", days: 100, gap_pct: 3 }, size: { usd: 100 }, sell: { steps: [{ gain_pct: 5, share_pct: 100 }] }, limits: { max_usd: 100 } };
+  const P = { kind: "custom", custom: T };
+  const b1 = decide(P, {}, 104, 0, { decimals: D, daily: up }) as any;
+  let s = applyFill(P, {}, b1, { usd: 100, got: 961_538_461n }, 104, 0, D).state;
+  const sell = decide(P, s, 110, 0, { decimals: D, daily: up }) as any;
+  s = applyFill(P, s, sell, { usd: 105.7, got: 961_538_461n }, 110, 0, D).state;
+  check(sell?.tag === "step" && s.units === "0" && s.c?.wait_trend === true && decide(P, s, 110, 0, { decimals: D, daily: up }) === null, "a trend bot that took profit doesn't buy back while the same trend is on", s.c);
+  const m = decide(P, s, 101, 0, { decimals: D, daily: mid }) as any;
+  s = applyFill(P, s, m, { usd: 0, got: 0n }, 101, 0, D).state;
+  check(m?.side === "mark" && s.c?.wait_trend === false && decide(P, s, 101, 0, { decimals: D, daily: mid }) === null && (decide(P, s, 105, 0, { decimals: D, daily: up }) as any)?.side === "buy", "once the trend has paused it buys the next one", m);
+  check(cleanCustomState({ wait_trend: true, anchor: 1 })?.wait_trend === true, "the wait survives the hand-off to the server");
+  // A little short history still gives a trend reading; far too little doesn't.
+  check(trendState([...flat(79, 100), 104], 100, 3)?.side === "in" && trendState([...flat(60, 100), 104], 100, 3) === null, "80 of 100 days is enough for the trend; 61 is not");
+  // Scaling never takes a buy under $1, and a buy grown past the limit is cut to the room left.
+  const swing = (dailyPct: number, n = 200) => { const x = dailyPct / 100 / Math.sqrt(24); let p = 100; const out = [p]; for (let i = 1; i < n; i++) { p *= Math.exp(i % 2 ? x : -x); out.push(p); } return out; };
+  const small = decide({ kind: "custom", custom: { buy: { type: "price", at: 200 }, size: { usd: 3, vol_target_pct: 1 }, limits: { max_usd: 3 } } }, {}, 100, 0, { decimals: D, closes: swing(8) }) as any;
+  check(small?.side === "buy" && small.usd === 1, "a $3 buy scaled to a quarter is $1, not dropped", small);
+  const W: CustomSpec = { buy: { type: "price", at: 200 }, size: { usd: 100, grow: "wins" }, sell: { steps: [{ gain_pct: 5, share_pct: 100 }] }, limits: { max_usd: 100 } };
+  const won = decide({ kind: "custom", custom: W }, { units: "0", cost: 0, c: { wins: 1 } }, 100, 0, { decimals: D }) as any;
+  check(won?.side === "buy" && won.usd === 100, "bigger after a win, but never past the limit: $125 is cut to $100, not refused", won);
 }
 
 console.log(`\ncustom: ${pass} passed, ${fail} failed`);

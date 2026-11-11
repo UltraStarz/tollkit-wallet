@@ -8,10 +8,12 @@
  * slippage limit has to cover.
  *
  * Nothing here trades. adaptiveSlippage() only narrows the owner's slippage limit for a coin once enough real trades
- * show it can be narrower; it never widens it.
+ * with measured slippage show it can be narrower; it never widens it. In the app the shortfall figures compare the
+ * price acted on with the QUOTED amounts (what the app records), so they describe fee and quoted price impact, not
+ * slippage after the quote.
  */
 
-export interface FillLike { ts: string; ok: boolean; side: "buy" | "sell"; usd?: number; units?: number; px?: number; fee?: number; fee_out?: boolean; paper?: boolean; ms?: number }
+export interface FillLike { ts: string; ok: boolean; side: "buy" | "sell"; usd?: number; units?: number; px?: number; fee?: number; fee_out?: boolean; paper?: boolean; ms?: number; /** Slippage met between the quote and the fill, in bps (Run 24/7 records it). */ sl?: number }
 
 /** One fill's shortfall in bps, or null when it lacks what's needed (an older fill, a failed one, practice). */
 export function shortfallBps(f: FillLike): { total: number; ex_fee: number } | null {
@@ -35,13 +37,17 @@ export function shortfallStats(fills: FillLike[], now = Date.now(), days = 30, k
     median_ex_fee_bps: r1(quant(xs.map((x) => x.s.ex_fee), 0.5)), p90_ex_fee_bps: r1(quant(xs.map((x) => x.s.ex_fee), 0.9)), median_ms: ms.length ? Math.round(quant(ms, 0.5)) : null };
 }
 
-/** Fills a coin needs before its slippage limit adapts, and the narrowest limit it may get. */
-export const ADAPT = { minFills: 20, floorBps: 30, mult: 3 };
+/** Fills a coin needs before its slippage limit adapts, the narrowest limit it may get, and the multiple of its worst tenth. */
+export const ADAPT = { minFills: 20, floorBps: 50, mult: 3 };
 /**
- * The slippage limit for a coin: the owner's, until ADAPT.minFills real fills say a narrower one is enough; then
- * three times the 90th-percentile shortfall (fee left out), never under 0.3% and never over the owner's limit.
+ * The slippage limit for a coin. Review 2 (Nov 11, 2026): it is worked out only from fills that record `sl`, the
+ * slippage really met between the quote and what arrived (Run 24/7 on the server records it; the app's fills hold
+ * the quoted amounts, so they never narrow anything). The owner's limit until ADAPT.minFills such fills exist in
+ * the last 30 days; then three times their worst tenth, never under 0.5% and never over the owner's limit.
  */
-export function adaptiveSlippage(stats: ShortfallStats | null, ownerBps: number): number {
-  if (!stats || stats.n < ADAPT.minFills) return ownerBps;
-  return Math.min(ownerBps, Math.max(ADAPT.floorBps, Math.ceil(Math.max(0, stats.p90_ex_fee_bps) * ADAPT.mult)));
+export function adaptiveSlippage(fills: FillLike[], ownerBps: number, now = Date.now()): number {
+  const cut = now - 30 * 86_400_000;
+  const xs = fills.filter((f) => f.ok && !f.paper && typeof f.sl === "number" && Number.isFinite(f.sl) && Date.parse(f.ts) >= cut).map((f) => f.sl as number);
+  if (xs.length < ADAPT.minFills) return ownerBps;
+  return Math.min(ownerBps, Math.max(ADAPT.floorBps, Math.ceil(Math.max(0, quant(xs, 0.9)) * ADAPT.mult)));
 }

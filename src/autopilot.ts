@@ -26,7 +26,7 @@ import { KNOWN, resolveToken, toAtomic, type Token } from "./tokens.js";
 import type { Price } from "./prices.js";
 import type { SwapRequest } from "./swap.js";
 import type { SwapResult } from "./wallet.js";
-import { adaptiveSlippage, shortfallStats, type FillLike } from "./execution.js";
+import { adaptiveSlippage, type FillLike } from "./execution.js";
 
 export interface Executor {
   mode: "live" | "paper";
@@ -92,7 +92,7 @@ export class Autopilot {
     const key = `${chain}:${t.address.toLowerCase()}`, hit = this.slips.get(key), now = this.now();
     if (hit && now - hit.at < 60_000) return Math.min(own, hit.bps);
     const same = (r: Rule) => r.chain === chain && (r.token.toLowerCase() === t.address.toLowerCase() || r.token.toUpperCase() === t.symbol.toUpperCase());
-    const bps = adaptiveSlippage(shortfallStats(this.store.list().filter(same).flatMap((r) => r.state.fills as FillLike[]), now), own);
+    const bps = adaptiveSlippage(this.store.list().filter(same).flatMap((r) => r.state.fills as FillLike[]), own, now);
     this.slips.set(key, { at: now, bps });
     return bps;
   }
@@ -395,7 +395,7 @@ export class Autopilot {
     const units = Number(got) / 10 ** t.decimals;
     const out = applyFill(r as any, st, a, { usd, got }, p, now, t.decimals);
     const updated = await save((x) => {
-      x.state.fills.push({ ts: new Date(now).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: a.side, units, ...fillNote(res.quote, p, t0) });
+      x.state.fills.push({ ts: new Date(now).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: a.side, units, ...fillNote(res.quote, p, t0), ...(feeX ? { fee_out: false } : {}) }); // Review 2: a bot's usd already holds the fee paid beside the swap
       x.state.fills = x.state.fills.slice(-50);
       tally(x, a.side, usd, units);
       if (a.side === "buy") x.state.bought_atomic = (BigInt(x.state.bought_atomic ?? "0") + got).toString();

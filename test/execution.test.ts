@@ -22,8 +22,10 @@ const fills = Array.from({ length: 25 }, (_, i) => mk(i < 22 ? 5 : 40, i));
 const st = shortfallStats(fills, now)!;
 check(st.n === 25 && near(st.median_bps, 5) && near(st.p90_bps, 40) && st.median_ms === 2012, "stats: typical 0.05%, the worst tenth 0.4%, typical time 2 s", st);
 check(shortfallStats([mk(5, 24 * 40)], now) === null, "fills older than 30 days are left out");
-check(adaptiveSlippage(st, 100) === 100 && adaptiveSlippage({ ...st, p90_ex_fee_bps: 4 }, 100) === ADAPT.floorBps && adaptiveSlippage({ ...st, p90_ex_fee_bps: 20 }, 100) === 60 && adaptiveSlippage({ ...st, n: 19, p90_ex_fee_bps: 4 }, 100) === 100 && adaptiveSlippage({ ...st, p90_ex_fee_bps: 4 }, 25) === 25,
-  "the limit: three times the worst tenth, at least 0.3%, never over the owner's, and only with 20 fills");
+// Review 2: the limit comes only from fills that record the slippage really met (`sl`).
+const withSl = (sl: number, n = 25) => Array.from({ length: n }, (_, i) => mk(5, i, { sl }));
+check(adaptiveSlippage(fills, 100, now) === 100 && adaptiveSlippage(withSl(4), 100, now) === ADAPT.floorBps && ADAPT.floorBps === 50 && adaptiveSlippage(withSl(25), 100, now) === 75 && adaptiveSlippage(withSl(4, 19), 100, now) === 100 && adaptiveSlippage(withSl(4), 25, now) === 25 && adaptiveSlippage(withSl(60), 100, now) === 100 && adaptiveSlippage(withSl(-3), 100, now) === 50,
+  "the limit: nothing without measured slippage; then three times the worst tenth, at least 0.5%, never over the owner's, and only with 20 fills");
 
 // The engine uses it for live buys, never for a stop, and never in practice.
 const dir = mkdtempSync(path.join(os.tmpdir(), "exec-")), store = new RuleStore(dir);
@@ -33,9 +35,12 @@ const exec = (mode: "live" | "paper") => ({ mode, slippageBps: 100, swap: async 
 const sol = { address: "So11111111111111111111111111111111111111112", symbol: "SOL", decimals: 9 } as any;
 const live = new Autopilot(store, exec("live"), { snapshot: async () => ({ prices: {} }) } as any, { now: () => now, noLease: true });
 const paper = new Autopilot(store, exec("paper"), { snapshot: async () => ({ prices: {} }) } as any, { now: () => now, noLease: true });
-check(live.slip("solana", sol) === ADAPT.floorBps && live.slip("solana", sol, true) === 100 && paper.slip("solana", sol) === 100, "25 cheap SOL fills: live buys get a 0.3% limit; a stop keeps 1%; practice keeps 1%");
+check(live.slip("solana", sol) === 100, "the app's own fills hold quoted amounts, not what arrived: they never narrow the limit");
+await store.mutate((rs) => { rs.find((x) => x.id === r.id)!.state.fills = withSl(3) as any; });
+const live2 = new Autopilot(store, exec("live"), { snapshot: async () => ({ prices: {} }) } as any, { now: () => now, noLease: true });
+check(live2.slip("solana", sol) === ADAPT.floorBps && live2.slip("solana", sol, true) === 100 && paper.slip("solana", sol) === 100, "25 SOL fills with measured slippage (Run 24/7's): live buys get 0.5%; a stop keeps 1%; practice keeps 1%");
 const tc = tradeCosts(store.list(), 100, now);
-check(tc["solana:SOL"]?.fills === 25 && near(tc["solana:SOL"]?.typical_cost_bps, 3) && tc["solana:SOL"]?.slippage_limit_bps === 30, "the AI and the report see the same per-coin costs", tc);
+check(tc["solana:SOL"]?.fills === 25 && near(tc["solana:SOL"]?.typical_cost_bps, 5) && tc["solana:SOL"]?.slippage_limit_bps === 50, "the AI and the report see the same per-coin costs", tc);
 
 console.log(`\nexecution: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

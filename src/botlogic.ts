@@ -76,6 +76,8 @@ export interface CustomState {
   out?: boolean;
   /** Review, Nov 11: after a stop-loss, no buys until this time (ms), so a stop is never followed by a buy at the next check. */
   rest_until?: number;
+  /** Review 2: a trend bot that sold for profit (a step or a trail) waits for the trend to pause before it buys again. */
+  wait_trend?: boolean;
   /** Dollars made on everything sold so far, this round's share of it, and winning rounds in a row. */
   realized?: number; round?: number; wins?: number;
 }
@@ -242,12 +244,14 @@ export function cleanCustomState(x: any): CustomState | undefined {
   for (const k of ["buys", "step", "wins"]) { const v = n(x[k]); if (v !== undefined && v >= 0) out[k] = Math.floor(v); }
   for (const k of ["realized", "round"]) { const v = n(x[k]); if (v !== undefined) out[k] = v; }
   if (typeof x.out === "boolean") out.out = x.out;
+  if (typeof x.wait_trend === "boolean") out.wait_trend = x.wait_trend;
   return out as CustomState;
 }
 /** The dollars a custom bot's next buy spends. */
 export function customSize(c: CustomSpec, cs: CustomState, closes?: number[] | null): number {
   const f = c.size.grow === "wins" ? Math.pow(1.25, Math.min(5, cs.wins ?? 0)) : c.size.grow === "deeper" ? Math.pow(c.size.factor ?? 1.5, cs.buys ?? 0) : 1;
-  return +(c.size.usd * f * volScale(c.size.vol_target_pct, closes)).toFixed(2);
+  const full = c.size.usd * f;
+  return +Math.max(full * volScale(c.size.vol_target_pct, closes), Math.min(full, MIN_TRADE_USD)).toFixed(2); // Review 2: scaling never takes a buy under the $1 minimum
 }
 /** Phase 3: a coin's typical daily swing, in %: the standard deviation of hourly log returns over the last `hours`, times √24. Null with under two days of closes. */
 export function dailyVolPct(closes: number[] | null | undefined, hours = 168): number | null {
@@ -266,9 +270,10 @@ export function volScale(targetPct: number | undefined, closes: number[] | null 
 }
 /** Phase 3: where the last finished daily close sits against its average: "in" (gap over), "out" (gap under), "hold" (between), or null without enough days. */
 export function trendState(daily: number[] | null | undefined, days: number, gapPct: number): { side: "in" | "out" | "hold"; close: number; mean: number } | null {
-  if (!daily || daily.length < days || days < 1) return null;
-  let sum = 0; for (let i = daily.length - days; i < daily.length; i++) sum += daily[i]!;
-  const mean = sum / days, close = daily[daily.length - 1]!;
+  if (!daily || days < 1) return null;
+  const n = Math.min(days, daily.length); if (n < Math.max(1, Math.ceil(days * 0.7))) return null; // Review 2: down to 70% of the window, like the downtrend exit
+  let sum = 0; for (let i = daily.length - n; i < daily.length; i++) sum += daily[i]!;
+  const mean = sum / n, close = daily[daily.length - 1]!;
   return { side: close > mean * (1 + gapPct / 100) ? "in" : close < mean * (1 - gapPct / 100) ? "out" : "hold", close, mean };
 }
 function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, held: bigint, value: number, closes: number[] | null, daily: number[] | null): BotAction {
@@ -313,7 +318,9 @@ function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, 
   // 3. Buying.
   if (cs.out || (cs.rest_until && nowMs < cs.rest_until)) return null;
   if (c.limits.max_loss_usd && (cs.realized ?? 0) <= -c.limits.max_loss_usd) return null; // past its loss limit: no new round
-  const usd = customSize(c, cs, closes), b = c.buy, n = cs.buys ?? 0;
+  let usd = customSize(c, cs, closes); const b = c.buy, n = cs.buys ?? 0;
+  // Review 2: a buy grown past the limit (bigger after wins) is cut to the room left, not dropped: before, one win could stop a bot buying for good.
+  if (cost + usd > c.limits.max_usd * 1.005 + 0.005) { const room = Math.floor((c.limits.max_usd - cost) * 100) / 100; if (room >= Math.max(MIN_TRADE_USD, c.size.usd * 0.5)) usd = room; }
   if (usd < MIN_TRADE_USD || cost + usd > c.limits.max_usd * 1.005 + 0.005) return null; // 0.5% of room: a fee paid beside the swap counts in the cost and must not cancel the last buy
   const buy = (why: string): BotAction => ({ side: "buy", usd, why });
   switch (b.type) {
@@ -325,7 +332,12 @@ function decideCustom(c: CustomSpec, s: BotState, price: number, nowMs: number, 
     }
     case "drop": { if (holding || !closes) return null; const h = Math.round(b.hours ?? 24), was = closes[closes.length - 1 - h]; return was && price <= was * (1 - b.pct / 100) ? buy(`Down ${b.pct}% in ${h} hours`) : null; }
     case "price": return !holding && price <= b.at ? buy(`At or under $${b.at}`) : null;
-    case "trend": return !holding && tr?.side === "in" ? buy(`Trend: yesterday's close was ${b.gap_pct}% or more over its ${b.days}-day average`) : null;
+    case "trend": {
+      // Review 2 (Nov 11, 2026): after a profit step or a trail sold it out, the trend is still "in", so it used to
+      // buy back at the next check and pay two fees for nothing. Now it waits until the trend has paused once.
+      if (cs.wait_trend) return tr && tr.side !== "in" ? { side: "mark", ref: price, why: "The trend paused: it buys the next one", c: { wait_trend: false } } : null;
+      return !holding && tr?.side === "in" ? buy(`Trend: yesterday's close was ${b.gap_pct}% or more over its ${b.days}-day average`) : null;
+    }
     case "rsi": { if (holding || !closes) return null; const v = rsi14([...closes, price]); return v !== null && v <= b.below ? buy(`Hourly RSI ${v.toFixed(0)}, at or under ${b.below}`) : null; }
   }
   return null;
@@ -399,6 +411,7 @@ function applyCustom(c: CustomSpec, s: BotState, a: Exclude<BotAction, null | { 
     cs.buys = 0; cs.step = 0; cs.peak = undefined; cs.round = 0; cs.anchor = price;
     if (a.tag === "downtrend") cs.out = true;
     if (a.tag === "stop") cs.rest_until = nowMs + STOP_REST_MS;
+    if (c.buy.type === "trend" && a.tag !== "trend") cs.wait_trend = true;
     if (a.tag === "loss") s.done = true;
   }
   return { state: s, done: !!s.done, profit };

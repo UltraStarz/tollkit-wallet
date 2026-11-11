@@ -942,7 +942,8 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
   const size = async (used: number) => {
     let n = 0; const W = world({ decision: () => (n++ === 0 ? prop : keep) });
-    await (W.bot as any).update((x: any) => { x.loss_used = used; });
+    // $200 budget, 5% a day = a $10 daily limit; a day that started $10·used ahead of where it is now has used that share.
+    await (W.bot as any).update((x: any) => { x.marks = { day: "2026-10-20", day_start: 10 * used, week: "2026-10-19", week_start: 10 * used }; });
     await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 100, max_token_pct: 100 });
     await new Promise((r) => setTimeout(r, 30));
     return Number(W.bot.view().strategies[0]?.params.amount_usd);
@@ -1001,6 +1002,82 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(W.calls.length === c0 + 1, "and not again while nothing changes", W.calls.length - c0);
   W.advance(45 * 60_000); await W.bot.tick();
   check(W.calls.length === c0 + 2, "until an hour has passed", W.calls.length - c0);
+}
+
+// ─── Review 2: a strategy on its small live test stays small whoever rebuilds it ───
+{
+  const { pastFails } = await import("../src/superbot.js");
+  check(pastFails({ days: 90, result_usd: 0, baseline_usd: 0, worst_drop_usd: 0, trades: 0 }, "protect", { stop_pct: 15 }) === null, "a stop that wasn't hit in 90 days is not refused");
+  const grid = { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "grid", chain: "base", token: "ETH", params: { amount_usd: 10, range_pct: 8, levels: 6 }, reason: "Range.", sources: [] }] };
+  const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
+  let px = 2500;
+  const W = world({ decision: () => grid });
+  (W.bot as any).d.price = async () => px;
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 40, paper_days: 3, paper_trades: 10, max_token_pct: 100, active_mode: true });
+  await new Promise((r) => setTimeout(r, 30));
+  W.setDecision(() => keep);
+  const st0 = W.bot.view().strategies[0]!;
+  await W.store.mutate((rules) => { const r = rules.find((x) => x.bot === st0.bot)!; r.state.ok_count = 12; r.state.spent_usd = 30; r.state.bought_units = 0.012; r.state.last_price = 2700; });
+  W.advance(3.5 * 86_400_000); await W.bot.cycle(true);
+  let st = W.bot.view().strategies[0] as any;
+  const full = st.canary?.full?.amount_usd, small = st.params.amount_usd;
+  check(st.stage === "live" && full > 0 && small < full / 3, "live at the small size", { full, small });
+  // An AI adjust that raises the amount and changes a setting: still small; the setting reaches the full-size copy.
+  W.advance(13 * 3_600_000);
+  const adj = await (W.bot as any).apply({ type: "adjust", strategy_id: st.id, params: { amount_usd: full, range_pct: 4 }, reason: "Tighter.", sources: [] });
+  st = W.bot.view().strategies[0] as any;
+  const liveRule = W.store.list().find((r) => r.bot === st.bot && r.status === "active")!;
+  check(adj.applied === true && st.params.amount_usd === small && liveRule.amount_usd === small && st.params.range_pct === 4 && st.canary.full.range_pct === 4 && st.canary.full.amount_usd === full, "an AI adjust can't lift it off the small size; its new setting is kept for full size too", { p: st.params, c: st.canary });
+  // The resize passes leave it alone.
+  await (W.bot as any).update((x: any) => { x.sized = 2; const y = x.strategies[0]; y.sizing = "fixed"; y.sizing_base = full; y.sizing_seen = 5; y.rebuilt_at = undefined; });
+  await W.bot.cycle(true);
+  st = W.bot.view().strategies[0] as any;
+  check(st.params.amount_usd === small && !!st.canary, "neither the balance resize nor the owner's sizing mode rebuilds it at full size", st.params);
+  // Its full size is what counts against the budget.
+  const s = (W.bot as any).load();
+  check(/budget/.test((W.bot as any).fitsBudget(s, { id: "other", token: "SOL", chain: "base", template: "dip" }, { amount_usd: 200 - full * 5 + 1 }) ?? "") && (W.bot as any).fitsBudget(s, { id: "other", token: "SOL", chain: "base", template: "dip" }, { amount_usd: 200 - full * 5 - 1 }) === null, "the budget counts it at its full size, so its scale-up can't be crowded out");
+  // Go live is refused during a loss stop, and when the pass no longer holds.
+  let n = 0;
+  const G = world({ decision: () => (n++ === 0 ? grid : keep) });
+  (G.bot as any).d.price = async () => px;
+  await G.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 40, paper_days: 3, paper_trades: 10, max_token_pct: 100 });
+  await new Promise((r) => setTimeout(r, 30));
+  const g0 = G.bot.view().strategies[0]!;
+  await (G.bot as any).update((x: any) => { x.strategies[0].ready = { at: new Date().toISOString(), result_pct: 9, trades: 1 }; });
+  let e1 = ""; try { await G.bot.goLive(g0.id); } catch (e) { e1 = (e as Error).message; }
+  check(/no longer passes its paper trial/.test(e1) && !(G.bot.view().strategies[0] as any).ready && G.bot.view().strategies[0]!.stage === "paper", "a stale 'ready' from an older rule doesn't go live at the tap", e1);
+  await (G.bot as any).update((x: any) => { x.strategies[0].ready = { at: new Date().toISOString(), result_pct: 9, trades: 12 }; x.halted = { reason: "Daily loss stop", at: new Date().toISOString(), until: null }; });
+  let e2 = ""; try { await G.bot.goLive(g0.id); } catch (e) { e2 = (e as Error).message; }
+  check(/stopped by a loss limit/.test(e2), "nothing goes live during a loss stop, even at the owner's tap", e2);
+  // A trend bot is judged on 14 days and one trade.
+  const trend = { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "custom", chain: "base", token: "ETH", params: { amount_usd: 20, buy: "trend", trend_days: 50, buy_pct: 3, sell_gain_pct: 0, trail_pct: 0, downtrend_days: 0 }, reason: "Trend.", sources: [] }] };
+  let k = 0;
+  const T = world({ decision: () => (k++ === 0 ? trend : keep) });
+  (T.bot as any).d.price = async () => px;
+  await T.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 40, paper_days: 3, paper_trades: 10, max_token_pct: 100 });
+  await new Promise((r) => setTimeout(r, 30));
+  const t0 = T.bot.view().strategies[0]!;
+  await T.store.mutate((rules) => { const r = rules.find((x) => x.bot === t0.bot)!; r.state.ok_count = 1; r.state.spent_usd = 20; r.state.bought_units = 0.008; r.state.last_price = 2700; });
+  T.advance(5 * 86_400_000); await T.bot.cycle(true);
+  check(!(T.bot.view().strategies[0] as any).ready && T.bot.view().strategies[0]!.stage === "paper", "a trend bot after 5 days: not yet");
+  T.advance(9.5 * 86_400_000); await T.bot.cycle(true);
+  check(!!(T.bot.view().strategies[0] as any).ready, "after 14 days and one trade, ahead: it passes (it could never make 10 trades)", T.bot.view().strategies[0]!.history.at(-1));
+  // The loss room starts over with a new day.
+  const L = world({ decision: () => keep });
+  await L.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 40 });
+  await new Promise((r) => setTimeout(r, 30));
+  await (L.bot as any).update((x: any) => { x.loss_used = 1; x.marks = null; });
+  await L.bot.cycle(true);
+  check(((L.bot as any).load().loss_used ?? 0) === 0, "the owner's restart (or a new week) starts the loss room over");
+  // A failed replay doesn't blank the menu for the day.
+  let fails = true, calls = 0;
+  const M = world({ decision: () => keep });
+  (M.bot as any).d.backtest = async () => { calls++; if (fails) throw new Error("offline"); return { days: 90, result_usd: 5, baseline_usd: 2, worst_drop_usd: 1, trades: 9 }; };
+  await M.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 40 });
+  await new Promise((r) => setTimeout(r, 30));
+  const c1 = calls; fails = false;
+  M.advance(2 * 3_600_000); M.setSignals(() => ({ id: "m2", at: "x", changes: { moved: true, notes: ["n"] } })); await M.bot.tick();
+  check(c1 === 1 && calls > 5 && Array.isArray(M.calls.at(-1)?.body?.context?.tested_ideas?.["base:ETH"]), "the replay failed once: it tries again at the next decision and the menu appears", { c1, calls });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

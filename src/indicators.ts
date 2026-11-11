@@ -82,9 +82,12 @@ export async function dailyCloses(chain: Chain, t: Token, f: Fetch = fetch, now 
     rows = (Array.isArray(j) ? j : []).filter((x) => Array.isArray(x) && x.length >= 5).map((x) => [x[0]! * 1000, x[4]!] as [number, number]);
   } else {
     const coin = coinId(chain, t.address);
-    const r = await f(`https://coins.llama.fi/chart/${coin}?span=${DAYS}&period=1d`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(12_000) });
+    // Review 2: asked from a midnight, DefiLlama answers one price within a minute of each midnight UTC (checked
+    // Nov 11, 2026); the price at a midnight is the close of the day before. Without `start` the points sat 24 hours
+    // back from the request, so "yesterday's close" moved with every fetch.
+    const r = await f(`https://coins.llama.fi/chart/${coin}?start=${(today - DAYS * 86_400_000) / 1000}&span=${DAYS + 1}&period=1d`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(12_000) });
     if (!r.ok) throw new Error(`Price history isn't available right now (HTTP ${r.status}).`);
-    rows = ((await r.json())?.coins?.[coin]?.prices ?? []).map((x: any) => [Number(x.timestamp) * 1000, Number(x.price)] as [number, number]);
+    rows = ((await r.json())?.coins?.[coin]?.prices ?? []).map((x: any) => [Math.round((Number(x.timestamp) * 1000) / 86_400_000) * 86_400_000 - 86_400_000, Number(x.price)] as [number, number]).filter((x: [number, number]) => x[0] < today);
   }
   const closes = rows.filter(([ts, p]) => p > 0 && ts < today).sort((a, b) => a[0] - b[0]).map(([, p]) => p).slice(-DAYS);
   if (!closes.length) throw new Error("No price history came back.");
