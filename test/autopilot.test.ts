@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { RuleStore, describeRule, ruleProblem, nextRun, type RuleInput } from "../src/rules.js";
 import { parseStrategy } from "../src/parse.js";
-import { Autopilot, type Executor } from "../src/autopilot.js";
+import { Autopilot, type Executor, fillNote } from "../src/autopilot.js";
 import { PaperBook } from "../src/paper.js";
 import { KNOWN } from "../src/tokens.js";
 import { DEFAULT_POLICY } from "../src/policy.js";
@@ -174,6 +174,13 @@ function market() {
   check(g.status === "active" && !g.state.fail_count && /Waiting for cash/.test(g.state.last_error ?? ""), "a grid's buy waits the same way", g.state);
   m.state.bal.USDC = 100_000_000n; clock += 6 * 60_000; await ap.tick();
   check(s.get(buy.id)!.status === "done" && m.state.swaps.length >= 1, "it buys once the cash is there");
+  // Nov 11 (trading research): every fill keeps what is needed to measure its cost later. Log only.
+  const f0 = s.get(buy.id)!.state.fills.at(-1)!;
+  check(f0.ok && typeof f0.px === "number" && f0.px > 0 && typeof f0.ms === "number" && f0.ms >= 0, "a fill records the price it acted on and how long the swap took", f0);
+  const n1 = fillNote({ fee_usd: 0.4209, route: "Jupiter Ultra" }, 85.06, Date.now()), n2 = fillNote({ fee_usd: 0.0082, fee_inline: true, route: "Metis" }, 0.135, Date.now()), n3 = fillNote(undefined, 0, Date.now());
+  check(n1.fee === 0.4209 && n1.route === "Jupiter Ultra" && n1.fee_out === undefined && n1.px === 85.06, "…the fee and the route, for a fee carried inside the swap", n1);
+  check(n2.fee_out === true && n2.fee === 0.0082 && n2.route === "Metis", "…and marks a fee paid in SOL beside the swap", n2);
+  check(n3.px === undefined && n3.fee === undefined && n3.route === undefined && typeof n3.ms === "number", "…and adds nothing it doesn't know", n3);
 }
 
 // --- Nov 10 (data audit): a practice rule never trades real money, even when no list marks it as paper.

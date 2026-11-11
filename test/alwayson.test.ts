@@ -53,8 +53,12 @@ const dca = await store.add({ kind: "dca", chain: "base", token: "ETH", amount_u
 const tp = await store.add({ kind: "take_profit", chain: "base", token: "ETH", sell_percent: 50, trigger_price: 9000, group: "g1" }, "owner", true);
 const sl = await store.add({ kind: "stop_loss", chain: "base", token: "ETH", sell_percent: 50, trigger_price: 1000, group: "g1" }, "owner", true);
 const ts = "2026-10-18T12:00:00.000Z";
-const fills = [{ rule_id: dca.id, ts, ok: true, tx: "0xaa", usd: 10, units: 0.004, side: "buy" as const }, { rule_id: sl.id, ts, ok: true, tx: "0xbb", usd: 3, units: 0.001, side: "sell" as const }];
+const fills = [{ rule_id: dca.id, ts, ok: true, tx: "0xaa", usd: 10, units: 0.004, side: "buy" as const, px: 2500, fee: 0.05, ms: 4200 }, { rule_id: sl.id, ts, ok: true, tx: "0xbb", usd: 3, units: 0.001, side: "sell" as const }];
 await applyFills(store, fills, dir); await applyFills(store, fills, dir);
+// Nov 11 (trading research): the server's notes on a fill (price acted on, fee, time taken) land on the device's copy.
+{ const f = store.get(dca.id)!.state.fills.find((x) => x.tx === "0xaa")!, g = store.get(sl.id)!.state.fills.find((x) => x.tx === "0xbb")!;
+  check(f.px === 2500 && f.fee === 0.05 && f.ms === 4200 && f.route === "Run 24/7", "a 24/7 fill keeps the price it acted on, its fee and how long it took", f);
+  check(g.px === undefined && g.fee === undefined && g.route === "Run 24/7", "an older server's fill, without them, is taken as before", g); }
 // 0.9.12: each real server fill is also a receipt, once, so Activity and the CSV show what ran 24/7.
 { const rc = entries(dir).filter((e) => e.kind === "trade");
   const buy = rc.find((e) => e.tx === "0xaa"), sell = rc.find((e) => e.tx === "0xbb");

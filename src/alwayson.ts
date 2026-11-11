@@ -67,7 +67,7 @@ export interface AlwaysOpts {
   now?: () => number;
 }
 
-export interface ServerFill { id?: string; rule_id: string; ts: string; ok: boolean; tx?: string; usd?: number; units?: number; side: "buy" | "sell"; reason?: string; paper?: boolean }
+export interface ServerFill { id?: string; rule_id: string; ts: string; ok: boolean; tx?: string; usd?: number; units?: number; side: "buy" | "sell"; reason?: string; paper?: boolean; /** Nov 11 (trading research, log only). */ px?: number; fee?: number; ms?: number }
 interface ServerState { fills: ServerFill[]; rules: Record<string, { runs: number; next_run?: string; done?: boolean; bot?: any }> }
 
 /** Which rules the server can run, and why not otherwise (shown on the rule card). */
@@ -495,7 +495,8 @@ export async function applyFills(store: RuleStore, fills: ServerFill[], dir?: st
       const r = rules.find((x) => x.id === f.rule_id);
       if (!r || (f.tx && r.state.fills.some((x) => x.tx === f.tx))) continue;
       const bot = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap"].includes(r.kind);
-      r.state.fills.push({ ts: f.ts, ok: f.ok, tx: f.tx, usd: f.usd, units: f.units, side: f.side, reason: f.ok ? undefined : f.reason, ...((f as any).paper ? { paper: true } : {}) });
+      r.state.fills.push({ ts: f.ts, ok: f.ok, tx: f.tx, usd: f.usd, units: f.units, side: f.side, reason: f.ok ? undefined : f.reason, ...((f as any).paper ? { paper: true } : {}),
+        ...(f.px !== undefined ? { px: f.px } : {}), ...(f.fee !== undefined ? { fee: f.fee } : {}), ...(f.ms !== undefined ? { ms: f.ms } : {}), ...(f.ok ? { route: "Run 24/7" } : {}) });
       r.state.fills = r.state.fills.slice(-50);
       if (!f.ok) { r.state.fail_count = (r.state.fail_count ?? 0) + 1; r.state.last_error = f.reason; continue; }
       r.state.runs += 1; r.state.ok_count = (r.state.ok_count ?? 0) + 1; r.state.last_error = undefined;

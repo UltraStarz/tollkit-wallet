@@ -284,6 +284,7 @@ export class Autopilot {
     // Nov 10 (audit): the daily share limits buying only; a stop or take-profit always sells, even in a crash.
     if (BUY_KINDS.includes(r.kind) && (await this.overShare(r, r.amount_usd!))) return;
     if (BUY_KINDS.includes(r.kind) && await this.cashShort(r, r.amount_usd!)) return;
+    const t0 = Date.now();
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed.", (res.refused as any)?.tx); return; }
     const usd = res.quote?.usd_value ?? undefined;
@@ -292,7 +293,7 @@ export class Autopilot {
     const units = buy ? Number(res.quote?.buy_amount ?? 0) / 10 ** t.decimals : Number(req.sell_amount) / 10 ** t.decimals;
     const updated = await this.store.mutate((rs) => {
       const x = rs.find((y) => y.id === r.id)!;
-      x.state.fills.push({ ts: now.toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: buy ? "buy" : "sell", units });
+      x.state.fills.push({ ts: now.toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: buy ? "buy" : "sell", units, ...fillNote(res.quote, price, t0) });
       x.state.fills = x.state.fills.slice(-50);
       tally(x, buy ? "buy" : "sell", usd, units);
       if (buy) x.state.bought_atomic = (BigInt(x.state.bought_atomic ?? "0") + BigInt(String(res.quote?.buy_amount ?? "0"))).toString();
@@ -360,6 +361,7 @@ export class Autopilot {
     }
     if (a.side === "buy" && (await this.overShare(r, a.usd))) return;
     if (a.side === "buy" && await this.cashShort(r, a.usd)) return;
+    const t0 = Date.now();
     const res = await this.exec.swap(req, r.by ? { by: r.by } : undefined);
     if (!res.ok) { await this.fail(r, res.refused?.code ?? "swap_failed", res.refused?.reason ?? "Swap failed.", (res.refused as any)?.tx); return; }
     const usd0 = res.quote?.usd_value ?? (a.side === "buy" ? a.usd : (Number(req.sell_amount) / 10 ** t.decimals) * p);
@@ -370,7 +372,7 @@ export class Autopilot {
     const units = Number(got) / 10 ** t.decimals;
     const out = applyFill(r as any, st, a, { usd, got }, p, now, t.decimals);
     const updated = await save((x) => {
-      x.state.fills.push({ ts: new Date(now).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: a.side, units });
+      x.state.fills.push({ ts: new Date(now).toISOString(), ok: true, usd, tx: res.tx, paper: this.exec.mode === "paper", side: a.side, units, ...fillNote(res.quote, p, t0) });
       x.state.fills = x.state.fills.slice(-50);
       tally(x, a.side, usd, units);
       if (a.side === "buy") x.state.bought_atomic = (BigInt(x.state.bought_atomic ?? "0") + got).toString();
@@ -600,6 +602,16 @@ export class Autopilot {
 }
 
 /** Running totals for a rule's trades. */
+/**
+ * Nov 11 (trading research): what a fill adds to the record so its cost can be measured later (see Fill in rules.ts).
+ * Log only: nothing reads these to trade. Uses the real clock, so it is the same on a replayed clock.
+ */
+export function fillNote(q: unknown, px: number, t0: number): { px?: number; fee?: number; fee_out?: boolean; route?: string; ms: number } {
+  const x = q as { fee_usd?: number | null; fee_separate?: boolean; fee_inline?: boolean; route?: string } | undefined, fee = Number(x?.fee_usd);
+  return { ...(px > 0 ? { px } : {}), ...(fee > 0 ? { fee: Math.round(fee * 1e6) / 1e6 } : {}), ...(x && (x.fee_separate || x.fee_inline) ? { fee_out: true } : {}),
+    ...(typeof x?.route === "string" ? { route: x.route } : {}), ms: Math.max(0, Date.now() - t0) };
+}
+
 function tally(x: Rule, side: "buy" | "sell", usd: number | undefined, units: number) {
   x.state.ok_count = (x.state.ok_count ?? 0) + 1;
   if (side === "buy") { x.state.spent_usd = (x.state.spent_usd ?? 0) + (usd ?? 0); x.state.bought_units = (x.state.bought_units ?? 0) + units; }

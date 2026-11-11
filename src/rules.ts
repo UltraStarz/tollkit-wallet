@@ -105,7 +105,13 @@ export const RuleInput = z.object({
 });
 export type RuleInput = z.infer<typeof RuleInput>;
 
-export interface Fill { ts: string; ok: boolean; usd?: number; tx?: string; paper?: boolean; reason?: string; side?: "buy" | "sell"; units?: number }
+export interface Fill { ts: string; ok: boolean; usd?: number; tx?: string; paper?: boolean; reason?: string; side?: "buy" | "sell"; units?: number;
+  /**
+   * Nov 11 (trading research, log only: nothing reads these to trade): the price the engine acted on, TOLLkit's fee on
+   * this fill in dollars (fee_out: paid in SOL beside the swap, not inside its amounts), the route the quote took, and
+   * the milliseconds from deciding to the swap coming back. With them a fill's cost can be split into fee, price and delay.
+   */
+  px?: number; fee?: number; fee_out?: boolean; route?: string; ms?: number }
 export interface Rule extends RuleInput {
   id: string;
   status: RuleStatus;
