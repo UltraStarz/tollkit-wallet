@@ -32,7 +32,9 @@ import path from "node:path";
 import { type Chain, CHAINS, isEvmChain, type EvmChain, chainName } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { withLock } from "./ledger.js";
-import { buildBot, summarize, TEMPLATES, type BotSummary } from "./bots.js";
+import { AP_CUSTOM, buildBot, customBuys, summarize, TEMPLATES, tplOf, type BotSummary } from "./bots.js";
+import { replay } from "./botviz.js";
+import type { CustomSpec } from "./botlogic.js";
 import { serverRunnable } from "./alwayson.js";
 import { solRunnable } from "./alwayson-sol.js";
 import { describeRule, type Rule, type RuleStore } from "./rules.js";
@@ -111,6 +113,8 @@ export const DEFAULT_SETTINGS: SuperbotSettings = {
 export interface Strategy {
   id: string; name: string; template: string; chain: Chain; token: string; params: Record<string, unknown>;
   stage: Stage; bot: string | null; created_at: string; stage_since: string;
+  /** Nov 11, 2026: a custom bot's test on past prices, run before it started. */
+  tested?: string;
   history: { ts: string; note: string }[];
   /** 0.33.0: a meme coin from "Trending on X": tested on paper only; it never moves to live money unless the owner
    * adds the coin on Home. */
@@ -193,7 +197,17 @@ export interface SuperBotDeps {
   stableUsd?: (chain: Chain) => Promise<number | undefined>;
   /** 0.9.12: hourly closes for a token, oldest first (Adaptive pace reads each coin's market from them). */
   closes?: (chain: Chain, token: string) => Promise<number[]>;
+  /** Nov 11, 2026: tests a custom bot on past prices before it starts (tests pass their own; by default the wallet's replay on Coinbase's hourly prices). Null: this coin has no price history to test on. */
+  backtest?: (a: PastTestIn) => Promise<PastTest | null>;
 }
+export interface PastTestIn { chain: Chain; token: string; custom: CustomSpec; days: number }
+export interface PastTest { days: number; result_usd: number; baseline_usd: number; worst_drop_usd: number; trades: number }
+async function pastTest(a: PastTestIn): Promise<PastTest | null> {
+  if (!/^(ETH|WETH|SOL|POL)$/i.test(a.token)) return null;
+  const r = await replay({ template: "custom", chain: a.chain, token: a.token, params: {}, custom: a.custom, days: a.days });
+  return { days: r.days, result_usd: r.result_usd, baseline_usd: r.baseline_usd, worst_drop_usd: r.worst_drop_usd, trades: r.trades.length };
+}
+const signed = (n: number) => `${n < 0 ? "-" : "+"}$${Math.abs(n).toFixed(2)}`;
 
 const nowIso = (ms: number) => new Date(ms).toISOString();
 const day = (ms: number) => nowIso(ms).slice(0, 10);
@@ -316,6 +330,7 @@ export function committedUsd(template: string, params: Record<string, unknown>):
     case "infinity_grid": return a * 1.5;
     // 0.9.9: a signal buy commits its amount each time it may fire; a signal sell spends nothing.
     case "signal": return params.side === "sell" ? 0 : a * Math.max(1, Number(params.times) || 1);
+    case "custom": return a * customBuys(params); // Nov 11, 2026: each buy times the buys a round may make
     default: return 0;
   }
 }
@@ -361,6 +376,7 @@ export function sizeToShare(template: string, params: Record<string, unknown>, s
     case "smart_dca": { let t = 0; for (let i = 0; i <= n; i++) t += k ** i; per = share / t; break; }
     case "infinity_grid": per = share / 1.5; break;
     case "dip": case "rebalance": per = share; break;
+    case "custom": per = share / customBuys(params); break;
     default: return params;
   }
   return { ...params, amount_usd: Math.floor(per * 100) / 100 };
@@ -1225,8 +1241,8 @@ export class SuperBot {
       // 0.9.12 Adaptive pace: each coin's market, measured by the wallet (the strategist follows it per coin).
       ...(this.adaptive(s) ? { market_states: Object.fromEntries(s.settings.tokens.map((x) => { const m = this.market[`${x.chain}:${x.token.toLowerCase()}`]; return [`${x.chain}:${x.token}`, m ? { state: m.state, chg_24h_pct: m.d1, chg_3d_pct: m.d3 } : { state: "unknown" }]; })) } : {}),
       allowed: { chains: s.settings.chains, tokens: s.settings.tokens.map((x) => ({ ...x, price_usd: prices[`${x.chain}:${x.token}`] ?? null })) },
-      templates: TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap" && x.id !== "range").map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
-      strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
+      templates: [...TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap" && x.id !== "range"), AP_CUSTOM].map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
+      strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, ...(x.tested ? { past_test: x.tested } : {}), days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
       recent_decisions: s.decisions.filter((d) => d.by === "strategist").slice(-3).map((d) => ({ ts: d.ts, view: d.market_view, actions: d.actions.map((a) => `${a.type}${a.strategy_id ? ` ${a.strategy_id}` : ""}${a.applied ? "" : " (not applied)"}`) })),
@@ -1368,7 +1384,7 @@ export class SuperBot {
           if (meme) tok = { chain, token: meme.address };
         }
         if (!tok) return { applied: false, outcome: `${a.token} is not on the allowed list for ${chainName(chain)}` };
-        if (a.template === "alert" || a.template === "twap" || !TEMPLATES.some((x) => x.id === a.template)) return { applied: false, outcome: "unknown template" };
+        if (a.template === "alert" || a.template === "twap" || !tplOf(a.template)) return { applied: false, outcome: "unknown template" };
         // Nov 7 (Joe: "but nothing is running"): the no-doubles rules are for Autopilot's own picks. The owner may run a
         // second dip on SOL next to one Autopilot started, or next to a paused leftover it can't see.
         const params = this.clampParams(s, a.template, a.params ?? {});
@@ -1395,6 +1411,14 @@ export class SuperBot {
         if (clash) return { applied: false, outcome: `not started: ${clash}` };
         let built;
         try { built = buildBot(a.template, tok.token, chain, params.params, price); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
+        // Nov 11, 2026: a custom bot is tested on the last 90 days of prices before it starts, even on paper. One that
+        // would never have traded is refused; otherwise the result is kept with the strategy for the owner and the AI.
+        let tested = "";
+        if (a.template === "custom") {
+          const pt = await (this.d.backtest ?? pastTest)({ chain, token: tok.token, custom: built.rules[0]!.custom!, days: 90 }).catch(() => null);
+          if (pt && pt.trades === 0) return { applied: false, outcome: `not started: on the last ${pt.days} days of prices these settings would never have traded` };
+          if (pt) tested = `Tested on the last ${pt.days} days of prices: ${signed(pt.result_usd)} after fees in ${pt.trades} trades, against ${signed(pt.baseline_usd)} for holding; worst drop $${pt.worst_drop_usd.toFixed(2)}.`;
+        }
         const id = randomUUID().slice(0, 8), t = nowIso(this.now());
         const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: String(a.reason).slice(0, 200), paper: true })), "agent", true, "superbot");
         await this.update((x) => {
@@ -1402,10 +1426,10 @@ export class SuperBot {
           const sym = String(meme?.symbol ?? "").slice(0, 16).toUpperCase();
           const name = !meme ? built.name : built.name.includes(tok!.token) ? built.name.split(tok!.token).join(sym) : built.name.replace(/ · [^·]*$/, ` · ${sym}`);
           x.strategies.push({ id, name, template: a.template, chain, token: tok!.token, params: params.params, stage: "paper", bot: built.bot, created_at: t, stage_since: t,
-            history: [{ ts: t, note: a.owner ? `You asked for it: ${a.reason}` : meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }], ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}), ...(a.owner ? { owner_set: true } : {}), ...(a.sizing ? { sizing: a.sizing, sizing_base: Number(params.params.amount_usd) || undefined, sizing_seen: 0 } : {}) });
+            history: [{ ts: t, note: a.owner ? `You asked for it: ${a.reason}` : meme ? `Proposed by the AI from Trending on X (paper only): ${a.reason}` : `Proposed by the AI: ${a.reason}` }, ...(tested ? [{ ts: t, note: tested }] : [])], ...(tested ? { tested } : {}), ...(meme ? { paper_only: true, symbol: String(meme.symbol).slice(0, 16) } : {}), ...(a.owner ? { owner_set: true } : {}), ...(a.sizing ? { sizing: a.sizing, sizing_base: Number(params.params.amount_usd) || undefined, sizing_seen: 0 } : {}) });
           x.paper_rules.push(...made.map((r) => r.id));
         });
-        return { applied: true, outcome: `started on paper (${made.length} rule${made.length === 1 ? "" : "s"})` };
+        return { applied: true, outcome: `started on paper (${made.length} rule${made.length === 1 ? "" : "s"})${tested ? `. ${tested}` : ""}` };
       }
       default: return { applied: false, outcome: "unknown action" };
     }
@@ -1523,7 +1547,7 @@ export class SuperBot {
 
   /** Template fields only, numbers inside each field's range, dollars capped at the per-trade limit. */
   private clampParams(s: State, template: string, raw: Record<string, unknown>): { params: Record<string, unknown>; note?: string } {
-    const tpl = TEMPLATES.find((x) => x.id === template);
+    const tpl = tplOf(template);
     if (!tpl) return { params: {}, note: "unknown template" };
     const out: Record<string, unknown> = {};
     for (const f of tpl.fields) {

@@ -2439,7 +2439,7 @@ if(!D.length&&!R.length)return "";var ok=R.filter(function(e){return e.status===
  var IC={retire:["✕","#ff6b8a","Stopped"],propose:["+","#4a8eff","Started"],promote:["▲","#2fcf8f","Went live"],demote:["▼","#f5a623","Back to paper"],adjust:["↻","#9a85ff","Adjusted"],pause:["Ⅱ","#979aab","Paused"],resume:["▶","#2fcf8f","Resumed"]},L=[],K={};
  D.forEach(function(d){var A=(d.actions||[]).filter(function(a){return a.applied!==false});
   if(!A.length){var t=String(d.assessment||"").replace(/^While you were away: /,"").split(/\.\s/)[0].replace(/\.?$/,".");A=[{type:"note",text:t.length>80?t.slice(0,77)+"…":t}]}
-  A.forEach(function(a){var coin=a.token?(a.token.length>12?symText(tokName(a.chain||"solana",a.token)):String(a.token).toUpperCase()):"",what=a.text||[(a.template?((S.bot_templates||[]).filter(function(t){return t.id===a.template})[0]||{name:a.template}).name:""),coin].filter(Boolean).join(" · ")||"Autopilot",k=a.type+"|"+what;
+  A.forEach(function(a){var coin=a.token?(a.token.length>12?symText(tokName(a.chain||"solana",a.token)):String(a.token).toUpperCase()):"",what=a.text||[(a.template?((S.bot_templates||[]).filter(function(t){return t.id===a.template})[0]||{name:a.template==="custom"?"Custom bot":a.template}).name:""),coin].filter(Boolean).join(" · ")||"Autopilot",k=a.type+"|"+what;
    if(K[k]){K[k].n++;return}K[k]={k:a.type,what:what,n:1,ts:d.ts};L.push(K[k])})});
  var span=since?"since "+when(since):"",nC=L.filter(function(c){return c.k!=="note"}).length;
  return '<div class="ap-c awy"><div class="awy-h"><b>While you were away</b><span class="mut sm">'+span+'</span></div>'+

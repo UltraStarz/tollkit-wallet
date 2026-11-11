@@ -11,6 +11,7 @@ import path from "node:path";
 import type { Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { describeRule, gridLevels, ruleProblem, type Rule, type RuleInput } from "./rules.js";
+import type { CustomSpec } from "./botlogic.js";
 
 export interface TemplateField { key: string; label: string; kind: "usd" | "pct" | "int" | "choice"; default: number | string; min?: number; max?: number; choices?: [string, string][] }
 export interface Template { id: string; name: string; blurb: string; fields: TemplateField[]; risk: string }
@@ -57,11 +58,47 @@ export const TEMPLATES: Template[] = [
       { key: "pct", label: "How far (%): from today's price, or the day's move", kind: "pct", default: 5, min: 0.5, max: 50 }] },
 ];
 
+/**
+ * Nov 11, 2026: the five-part custom bot as flat fields, so Autopilot's strategist can design one with the same
+ * plumbing as a template (settings in range, sized by the wallet, started on paper). It is not in the owner's
+ * catalog: owners build theirs on the Build a bot screen. "0" turns an optional part off.
+ */
+export const AP_CUSTOM: Template = { id: "custom", name: "Custom bot", blurb: "A bot made of five parts: when to buy, how much, when to sell, protection and limits.", risk: "It can hold the coin at a loss until one of its sells or its protection fires.",
+  fields: [{ key: "amount_usd", label: "Dollars each buy", kind: "usd", default: 25, min: 1 },
+    { key: "buy", label: "When to buy", kind: "choice", default: "levels", choices: [["levels", "At levels as it falls"], ["drop", "After a drop"], ["schedule", "On a schedule"], ["rsi", "When RSI is low"]] },
+    { key: "buy_pct", label: "Each step down, or the drop (%)", kind: "pct", default: 1.5, min: 0.4, max: 50 },
+    { key: "max_buys", label: "Buys at most", kind: "int", default: 6, min: 1, max: 40 },
+    { key: "hours", label: "Hours (the drop's window, or the schedule)", kind: "int", default: 24, min: 1, max: 720 },
+    { key: "rsi_below", label: "RSI at or under", kind: "int", default: 40, min: 5, max: 60 },
+    { key: "sell_gain_pct", label: "Sell step at a gain of (%), 0 = none", kind: "pct", default: 3, min: 0, max: 1000 },
+    { key: "sell_share_pct", label: "The step sells (%)", kind: "pct", default: 50, min: 1, max: 100 },
+    { key: "trail_pct", label: "Trail the rest under its high (%), 0 = none", kind: "pct", default: 3, min: 0, max: 90 },
+    { key: "stop_pct", label: "Stop under its cost (%), 0 = off", kind: "pct", default: 0, min: 0, max: 90 },
+    { key: "downtrend_days", label: "Downtrend exit: average over days, 0 = off", kind: "int", default: 10, min: 0, max: 10 },
+    { key: "downtrend_gap_pct", label: "Downtrend exit: gap (%)", kind: "pct", default: 3, min: 0.5, max: 20 }] };
+export const tplOf = (id: string): Template | undefined => TEMPLATES.find((t) => t.id === id) ?? (id === "custom" ? AP_CUSTOM : undefined);
+/** How many buys a flat custom bot may make in one round (what its dollars are spread over). */
+export function customBuys(p: Record<string, unknown>): number {
+  const b = p.buy ?? "levels";
+  return b === "levels" || b === "schedule" ? Math.max(1, Math.round(Number(p.max_buys) || 6)) : 1;
+}
+/** The flat fields as the five parts. Throws a plain reason when they don't make a bot. */
+export function customFromFlat(v: Record<string, number | string>): CustomSpec {
+  const n = (k: string) => Number(v[k]) || 0, usd = n("amount_usd");
+  const buy: CustomSpec["buy"] = v.buy === "drop" ? { type: "drop", pct: Math.max(0.5, n("buy_pct")), hours: Math.min(168, n("hours") || 24) } : v.buy === "schedule" ? { type: "schedule", every_hours: n("hours") || 24 }
+    : v.buy === "rsi" ? { type: "rsi", below: n("rsi_below") || 40 } : { type: "levels", step_pct: n("buy_pct"), levels: customBuys(v) };
+  const trail = n("trail_pct") > 0 ? Math.max(0.5, n("trail_pct")) : 0, gain = n("sell_gain_pct") > 0 ? Math.max(0.3, n("sell_gain_pct")) : 0;
+  if (!trail && !gain) throw new Error("A custom bot needs a way to sell: a sell step or a trail.");
+  const sell: NonNullable<CustomSpec["sell"]> = { ...(gain ? { steps: [{ gain_pct: gain, share_pct: trail ? n("sell_share_pct") || 50 : 100 }] } : {}), ...(trail ? { trail_pct: trail } : {}) };
+  const days = Math.round(n("downtrend_days")), protect: NonNullable<CustomSpec["protect"]> = { ...(n("stop_pct") > 0 ? { stop_pct: Math.max(0.5, n("stop_pct")) } : {}), ...(days > 0 ? { downtrend: { hours: days * 24, gap_pct: n("downtrend_gap_pct") || 3 } } : {}) };
+  return { buy, size: { usd }, sell, ...(Object.keys(protect).length ? { protect } : {}), limits: { max_usd: Math.round(usd * customBuys(v) * 100) / 100 } };
+}
+
 const round = (n: number) => Number(n.toPrecision(6));
 
 /** The rules a template makes, at today's price. Throws a plain reason for a bad field. */
 export function buildBot(templateId: string, token: string, chain: Chain, params: Record<string, unknown>, price: number | undefined): { bot: string; name: string; rules: RuleInput[] } {
-  const tpl = TEMPLATES.find((t) => t.id === templateId);
+  const tpl = tplOf(templateId);
   if (!tpl) throw new Error("Pick a bot.");
   const v: Record<string, number | string> = {};
   for (const f of tpl.fields) {
@@ -71,7 +108,7 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
     if (!Number.isFinite(n) || (f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max) || (f.kind === "int" && !Number.isInteger(n))) throw new Error(`${f.label}: ${f.min !== undefined ? `from ${f.min}` : ""}${f.max !== undefined ? ` to ${f.max}` : ""}.`);
     v[f.key] = n;
   }
-  const needsPrice = !["dca", "smart_dca", "rebalance", "twap", "range"].includes(templateId);
+  const needsPrice = !["dca", "smart_dca", "rebalance", "twap", "range", "custom"].includes(templateId);
   if (needsPrice && !(price && price > 0)) throw new Error("No price for this token right now, so the bot's levels can't be set. Try again in a minute.");
   const bot = randomUUID().slice(0, 8), T = token.length > 12 ? `${token.slice(0, 4)}…` : token.toUpperCase();
   const name = `${tpl.name} · ${T}`;
@@ -116,6 +153,7 @@ export function buildBot(templateId: string, token: string, chain: Chain, params
         : { ...base, kind: "signal_sell", sell_percent: n("sell_pct"), when, ...(n("times") > 1 ? { times: n("times") } : {}) }];
       break;
     }
+    case "custom": rules = [{ ...base, kind: "custom", custom: customFromFlat(v) }]; break;
     case "range": rules = [{ ...base, kind: "range", amount_usd: n("amount_usd"), range_pct: n("range_pct"), recenter_min: n("recenter_min") }]; break;
     case "alert": {
       const c = v.condition as string, pct = n("pct");

@@ -716,5 +716,52 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check((W.bot as any).load().strategies.find((x: any) => x.id === raw.id)?.sizing === "step_up", "and can be changed later");
 }
 
+// ─── Nov 11, 2026: Autopilot designs a custom bot from the five parts, and the wallet tests it before it starts ───
+{
+  const { buildBot, customFromFlat, customBuys } = await import("../src/bots.js");
+  const { committedUsd, sizeToShare } = await import("../src/superbot.js");
+  const { checkDecision, SUPERBOT_SYSTEM, SUPERBOT_STEP } = await import("../src/strategist.js");
+  const flat = { amount_usd: 10, buy: "levels", buy_pct: 1.5, max_buys: 5, sell_gain_pct: 3, sell_share_pct: 50, trail_pct: 3, stop_pct: 0, downtrend_days: 10, downtrend_gap_pct: 3 };
+  const built = buildBot("custom", "ETH", "base", flat, undefined), c = built.rules[0]!.custom!;
+  check(built.rules.length === 1 && built.rules[0]!.kind === "custom" && c.buy.type === "levels" && (c.buy as any).levels === 5 && c.size.usd === 10 && c.limits.max_usd === 50 && c.sell?.steps?.[0]?.share_pct === 50 && c.sell.trail_pct === 3 && c.protect?.downtrend?.hours === 240 && c.protect.stop_pct === undefined, "the flat settings become the five parts", c);
+  const noTrail = customFromFlat({ ...flat, trail_pct: 0 } as any);
+  check(noTrail.sell?.steps?.[0]?.share_pct === 100 && noTrail.sell.trail_pct === undefined, "with no trail, the sell step sells everything");
+  let threw = ""; try { buildBot("custom", "ETH", "base", { ...flat, trail_pct: 0, sell_gain_pct: 0 }, undefined); } catch (e) { threw = (e as Error).message; }
+  check(/needs a way to sell/.test(threw), "a custom bot with no way to sell is refused", threw);
+  check(customBuys({ buy: "drop", max_buys: 9 }) === 1 && committedUsd("custom", flat) === 50 && (sizeToShare("custom", flat, 30) as any).amount_usd === 6, "its dollars are each buy times the buys a round may make, and the wallet sizes it that way");
+  const d = checkDecision({ assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "custom", chain: "base", token: "ETH", params: flat, reason: "r", sources: [] }] });
+  check(d.actions[0]!.template === "custom" && Object.keys(d.actions[0]!.params ?? {}).length === 10 && SUPERBOT_STEP.templates.includes("custom") && /- custom: a bot you design from five parts/.test(SUPERBOT_SYSTEM) && /about 0\.2% a round trip/.test(SUPERBOT_SYSTEM), "the strategist may propose one, and is told how and what trades cost", d.actions[0]);
+
+  const propose = { assessment: "Sideways.", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "custom", chain: "base", token: "ETH", params: flat, reason: "Small dips keep recovering.", sources: ["ETH +0.4% 24h"] }] };
+  const keep = { assessment: "Quiet.", market_view: "neutral", confidence: 0.4, actions: [{ type: "keep", reason: "Quiet.", sources: [] }] };
+  let n = 0; const asked: any[] = [];
+  const W = world({ decision: () => (n++ === 0 ? propose : keep) });
+  (W.bot as any).d.backtest = async (x: any) => { asked.push(x); return { days: 90, result_usd: 4.21, baseline_usd: -12.5, worst_drop_usd: 6.3, trades: 14 }; };
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  const v = W.bot.view(), st = v.strategies[0]!, rule = W.store.list().find((r: any) => r.bot === st?.bot);
+  check(!!st && st.template === "custom" && st.stage === "paper" && rule?.kind === "custom" && rule.paper === true && rule.by === "superbot", "Autopilot's custom bot starts on paper as one rule", { st, d: v.decisions[0] });
+  check(asked.length === 1 && asked[0].days === 90 && asked[0].token === "ETH" && asked[0].custom?.limits?.max_usd === rule?.custom?.limits.max_usd, "it was tested on 90 days of prices first, with the settings it runs");
+  check(/Tested on the last 90 days of prices: \+\$4\.21 after fees in 14 trades, against -\$12\.50 for holding; worst drop \$6\.30\./.test((st as any).tested ?? "") && st.history.some((h: any) => /Tested on the last 90 days/.test(h.note)) && /Tested on the last 90 days/.test(JSON.stringify(v.decisions[0])), "the test result is kept with the strategy and shown in the decision", (st as any).tested);
+  W.advance(3 * 3_600_000); W.setSignals(() => ({ id: "s2", at: "x", changes: { moved: true, notes: ["n"] } })); await W.bot.tick();
+  const ctx = W.calls.at(-1)?.body?.context;
+  check(/past_test/.test(JSON.stringify(ctx?.strategies ?? [])) && (ctx?.templates ?? []).some((t: any) => t.id === "custom"), "the AI sees the test result and the custom fields next time", ctx?.strategies);
+
+  let m = 0;
+  const W2 = world({ decision: () => (m++ === 0 ? propose : keep) });
+  (W2.bot as any).d.backtest = async () => ({ days: 90, result_usd: 0, baseline_usd: 3, worst_drop_usd: 0, trades: 0 });
+  await W2.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  const v2 = W2.bot.view();
+  check(v2.strategies.length === 0 && /would never have traded/.test(JSON.stringify(v2.decisions[0])) && !W2.store.list().some((r: any) => r.kind === "custom"), "a custom bot that would never have traded is not started", v2.decisions[0]);
+
+  let k = 0;
+  const W3 = world({ decision: () => (k++ === 0 ? propose : keep) });
+  (W3.bot as any).d.backtest = async () => { throw new Error("no prices"); };
+  await W3.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  check(W3.bot.view().strategies.length === 1 && !(W3.bot.view().strategies[0] as any).tested, "when past prices can't be fetched it still starts on paper, with no test claimed");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
