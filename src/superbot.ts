@@ -242,8 +242,8 @@ export function parseSettings(b: Record<string, unknown>, base: SuperbotSettings
 
 /** Dollars a strategy can put into buys over its life (sells don't count). Exported for tests. */
 /**
- * 0.9.7 Active pace: an idle strategy's tighter settings, still wide enough to profit after Tollkit's fee (0.25% a
- * side on grids, 0.5% on the rest). Null: nothing left to tighten. A grid is also rebuilt around today's price.
+ * 0.9.7 Active pace: an idle strategy's tighter settings, still wide enough to profit after Tollkit's fee (0.1% a
+ * side on every bot trade since Nov 11, 2026; the floors below were set for the older, higher fees). Null: nothing left to tighten. A grid is also rebuilt around today's price.
  */
 export function tightened(template: string, p: Record<string, unknown>): Record<string, unknown> | null {
   const n = (k: string) => Number(p[k]), at = (v: number, min: number) => +Math.max(min, v).toFixed(2);

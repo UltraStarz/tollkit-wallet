@@ -8,20 +8,16 @@
  *   - Any other token: the prices the autopilot itself saw while the bot ran (the price tape, one point every
  *     five minutes, kept seven days). A replay needs the Coinbase history, so it works for ETH, SOL and POL.
  *
- * The replay runs the real autopilot (src/autopilot.ts) against the past prices, with rules kept in memory and a
- * pretend exchange that fills at the replayed price minus Tollkit's 0.5% fee. Nothing is traded and nothing is
- * written to the wallet's own rules.
+ * The replay runs the real autopilot (src/autopilot.ts) against the past prices, through the backtester
+ * (src/backtest.ts): rules kept in memory and a pretend wallet that fills at the replayed price minus Tollkit's fee.
+ * Nothing is traded and nothing is written to the wallet's own rules.
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
-import { BUY_KINDS, describeRule, gridLevels, nextRun, RuleStore, type Rule } from "./rules.js";
-import { Autopilot, type Executor } from "./autopilot.js";
-import { buildBot } from "./bots.js";
-import type { Token } from "./tokens.js";
-import type { SwapRequest } from "./swap.js";
-import type { SwapResult } from "./wallet.js";
+import { BUY_KINDS, describeRule, gridLevels, type Rule } from "./rules.js";
+import { Sim } from "./backtest.js";
 import { toCandles, type OHLC } from "./holdings.js";
 
 // ── Prices ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -188,18 +184,7 @@ export function botTrades(rs: Rule[], limit = 50): Trade[] {
   }))).sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit);
 }
 
-// ── Replay ─────────────────────────────────────────────────────────────────────────────────────────────────────
-/**
- * Rules in memory, for a replay: same behavior as the wallet's store, no files. The store's folder is an empty one
- * inside the wallet's own folder: "/nonexistent-replay" failed on macOS, where the disk's top folder is read-only.
- */
-class MemoryRules extends RuleStore {
-  private rows: Rule[] = [];
-  constructor() { super(path.join(walletHome(), "replay")); }
-  override list(): Rule[] { return structuredClone(this.rows); }
-  override async mutate<T>(fn: (rules: Rule[]) => T): Promise<T> { const rs = structuredClone(this.rows); const out = fn(rs); this.rows = rs; return out; }
-}
-
+// ── Replay ─────────────────────────────────────────────────────────────
 export interface ReplayResult {
   token: string; product: string; from: string; to: string; start_price: number; end_price: number; change_pct: number;
   prices: [number, number][];
@@ -217,11 +202,14 @@ export interface ReplayResult {
   note: string;
 }
 
-const FEE = 0.005;
-
 /**
  * Runs a template's settings over the last `days` days of hourly prices. `hold_usd`: for bots that sell what you
  * hold (protect, trailing stop, ladder), the holding to start with.
+ *
+ * Nov 11 (trading research): a thin wrapper around the backtester (src/backtest.ts), which runs the real autopilot
+ * with rules kept in memory. Each hour goes open, low, high, close (open, high, low, close on a falling hour: the
+ * order a candle most likely took) and the bot looks every 30 seconds, so a level is met close to its price, the way
+ * the live bot meets it, not at the hour's extreme. Trades pay the fee a bot really pays (0.10% since Nov 11, 2026).
  */
 export async function replay(o: { template: string; chain: Chain; token: string; params: Record<string, unknown>; days?: number; hold_usd?: number; fetch?: typeof fetch; now?: number }): Promise<ReplayResult> {
   if (o.template === "range") throw new Error("Replays don't cover the Range bot yet: its result depends on the pool's fees, which this replay can't see.");
@@ -229,69 +217,33 @@ export async function replay(o: { template: string; chain: Chain; token: string;
   if (!product) throw new Error("Replays use Coinbase's price history, which has ETH, SOL and POL. This token isn't on it.");
   const days = Math.min(30, Math.max(3, o.days ?? 30));
   const candles = await hourlyCandles(product, days * 24, o.fetch, o.now);
-  const start = candles[0]!, end = candles.at(-1)!;
-  const built = buildBot(o.template, o.token, o.chain, o.params, start.o);
+  const start = candles[0]!, end = candles.at(-1)!, sym = o.token.toUpperCase();
   const sells = ["protect", "trail", "ladder"].includes(o.template) || (o.template === "twap" && o.params.side === "sell");
   const hold = sells ? Math.min(1_000_000, Math.max(1, o.hold_usd ?? 100)) : 0;
-
-  let clock = start.t, price = start.o;
-  const DEC = 18, ONE = 10 ** DEC;
-  const tok: Token = { address: "replay-token", symbol: o.token.toUpperCase(), decimals: DEC };
-  let units = sells ? hold / start.o : 0, spent = 0, received = 0, fees = 0;
-  const trades: ReplayResult["trades"] = [];
-  const fill = (req: SwapRequest, commit: boolean): SwapResult => {
-    const buying = req.buy_token === tok.address;
-    if (buying) {
-      const usd = Number(req.sell_amount) / 1e6, got = (usd * (1 - FEE)) / price;
-      if (commit) { spent += usd; fees += usd * FEE; units += got; trades.push({ ts: new Date(clock).toISOString(), side: "buy", price, usd }); }
-      return { ok: true, tx: commit ? "replay" : undefined, quote: { chain: o.chain, venue: "0x", sell_token: req.sell_token, buy_token: req.buy_token, sell_amount: req.sell_amount, buy_amount: BigInt(Math.floor(got * ONE)).toString(), min_buy_amount: "0", fee_bps: 50, venue_fee_bps: 0, usd_value: usd, fee_usd: usd * FEE } };
-    }
-    const u = Number(req.sell_amount) / ONE, gross = u * price, net = gross * (1 - FEE);
-    if (commit) { received += net; fees += gross * FEE; units = Math.max(0, units - u); trades.push({ ts: new Date(clock).toISOString(), side: "sell", price, usd: net }); }
-    return { ok: true, tx: commit ? "replay" : undefined, quote: { chain: o.chain, venue: "0x", sell_token: req.sell_token, buy_token: req.buy_token, sell_amount: req.sell_amount, buy_amount: String(Math.floor(net * 1e6)), min_buy_amount: "0", fee_bps: 50, venue_fee_bps: 0, usd_value: gross, fee_usd: gross * FEE } };
-  };
-  const exec: Executor = {
-    mode: "paper", slippageBps: 100,
-    swap: async (req) => fill(req, true),
-    quote: async (req) => fill(req, false),
-    // Nov 9: the replay's pretend wallet always has the cash for a buy (bots now check the USDC before buying).
-    balance: async (_c, t) => t.symbol === "USDC" && t.address !== tok.address ? 10n ** 15n : BigInt(Math.floor(units * ONE)),
-  };
-  const store = new MemoryRules();
-  await store.addBot(built.rules, "owner", true);
-  // Start the bot at the first candle: created then, and a recurring buy's first run counted from then.
-  await store.mutate((rs) => { for (const r of rs) { r.created_at = r.activated_at = new Date(start.t).toISOString(); if (r.kind === "dca") r.state.next_run = (r.every === "week" && r.weekday !== undefined ? nextRun(r, new Date(start.t)) : new Date(start.t)).toISOString(); } });
-  const levels = botLevels(store.list().map((r) => ({ ...r, state: { ...r.state, last_price: start.o } })));
-  const ap = new Autopilot(store, exec, { snapshot: () => ({ prices: { [tok.symbol]: { usd: price, change_24h: null } } }) }, { now: () => clock, noLease: true, resolve: async () => tok });
-  // Each hour goes open, low, high, close (open, high, low, close on a falling hour: the order a candle most
-  // likely took), walked in steps of at most 0.25%, so a level is met close to its price the way the live bot
-  // (checking every 15 seconds) would meet it, not at the hour's extreme.
-  for (const k of candles) {
-    const path = k.c >= k.o ? [k.o, k.l, k.h, k.c] : [k.o, k.h, k.l, k.c];
-    const pts: number[] = [path[0]!];
-    for (let i = 1; i < 4; i++) {
-      const a = path[i - 1]!, b = path[i]!, n = Math.min(40, Math.max(1, Math.ceil(Math.abs(b - a) / (a * 0.0025))));
-      for (let j = 1; j <= n; j++) pts.push(a + ((b - a) * j) / n);
-    }
-    for (let i = 0; i < pts.length; i++) { clock = k.t + Math.floor((i / pts.length) * 3_600_000); price = pts[i]!; await ap.tick(); }
-  }
-  const endUnits = units, valueEnd = endUnits * end.c;
+  // The store's folder is an empty one inside the wallet's own folder (nothing is written there).
+  const sim = new Sim({ markets: [{ symbol: sym, decimals: 18, bars: candles, barMs: 3_600_000 }], chain: o.chain, start: start.t, end: end.t + 3_600_000 - 1, pollMs: 30_000, timing: "fixed", mode: "paper", sampleMs: 24 * 3_600_000, dir: path.join(walletHome(), "replay") });
+  if (sells) sim.deposit(sym, hold / start.o);
+  const built = await sim.addBot(o.template, sym, o.params, { paper: true });
+  const levels = botLevels(built.rules.map((r) => ({ ...r, state: { ...r.state, last_price: start.o } })));
+  const r = await sim.run();
+  const buys = r.trades.filter((t) => t.side === "buy"), sold = r.trades.filter((t) => t.side === "sell"), sum = (a: { usd: number }[]) => a.reduce((x, t) => x + t.usd, 0);
+  const spent = sum(buys), received = sum(sold), fees = r.costs.fee_usd, endUnits = sim.held(sym), valueEnd = endUnits * end.c;
   const inUsd = sells ? hold : spent;
   const result = received + valueEnd - spent - hold;
   const baseline = sells ? hold * (end.c / start.o) - hold : spent > 0 ? spent * (end.c / start.o) - spent : 0;
   const pct = (n: number) => (inUsd > 0 ? Math.round((n / inUsd) * 1000) / 10 : null);
   const r2 = (n: number) => Math.round(n * 100) / 100;
   return {
-    token: tok.symbol, product, from: new Date(start.t).toISOString(), to: new Date(end.t + 3_600_000).toISOString(),
+    token: sym, product, from: new Date(start.t).toISOString(), to: new Date(end.t + 3_600_000).toISOString(),
     start_price: start.o, end_price: end.c, change_pct: Math.round(((end.c - start.o) / start.o) * 1000) / 10,
     prices: candles.map((k) => [k.t, k.c]),
     candles: toCandles(candles, (days > 7 ? 4 : 1) * 3_600_000),
     levels,
-    rules: built.rules.map((r) => describeRule(r)),
-    trades,
+    rules: built.rules.map((x) => describeRule(x)),
+    trades: r.trades.map((t) => ({ ts: new Date(t.t).toISOString(), side: t.side, price: t.mid, usd: t.usd })),
     hold_usd: hold, spent_usd: r2(spent), received_usd: r2(received), fees_usd: r2(fees), units_end: endUnits, value_end_usd: r2(valueEnd),
     result_usd: r2(result), result_pct: pct(result),
     baseline_label: sells ? "Just holding" : "Buying it all at the start", baseline_usd: r2(baseline), baseline_pct: pct(baseline),
-    note: "Hourly prices from Coinbase (each hour's open, low, high and close). Includes Tollkit's 0.5% fee; not network fees or slippage. Past prices don't predict future ones.",
+    note: `Hourly prices from Coinbase (each hour's open, low, high and close). Includes Tollkit's 0.1% bot fee; not network fees or slippage. Past prices don't predict future ones.`,
   };
 }

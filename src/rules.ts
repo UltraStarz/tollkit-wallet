@@ -29,8 +29,8 @@ export type RuleKind = (typeof RULE_KINDS)[number];
 export const BUY_KINDS: RuleKind[] = ["limit_buy", "dca", "signal_buy"];
 
 /** Grid price levels, lowest first. */
-/** 0.9.6: 0.2% kept per round trip + 0.25% bot fee on the buy and on the sell. */
-export const MIN_GRID_GAP_PCT = 0.7;
+/** 0.2% kept per round trip + the 0.10% bot fee on the buy and on the sell (0.7 when the bot fee was 0.25%). */
+export const MIN_GRID_GAP_PCT = 0.4;
 export function gridLevels(r: Pick<RuleInput, "lower_price" | "upper_price" | "levels">): number[] {
   const n = r.levels ?? 0, lo = r.lower_price ?? 0, hi = r.upper_price ?? 0;
   return Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
@@ -246,10 +246,10 @@ export function ruleProblem(r: RuleInput): string | null {
     if (!r.amount_usd) return "A grid needs amount_usd (dollars per level).";
     if (!r.lower_price || !r.upper_price || r.lower_price >= r.upper_price) return "A grid needs lower_price below upper_price.";
     if (!r.levels) return "A grid needs levels (3 to 40).";
-    // 0.9.6: each level must still earn at least 0.2% after the bot fee on both sides (0.25% + 0.25%). The tightest
+    // 0.9.6: each level must still earn at least 0.2% after the bot fee on both sides (0.10% + 0.10%). The tightest
     // step is the top one: bought one level under the top, sold at the top.
     const step = (r.upper_price - r.lower_price) / (r.levels - 1), gapPct = (step / (r.upper_price - step)) * 100;
-    if (gapPct < MIN_GRID_GAP_PCT) return `Grid levels are too close together (${gapPct.toFixed(2)}% apart). After the 0.25% fee on each side, every step needs at least ${MIN_GRID_GAP_PCT}%: use fewer levels or a wider range.`;
+    if (gapPct < MIN_GRID_GAP_PCT) return `Grid levels are too close together (${gapPct.toFixed(2)}% apart). After the 0.1% fee on each side, every step needs at least ${MIN_GRID_GAP_PCT}%: use fewer levels or a wider range.`;
     if (/^(USDC|USDT)$/i.test(r.token)) return "Rules trade an asset against USDC; the token can't be a stablecoin.";
     return null;
   }

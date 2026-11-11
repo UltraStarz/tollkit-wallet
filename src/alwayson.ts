@@ -24,7 +24,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { Contract, JsonRpcProvider, formatUnits, parseUnits, type HDNodeWallet, type Wallet } from "ethers";
 import { encodeFunctionData, getAddress, zeroAddress } from "viem";
-import { EVM_CHAIN_ID, NATIVE_EVM, chainName, isEvmChain, type Chain, type EvmChain } from "./chains.js";
+import { EVM_CHAIN_ID, NATIVE_EVM, chainName, isEvmChain, type Chain, type EvmChain, BOT_FEE_BPS } from "./chains.js";
 import { KNOWN } from "./tokens.js";
 import { walletHome } from "./paths.js";
 import { ALLOWANCE_HOLDER, C, DF, EXEC_SELECTOR, NONCE_ABI, bumpNonceCalldata, pinExec, signDelegation, slipJson, type Caveat } from "./delegation.js";
@@ -469,8 +469,8 @@ export class AlwaysOn {
 }
 
 /** Records what the server traded on the device's copy of the rules, so the app shows it and doesn't repeat it. */
-/** Tollkit's fee on a server trade, as the server charges it (0.25% for the busy bots, 0.5% for the rest). */
-const serverFeeUsd = (kind: string, usd: number) => Math.round(usd * (["grid", "infinity_grid", "smart_dca"].includes(kind) ? 25 : 50)) / 10_000;
+/** Tollkit's fee on a server trade when the server didn't report it: the bot fee (0.10% on every rule since Nov 11, 2026). */
+const serverFeeUsd = (_kind: string, usd: number) => Math.round(usd * BOT_FEE_BPS) / 10_000;
 /**
  * 0.9.12 (Joe: "trades the server makes never appear in Activity"): each real server fill also becomes a receipt, so
  * Activity, the CSV export and the fee totals show what ran 24/7. Pretend fills never do; a tx seen before is skipped.

@@ -170,7 +170,7 @@ tollkit-wallet rule pause <id>       # or: rule on <id>, rule cancel <id>
 
 Or use the **Autopilot** tab in the dashboard (`tollkit-wallet ui`). Rule types: limit buy, limit sell, take-profit, stop-loss, trailing stop, and recurring buys (hourly, daily, weekly or a set weekday, with an optional count and maximum price). A take-profit and a stop-loss on the same token are linked: when one fills, the other cancels.
 
-- Every fill goes through the same limits, approvals and receipts as any swap, and pays the same 0.5% fee.
+- Every fill goes through the same limits, approvals and receipts as any swap, and pays the 0.1% bot fee (a swap made by hand pays 0.5%).
 - Rules an agent suggests (`autopilot_propose`) wait for you to turn them on, unless you tick "Let agents turn on autopilot rules without asking me" in Settings (or `budget agent_rules=auto`).
 - The autopilot runs while the wallet runs: keep the dashboard open, or run `tollkit-wallet autopilot` on a computer or small server that stays on. Only one copy runs rules at a time.
 - Limit orders fill only at their price or better (within 1% for fees and spread). Stops always sell. When selling all of a chain's coin, a little is kept for network fees.

@@ -16,7 +16,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { DEFAULT_RPC, LOW_FEE_BOTS, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
+import { DEFAULT_RPC, NATIVE_EVM, WSOL, type Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { BUY_KINDS, nextRun, RuleStore, type Rule } from "./rules.js";
 import { DEC_A, DEC_B } from "./orca.js";
@@ -255,7 +255,7 @@ export class Autopilot {
     const usdc = KNOWN[r.chain].USDC!;
     let req: SwapRequest;
     if (BUY_KINDS.includes(r.kind)) {
-      req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.exec.slippageBps };
+      req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(r.amount_usd!.toFixed(6), 6), slippage_bps: this.exec.slippageBps, bot: true }; // Nov 11: a rule's trade pays the bot fee
     } else {
       let bal = await this.exec.balance(r.chain, t);
       if (t.address === NATIVE_EVM || t.address === WSOL) bal = bal > GAS_RESERVE[r.chain] ? bal - GAS_RESERVE[r.chain] : 0n;
@@ -271,7 +271,7 @@ export class Autopilot {
         if (share !== undefined && held && bal > 0n) { await this.hold(r, this.now() + 5 * 60_000, `The ${t.symbol} it could sell went to a stop or another sell that fired first, or is held by your bots.`); return; }
         await this.fail(r, "insufficient_balance", `No ${t.symbol} to sell.`); return;
       }
-      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps };
+      req = { chain: r.chain, sell_token: t.address, buy_token: usdc.address, sell_amount: amt.toString(), slippage_bps: this.exec.slippageBps, bot: true };
     }
     // Limit orders only fill at their price or better (1% allowance for the fee and spread). Stops always exit.
     if (r.kind === "limit_buy" || r.kind === "limit_sell" || r.kind === "take_profit") {
@@ -343,8 +343,8 @@ export class Autopilot {
     });
     if (a.side === "mark") { await save(() => {}, applyFill(r as any, st, a, { usd: 0, got: 0n }, p, now, t.decimals).state); return; }
     let req: SwapRequest;
-    // 0.9.6: Grid, Infinity grid and Smart DCA trades ask for the bot fee (0.25%).
-    const bot = LOW_FEE_BOTS.includes(r.kind) ? { bot: true } : {};
+    // Nov 11: every bot trade asks for the bot fee (0.10%).
+    const bot = { bot: true };
     if (a.side === "buy") req = { chain: r.chain, sell_token: usdc.address, buy_token: t.address, sell_amount: toAtomic(a.usd.toFixed(6), 6), slippage_bps: this.exec.slippageBps, ...bot };
     else {
       let amt = BigInt(a.atomic);
@@ -385,7 +385,7 @@ export class Autopilot {
 
   /**
    * 0.9.9: the Range bot. Puts its dollars into Orca's SOL/USDC pool between ±range_pct of the price, split so all of
-   * it fits (src/clmm.ts shareInA), buying the SOL share with the 0.25% bot fee. While the price stays in range the
+   * it fits (src/clmm.ts shareInA), buying the SOL share with the bot fee. While the price stays in range the
    * position earns the pool's trading fees. After recenter_min minutes outside, it takes everything out (coins and
    * fees), swaps back to the right split and opens a new range around the price then. Only the owner can start one,
    * and it runs only on this device: the position is the owner's token and only their key can move it.

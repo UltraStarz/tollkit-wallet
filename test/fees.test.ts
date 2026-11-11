@@ -175,28 +175,28 @@ async function wallet(o: { feeBps: number; balance: bigint; sendFails?: boolean 
 // --- 0.9.6: a Grid / Smart DCA bot trade asks for 0.25%
 {
   const urls: string[] = [];
-  // Solana: even when Jupiter's route would carry Tollkit's fee, a bot trade goes to the router path with bot=1.
+  // Solana: even when Jupiter's route would carry Tollkit's fee, a bot trade goes to the router path with bot=2 (bot=1 was the 0.25% mark before Nov 11, 2026).
   const fb = (async (u: string) => {
     urls.push(u); const url = new URL(u);
     if (url.pathname.endsWith("/order")) return Response.json(order({ feeBps: 50, feeMint: USDC, inAmount: "10000000", outAmount: "60000000", usd: 10 }));
     return Response.json({ inAmount: "10000000", outAmount: "60000000", otherAmountThreshold: "59700000", swapInstruction: { programId: "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", accounts: [], data: "" },
-      tollkit_fee: { bps: url.searchParams.get("bot") === "1" ? 25 : 50, recipient: FEE_TO } });
+      tollkit_fee: { bps: url.searchParams.get("bot") === "2" ? 10 : 50, recipient: FEE_TO } });
   }) as unknown as typeof fetch;
   const q = await getQuote({ chain: "solana", sell_token: USDC, buy_token: WSOL, sell_amount: "10000000", slippage_bps: 100, bot: true }, "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", { fetch: fb, proxy: "https://p" });
-  check(q.fee_inline === true && q.fee_bps === 25 && urls.some((u) => u.includes("/swap/solana/build") && u.includes("bot=1")), "a Solana bot trade: router path, 0.25%", { fee: q.fee_bps, urls });
-  check(solFeeLamports({ sell_token: USDC, buy_token: WSOL, sell_amount: "0", buy_amount: "1000000000" }, null, null, q.fee_bps) === 2_500_000n, "the bot fee on 1 SOL bought: 0.0025 SOL");
+  check(q.fee_inline === true && q.fee_bps === 10 && urls.some((u) => u.includes("/swap/solana/build") && u.includes("bot=2")), "a Solana bot trade: router path, 0.10%", { fee: q.fee_bps, urls });
+  check(solFeeLamports({ sell_token: USDC, buy_token: WSOL, sell_amount: "0", buy_amount: "1000000000" }, null, null, q.fee_bps) === 1_000_000n, "the bot fee on 1 SOL bought: 0.001 SOL");
   urls.length = 0;
   const n = await getQuote({ chain: "solana", sell_token: USDC, buy_token: WSOL, sell_amount: "10000000", slippage_bps: 100 }, "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", { fetch: fb, proxy: "https://p" });
-  check(n.fee_bps === 50 && !urls.some((u) => u.includes("bot=1")), "a normal swap is unchanged: 0.5%, no bot mark");
+  check(n.fee_bps === 50 && !urls.some((u) => u.includes("bot=")), "a normal swap is unchanged: 0.5%, no bot mark");
   // A server that answers with any other number gets the usual 0.5%, never more.
   const odd = (async (u: string) => new URL(u).pathname.endsWith("/order") ? fb(u) : Response.json({ inAmount: "10000000", outAmount: "60000000", swapInstruction: { programId: "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", accounts: [], data: "" }, tollkit_fee: { bps: 300, recipient: FEE_TO } })) as unknown as typeof fetch;
   const o = await getQuote({ chain: "solana", sell_token: USDC, buy_token: WSOL, sell_amount: "10000000", slippage_bps: 100, bot: true }, "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", { fetch: odd, proxy: "https://p" });
   check(o.fee_bps === 50, "an unexpected fee from the server is capped at 0.5%");
   // Base: the bot mark goes on the 0x quote request.
   let evmUrl = "";
-  const fe = (async (u: string) => { evmUrl = u; return Response.json({ sellAmount: "10000000", buyAmount: "4000000000000000", minBuyAmount: "3960000000000000", fees: { integratorFee: { amount: "25000", token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" } }, transaction: { to: "0x0000000000001fF3684f28c67538d4D072C22734", data: "0x" } }); }) as unknown as typeof fetch;
+  const fe = (async (u: string) => { evmUrl = u; return Response.json({ sellAmount: "10000000", buyAmount: "4000000000000000", minBuyAmount: "3960000000000000", fees: { integratorFee: { amount: "10000", token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" } }, transaction: { to: "0x0000000000001fF3684f28c67538d4D072C22734", data: "0x" } }); }) as unknown as typeof fetch;
   const e = await getQuote({ chain: "base", sell_token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", buy_token: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", sell_amount: "10000000", slippage_bps: 100, bot: true }, "0x1111111111111111111111111111111111111111", { fetch: fe, proxy: "https://p" });
-  check(new URL(evmUrl).searchParams.get("bot") === "1" && e.fee_bps === 25, "a Base bot trade asks 0x for the bot fee and reads 0.25% back", { evmUrl, fee: e.fee_bps });
+  check(new URL(evmUrl).searchParams.get("bot") === "2" && e.fee_bps === 10, "a Base bot trade asks 0x for the bot fee and reads 0.10% back", { evmUrl, fee: e.fee_bps });
 }
 
 // --- 0.9.6: Unwrap turns wrapped SOL back into plain SOL by closing its token account(s)

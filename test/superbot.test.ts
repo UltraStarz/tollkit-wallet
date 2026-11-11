@@ -26,7 +26,7 @@ check(parseSettings({ always_on: true }).think_24_7 === true && parseSettings({ 
   "Run 24/7 turns deciding while away on and off with it, unless that's set on its own");
 check(/steady, active, max or adaptive/.test(err(() => parseSettings({ pace: "turbo" }))) && parseSettings({ pace: "max" }).pace === "max" && parseSettings({ pace: "adaptive" }).pace === "adaptive", "only steady, active, max or adaptive");
 { const { SUPERBOT_SYSTEM } = await import("../src/strategist.js");
-  check(/limits\.pace/.test(SUPERBOT_SYSTEM) && /0\.25% on each buy and sell placed by grid/.test(SUPERBOT_SYSTEM), "the strategist is told what active pace means and the fees it must clear"); }
+  check(/limits\.pace/.test(SUPERBOT_SYSTEM) && /0\.1% on each buy and sell a strategy places/.test(SUPERBOT_SYSTEM), "the strategist is told what active pace means and the fees it must clear"); }
 { const { TEMPLATES } = await import("../src/bots.js");
   const sd = TEMPLATES.find((t: any) => t.id === "smart_dca")!; const d = (k: string) => (sd.fields as any[]).find((f) => f.key === k).default;
   check(d("step_pct") === 2 && d("profit_pct") === 2, "Smart DCA defaults: 2% steps, 2% profit"); }

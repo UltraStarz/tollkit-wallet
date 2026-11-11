@@ -23,7 +23,7 @@ import { ALLOWANCE_HOLDER, BOT_FEE_BPS, DEFAULT_RPC, EVM_CHAIN_ID, NATIVE_EVM, S
 type Fetch = typeof fetch;
 export const DEFAULT_PROXY = "https://api.tollkit.dev/wallet";
 
-export interface SwapRequest { chain: Chain; sell_token: string; buy_token: string; sell_amount: string; slippage_bps: number; /** 0.9.6: a Grid / Smart DCA bot's trade (0.25% fee). */ bot?: boolean }
+export interface SwapRequest { chain: Chain; sell_token: string; buy_token: string; sell_amount: string; slippage_bps: number; /** A bot or rule's trade (the bot fee, 0.10% since Nov 11, 2026). */ bot?: boolean }
 export interface SwapQuote {
   chain: Chain; venue: "0x" | "jupiter";
   sell_token: string; buy_token: string; sell_amount: string; buy_amount: string; min_buy_amount: string;
@@ -101,14 +101,14 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
     const j = await getJson(f, u.toString());
     const inRoute = jupiterFeeInRoute(j);
     // 0.9.6: a bot trade always takes the router path, where Tollkit's fee is the wallet's own transfer and can be
-    // 0.25% (Jupiter's referral fee on /order can't go below 0.5%).
+    // the bot rate (Jupiter's referral fee on /order can't go below 0.5%).
     if ((!inRoute || req.bot) && opts.build !== false) {
       // No Tollkit fee account for the coin Jupiter would take the fee in: build the swap from Jupiter's router
       // instructions instead, so Tollkit's 0.5% (in SOL) goes in the same transaction. If that path isn't
       // available, fall back to the order with the fee sent right after (below).
       try {
         const bu = new URL(`${proxy}/swap/solana/build`);
-        bu.search = new URLSearchParams({ inputMint: req.sell_token, outputMint: req.buy_token, amount: req.sell_amount, taker, slippageBps: String(req.slippage_bps), ...(req.bot ? { bot: "1" } : {}) }).toString();
+        bu.search = new URLSearchParams({ inputMint: req.sell_token, outputMint: req.buy_token, amount: req.sell_amount, taker, slippageBps: String(req.slippage_bps), ...(req.bot ? { bot: "2" } : {}) }).toString();
         const b = await getJson(f, bu.toString());
         if (b?.swapInstruction && b?.tollkit_fee && typeof b.tollkit_fee.recipient === "string") {
           return withUsd({
@@ -130,7 +130,7 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
     return withUsd(q);
   }
   const u = new URL(`${proxy}/swap/evm/quote`);
-  u.search = new URLSearchParams({ chainId: String(EVM_CHAIN_ID[req.chain]), sellToken: req.sell_token, buyToken: req.buy_token, sellAmount: req.sell_amount, taker, slippageBps: String(req.slippage_bps), feeToken: feeTokenFor(req.chain, req.sell_token, req.buy_token), ...(req.bot ? { bot: "1" } : {}) }).toString();
+  u.search = new URLSearchParams({ chainId: String(EVM_CHAIN_ID[req.chain]), sellToken: req.sell_token, buyToken: req.buy_token, sellAmount: req.sell_amount, taker, slippageBps: String(req.slippage_bps), feeToken: feeTokenFor(req.chain, req.sell_token, req.buy_token), ...(req.bot ? { bot: "2" } : {}) }).toString();
   const j = await getJson(f, u.toString());
   const sell = BigInt(j.sellAmount ?? req.sell_amount), buy = BigInt(j.buyAmount ?? "0");
   // A fee is a share of the side it's taken from: the amount sold, or what was bought before the fee came off.

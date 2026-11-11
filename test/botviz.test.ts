@@ -71,14 +71,16 @@ check(cs.length === 720 && calls === 3 && cs[0]!.t < cs[1]!.t && Math.abs(cs[0]!
 // ── Replay.
 const dip = await replay({ template: "dip", chain: "base", token: "ETH", params: { amount_usd: 50, drop_pct: 5, profit_pct: 8 }, fetch: fake, now: NOW + 1 });
 check(dip.trades.length === 2 && dip.trades[0]!.side === "buy" && Math.abs(dip.trades[0]!.price - 95) < 0.3 && dip.trades[1]!.side === "sell" && Math.abs(dip.trades[1]!.price - 95 * 1.08) < 0.3, "dip: buys near −5%, sells near +8% over the buy", dip.trades);
-check(dip.spent_usd === 50 && dip.result_usd > 2.5 && dip.result_usd < 4.1 && dip.baseline_label === "Buying it all at the start", "dip: about +$3 after the 0.5% fee each way", dip);
+check(dip.spent_usd === 50 && dip.result_usd > 2.5 && dip.result_usd < 4.1 && dip.baseline_label === "Buying it all at the start", "dip: about +$3 after the bot fee each way", dip);
 const prot = await replay({ template: "protect", chain: "base", token: "ETH", params: { sell_percent: 100, stop_pct: 10, profit_pct: 20 }, hold_usd: 200, fetch: fake, now: NOW + 2 });
-check(prot.trades.length === 1 && prot.trades[0]!.side === "sell" && Math.abs(prot.trades[0]!.price - 90) < 0.3 && Math.abs(prot.received_usd - 200 * 0.9 * 0.995) < 0.5, "protect: stops out near −10% on a $200 holding", prot.trades);
+check(prot.trades.length === 1 && prot.trades[0]!.side === "sell" && Math.abs(prot.trades[0]!.price - 90) < 0.3 && Math.abs(prot.received_usd - 200 * 0.9 * 0.999) < 0.5, "protect: stops out near −10% on a $200 holding", prot.trades);
 check(prot.baseline_label === "Just holding" && Math.abs(prot.baseline_usd - 10) < 0.1 && prot.result_usd < prot.baseline_usd, "protect: compared with just holding (which ended +5%)", prot);
 const none = await replay({ template: "ladder", chain: "base", token: "ETH", params: { step1: 50, step2: 60, step3: 70 }, fetch: fake, now: NOW + 3 });
 check(none.trades.length === 0 && none.result_usd === none.baseline_usd, "a bot whose levels are never reached doesn't trade");
 const g = await replay({ template: "grid", chain: "base", token: "ETH", params: { amount_usd: 10, range_pct: 15, levels: 7 }, fetch: fake, now: NOW + 4 });
 check(g.trades.some((t) => t.side === "buy") && g.trades.some((t) => t.side === "sell") && g.levels.length === 7, "grid: buys on the way down and sells on the way up", g.trades.length);
+// Nov 11: the replay is the backtester (src/backtest.ts), so a bot's trades pay the fee they pay for real.
+check(g.trades.length > 2 && Math.abs(g.fees_usd / (g.spent_usd + g.received_usd / (1 - 0.001)) - 0.001) < 0.0003 && /0\.1% bot fee/.test(g.note) && /0\.1% bot fee/.test(dip.note), "a replay pays the 0.1% bot fee every bot trade pays", { fees: g.fees_usd, spent: g.spent_usd, got: g.received_usd, note: g.note });
 const d = await replay({ template: "dca", chain: "base", token: "ETH", params: { amount_usd: 10, every: "day" }, fetch: fake, now: NOW + 5 });
 check(d.trades.length === 30 && d.spent_usd === 300, "steady buyer: one buy a day for 30 days", d.trades.length);
 let bad = ""; try { await replay({ template: "dip", chain: "base", token: "0x1234567890123456789012345678901234567890", params: {}, fetch: fake }); } catch (e: any) { bad = e.message; }
