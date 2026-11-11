@@ -83,6 +83,18 @@ check(g.trades.some((t) => t.side === "buy") && g.trades.some((t) => t.side === 
 check(g.trades.length > 2 && Math.abs(g.fees_usd / (g.spent_usd + g.received_usd / (1 - 0.001)) - 0.001) < 0.0003 && /0\.1% bot fee/.test(g.note) && /0\.1% bot fee/.test(dip.note), "a replay pays the 0.1% bot fee every bot trade pays", { fees: g.fees_usd, spent: g.spent_usd, got: g.received_usd, note: g.note });
 const d = await replay({ template: "dca", chain: "base", token: "ETH", params: { amount_usd: 10, every: "day" }, fetch: fake, now: NOW + 5 });
 check(d.trades.length === 30 && d.spent_usd === 300, "steady buyer: one buy a day for 30 days", d.trades.length);
+// Nov 11: a custom bot's replay. The made-up path falls 12% over 10 days and then recovers; the bot gets 11 days of
+// history first, so its 15 replayed days start on day 11, near the bottom, and ride the recovery.
+{
+  const custom = { buy: { type: "levels" as const, step_pct: 1, levels: 5 }, size: { usd: 20 }, sell: { steps: [{ gain_pct: 3, share_pct: 100 }] }, limits: { max_usd: 100 } };
+  const c = await replay({ template: "custom", chain: "base", token: "ETH", params: {}, custom, days: 15, fetch: fake, now: NOW + 6 });
+  check(c.days === 15 && c.prices.length === 15 * 24 && c.rules.length === 1 && /every 1% down/.test(c.rules[0]!), "custom bot: the replay covers the days asked for, after its 11 days of history", { days: c.days, n: c.prices.length });
+  check(c.baseline_label === "Holding $100 of ETH" && Math.abs(c.baseline_usd - 100 * (c.end_price / c.start_price - 1)) < 0.02 && c.worst_drop_usd >= 0 && c.result_usd === Math.round((c.received_usd + c.value_end_usd - c.spent_usd) * 100) / 100, "custom bot: compared with holding its dollar limit, with the worst drop along the way", { label: c.baseline_label, base: c.baseline_usd, worst: c.worst_drop_usd });
+  const d1 = await replay({ template: "custom", chain: "base", token: "ETH", params: {}, custom: { ...custom, buy: { type: "schedule", every_hours: 24 }, sell: undefined, limits: { max_usd: 1000 } }, days: 15, fetch: fake, now: NOW + 7 });
+  check(d1.trades.length === 15 && d1.trades.every((t) => t.side === "buy") && d1.spent_usd === 300 && Math.abs(d1.fees_usd - 0.3) < 0.011, "custom bot on a schedule: one $20 buy a day for 15 days, 0.1% fee each", { n: d1.trades.length, spent: d1.spent_usd, fees: d1.fees_usd });
+  let why = ""; try { await replay({ template: "custom", chain: "base", token: "ETH", params: {}, custom: { ...custom, limits: { max_usd: 5 } }, days: 15, fetch: fake, now: NOW + 8 }); } catch (e: any) { why = e.message; }
+  check(/at least one buy/.test(why), "custom bot: parts that don't fit together are refused in plain words", why);
+}
 let bad = ""; try { await replay({ template: "dip", chain: "base", token: "0x1234567890123456789012345678901234567890", params: {}, fetch: fake }); } catch (e: any) { bad = e.message; }
 check(/ETH, SOL and POL/.test(bad), "tokens Coinbase doesn't have are refused plainly", bad);
 

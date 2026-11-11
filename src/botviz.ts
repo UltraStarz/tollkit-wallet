@@ -17,6 +17,7 @@ import path from "node:path";
 import type { Chain } from "./chains.js";
 import { walletHome } from "./paths.js";
 import { BUY_KINDS, describeRule, gridLevels, type Rule } from "./rules.js";
+import type { CustomSpec } from "./botlogic.js";
 import { Sim } from "./backtest.js";
 import { toCandles, type OHLC } from "./holdings.js";
 
@@ -197,6 +198,8 @@ export interface ReplayResult {
   spent_usd: number; received_usd: number; fees_usd: number; units_end: number; value_end_usd: number;
   /** With the bot: dollars out (received + what's left at the end price) minus dollars in. */
   result_usd: number; result_pct: number | null;
+  /** Nov 11: the furthest the bot's value fell from an earlier high along the way, in dollars (hourly). */
+  worst_drop_usd: number; days: number;
   /** Doing nothing instead: the starting holding (or the same dollars bought at the start) at the end price. */
   baseline_label: string; baseline_usd: number; baseline_pct: number | null;
   note: string;
@@ -211,39 +214,45 @@ export interface ReplayResult {
  * order a candle most likely took) and the bot looks every 30 seconds, so a level is met close to its price, the way
  * the live bot meets it, not at the hour's extreme. Trades pay the fee a bot really pays (0.10% since Nov 11, 2026).
  */
-export async function replay(o: { template: string; chain: Chain; token: string; params: Record<string, unknown>; days?: number; hold_usd?: number; fetch?: typeof fetch; now?: number }): Promise<ReplayResult> {
+export async function replay(o: { template: string; chain: Chain; token: string; params: Record<string, unknown>; /** A custom bot's five parts (template "custom"). */ custom?: CustomSpec; days?: number; hold_usd?: number; fetch?: typeof fetch; now?: number }): Promise<ReplayResult> {
   if (o.template === "range") throw new Error("Replays don't cover the Range bot yet: its result depends on the pool's fees, which this replay can't see.");
   const product = coinbaseProduct(o.token);
   if (!product) throw new Error("Replays use Coinbase's price history, which has ETH, SOL and POL. This token isn't on it.");
-  const days = Math.min(30, Math.max(3, o.days ?? 30));
-  const candles = await hourlyCandles(product, days * 24, o.fetch, o.now);
-  const start = candles[0]!, end = candles.at(-1)!, sym = o.token.toUpperCase();
+  // Nov 11: up to a year. A custom bot gets 11 days of history before its first check, for its downtrend average.
+  const days = Math.min(365, Math.max(3, o.days ?? 30)), warm = o.template === "custom" ? 264 : 0;
+  const candles = await hourlyCandles(product, days * 24 + warm, o.fetch, o.now);
+  if (candles.length <= warm + 24) throw new Error("Not enough price history came back for a replay.");
+  const start = candles[warm]!, end = candles.at(-1)!, sym = o.token.toUpperCase();
   const sells = ["protect", "trail", "ladder"].includes(o.template) || (o.template === "twap" && o.params.side === "sell");
   const hold = sells ? Math.min(1_000_000, Math.max(1, o.hold_usd ?? 100)) : 0;
   // The store's folder is an empty one inside the wallet's own folder (nothing is written there).
-  const sim = new Sim({ markets: [{ symbol: sym, decimals: 18, bars: candles, barMs: 3_600_000 }], chain: o.chain, start: start.t, end: end.t + 3_600_000 - 1, pollMs: 30_000, timing: "fixed", mode: "paper", sampleMs: 24 * 3_600_000, dir: path.join(walletHome(), "replay") });
+  const sim = new Sim({ markets: [{ symbol: sym, decimals: 18, bars: candles, barMs: 3_600_000 }], chain: o.chain, start: start.t, end: end.t + 3_600_000 - 1, pollMs: 30_000, timing: "fixed", mode: "paper", sampleMs: 3_600_000, dir: path.join(walletHome(), "replay") });
   if (sells) sim.deposit(sym, hold / start.o);
-  const built = await sim.addBot(o.template, sym, o.params, { paper: true });
+  const built = o.template === "custom" ? { rules: await sim.addRules([{ kind: "custom", chain: o.chain, token: sym, custom: o.custom }], { paper: true }) } : await sim.addBot(o.template, sym, o.params, { paper: true });
   const levels = botLevels(built.rules.map((r) => ({ ...r, state: { ...r.state, last_price: start.o } })));
   const r = await sim.run();
   const buys = r.trades.filter((t) => t.side === "buy"), sold = r.trades.filter((t) => t.side === "sell"), sum = (a: { usd: number }[]) => a.reduce((x, t) => x + t.usd, 0);
   const spent = sum(buys), received = sum(sold), fees = r.costs.fee_usd, endUnits = sim.held(sym), valueEnd = endUnits * end.c;
-  const inUsd = sells ? hold : spent;
+  // A custom bot reuses the same dollars round after round, so it is compared with holding its limit, not everything it ever spent.
+  const cap = o.template === "custom" && o.custom ? o.custom.limits.max_usd : 0;
+  const inUsd = sells ? hold : cap || spent;
   const result = received + valueEnd - spent - hold;
-  const baseline = sells ? hold * (end.c / start.o) - hold : spent > 0 ? spent * (end.c / start.o) - spent : 0;
+  const baseline = sells ? hold * (end.c / start.o) - hold : cap ? cap * (end.c / start.o) - cap : spent > 0 ? spent * (end.c / start.o) - spent : 0;
   const pct = (n: number) => (inUsd > 0 ? Math.round((n / inUsd) * 1000) / 10 : null);
+  const shown = candles.slice(warm);
+  let top = r.curve.equity[0] ?? 0, worst = 0; for (const v of r.curve.equity) { if (v > top) top = v; if (top - v > worst) worst = top - v; }
   const r2 = (n: number) => Math.round(n * 100) / 100;
   return {
     token: sym, product, from: new Date(start.t).toISOString(), to: new Date(end.t + 3_600_000).toISOString(),
     start_price: start.o, end_price: end.c, change_pct: Math.round(((end.c - start.o) / start.o) * 1000) / 10,
-    prices: candles.map((k) => [k.t, k.c]),
-    candles: toCandles(candles, (days > 7 ? 4 : 1) * 3_600_000),
+    prices: shown.map((k) => [k.t, k.c]),
+    candles: toCandles(shown, (days > 90 ? 24 : days > 7 ? 4 : 1) * 3_600_000),
     levels,
     rules: built.rules.map((x) => describeRule(x)),
     trades: r.trades.map((t) => ({ ts: new Date(t.t).toISOString(), side: t.side, price: t.mid, usd: t.usd })),
     hold_usd: hold, spent_usd: r2(spent), received_usd: r2(received), fees_usd: r2(fees), units_end: endUnits, value_end_usd: r2(valueEnd),
-    result_usd: r2(result), result_pct: pct(result),
-    baseline_label: sells ? "Just holding" : "Buying it all at the start", baseline_usd: r2(baseline), baseline_pct: pct(baseline),
+    result_usd: r2(result), result_pct: pct(result), worst_drop_usd: r2(worst), days,
+    baseline_label: sells ? "Just holding" : cap ? `Holding $${cap.toLocaleString("en-US")} of ${sym}` : "Buying it all at the start", baseline_usd: r2(baseline), baseline_pct: pct(baseline),
     note: `Hourly prices from Coinbase (each hour's open, low, high and close). Includes Tollkit's 0.1% bot fee; not network fees or slippage. Past prices don't predict future ones.`,
   };
 }

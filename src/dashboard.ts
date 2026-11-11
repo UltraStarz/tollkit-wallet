@@ -20,7 +20,8 @@ import { readAiUse } from "./aiuse.js";
 import { Watcher } from "./watch.js";
 import { PriceFeed } from "./prices.js";
 import { Autopilot } from "./autopilot.js";
-import { RuleInput, describeRule, ruleProblem } from "./rules.js";
+import { randomUUID } from "node:crypto";
+import { RuleInput, describeCustom, describeRule, ruleProblem } from "./rules.js";
 import { parseStrategy } from "./parse.js";
 import { CHAINS as ALL_CHAINS, chainName, type Chain } from "./chains.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -474,6 +475,18 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!known) return send(res, 400, { error: "Add this token on Home first (Add a token runs Tollkit's scam check), then make a bot for it." });
         const price = priceOf(tok.symbol) ?? (autopilot ? await autopilot.price(chain, tok).catch(() => undefined) : undefined);
         let built;
+        // Nov 11: a custom bot is one rule made of five parts (src/botlogic.ts), checked the same way as any rule.
+        if (String(b.template) === "custom") {
+          const tokenId = tok.symbol && /^[A-Z0-9.]{2,12}$/i.test(tok.symbol) && isCoreToken(chain, tok.address) ? tok.symbol : tok.address, T = tokenId.length > 12 ? `${tokenId.slice(0, 4)}…` : tokenId.toUpperCase();
+          const name = String(b.name ?? "").trim().slice(0, 40) || `My ${T} bot`, bot = randomUUID().slice(0, 8);
+          const rule: RuleInput = { kind: "custom", chain, token: tokenId, custom: b.custom as any, bot, bot_name: name, template: "custom" };
+          const why = ruleProblem(rule);
+          if (why) return send(res, 400, { error: why });
+          if (p === "/api/bots/preview") return send(res, 200, { name, price: price ?? null, parts: describeCustom(rule.custom, T), rules: [{ description: describeRule(rule) }] });
+          const made = await w.rules().addBot([rule], "owner", false);
+          void autopilot?.tick(); void alwaysSync();
+          return send(res, 200, { bot, rules: made.map((r) => r.id) });
+        }
         try { built = buildBot(String(b.template ?? ""), tok.symbol && /^[A-Z0-9.]{2,12}$/i.test(tok.symbol) && isCoreToken(chain, tok.address) ? tok.symbol : tok.address, chain, (b.params ?? {}) as Record<string, unknown>, price); }
         catch (e) { return send(res, 400, { error: (e as Error).message }); }
         if (p === "/api/bots/preview") return send(res, 200, { name: built.name, price: price ?? null, rules: built.rules.map((r) => ({ description: describeRule(r) })) });
@@ -489,7 +502,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!CHAINS.includes(chain)) return send(res, 400, { error: "Pick a network." });
         let sym = String(b.token ?? "").trim();
         try { const t = await resolveToken(chain, sym); sym = t.symbol || sym; } catch { /* keep what was typed */ }
-        try { return send(res, 200, await replay({ template: String(b.template ?? ""), chain, token: sym, params: (b.params ?? {}) as Record<string, unknown>, hold_usd: Number(b.hold_usd) || undefined, days: Number(b.days) || 30 })); }
+        try { return send(res, 200, await replay({ template: String(b.template ?? ""), chain, token: sym, params: (b.params ?? {}) as Record<string, unknown>, custom: b.custom as any, hold_usd: Number(b.hold_usd) || undefined, days: Number(b.days) || 30 })); }
         catch (e) { return send(res, 400, { error: (e as Error).message }); }
       }
       if (p === "/api/bots/status") {

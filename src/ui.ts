@@ -430,6 +430,7 @@ nav button .emo{display:block;margin:0 auto 3px;width:20px;height:20px;font-size
 .chr{display:flex;gap:6px;margin:0 0 10px}
 .chrb{flex:1;padding:7px 0;border-radius:9px;border:1px solid var(--line);background:var(--surf);color:var(--mut);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
 .chrb.on{background:var(--surf2);color:var(--tx);border-color:var(--acc)}
+.cbh{display:flex;align-items:center;gap:8px}.cbh b{font-size:16px}.cbrows{margin-top:6px}.cbrows .setr{padding-left:2px;padding-right:2px}.cbrows .setr-t small{white-space:normal}.cbi{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;flex:none;background:var(--surf2);color:var(--tx)}.cbed{padding:10px 2px 6px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
 .chrw{display:flex;gap:8px;align-items:center;margin:0 0 10px}.chrw .chr{flex:1;margin:0}
 .ckg{display:inline-flex;gap:2px;padding:2px;border-radius:9px;background:var(--surf);flex:none}.ckb{width:30px;height:28px;display:grid;place-items:center;border:0;border-radius:7px;background:none;color:var(--mut);cursor:pointer;padding:0}.ckb.on{background:var(--surf2);color:var(--tx)}.ckb:hover{color:var(--tx)}
 .lwh{height:270px}.chbox.ld .lwh{opacity:.45}.lwb{position:relative;margin:0 -2px}.lwhost{position:absolute;inset:0}.chohlc.off{opacity:.45}.bcoff:empty{display:none}.bcoff{margin-top:2px}
@@ -1613,16 +1614,16 @@ function botsHtml(){BCH={};BCN=0;var L=myBots(),T=(S.bot_templates||[]).filter(f
 var cnt={live:L.filter(BTAB.live).length,paused:L.filter(BTAB.paused).length,done:L.filter(BTAB.done).length};
 if(BOT.tab!=="time"&&!cnt[BOT.tab]&&L.length)BOT.tab=cnt.live?"live":cnt.paused?"paused":cnt.done?"done":"live";
 var bt=PT.bots||(L.length?"mine":"start");
-var h=(L.length?botStrip(L):"")+aoBotsHtml()+pgTabs("bots",[["mine","My bots",cnt.live||""],["start","Start a bot"],["time","Timeline"]],bt);
+var h=(L.length?botStrip(L):"")+aoBotsHtml()+pgTabs("bots",[["mine","My bots",cnt.live||""],["start","Build a bot"],["time","Timeline"]],bt);
 if(bt==="time"){BOT.anim=false;return h+(L.length?botTimeline(L):'<div class="htempty">No trades yet. Every buy and sell your bots make shows here.</div>')}
 if(bt==="mine"){if(BOT.tab==="time")BOT.tab="live";
 if(L.length){h+='<div class="btabs" role="tablist">'+[["live","Running"],["paused","Paused"],["done","Finished"]].map(function(x){return '<button role="tab" aria-selected="'+(BOT.tab===x[0])+'" class="btab'+(BOT.tab===x[0]?" on":"")+'" data-btab="'+x[0]+'">'+x[1]+' <span class="btn">'+cnt[x[0]]+'</span></button>'}).join("")+'</div>';
 // 0.9.8: Remove all sits under the tabs, in the Finished list, with room around it.
 if(BOT.tab==="done"&&cnt.done>1)h+='<div class="botrmall"><span class="sm mut">'+cnt.done+' finished or stopped</span><button class="b g sbtn" data-botrm="*">Remove all</button></div>';
 var sh=L.filter(BTAB[BOT.tab]);h+=sh.length?sh.map(botCard).join(""):'<div class="mut sm" style="margin-top:8px">Nothing here.</div>'}
-else h+='<div class="htempty">No bots yet. Open <b>Start a bot</b>: you’ll see where it buys and sells on a chart, and can replay it over the last 30 days before it starts.</div>';
+else h+='<div class="htempty">No bots yet. Open <b>Build a bot</b>: you’ll see where it buys and sells on a chart, and can replay it over the last 30 days before it starts.</div>';
 BOT.anim=false;return h}
-h+='<div class="sm mut" style="margin:2px 0 6px">Plain rules, no AI. You see every step before it starts.</div><div class="botcat">'+T.map(function(t){var on=BOT.tpl===t.id;return tplCard(t,on,L)+(on?'<div class="botwrap'+(BOT.anim?" drop":"")+'"><div class="botin">'+botForm()+'</div></div>':'')}).join("")+'</div>';
+h+=cbBox()+'<div class="sm mut" style="margin:16px 0 6px"><b style="color:var(--tx)">Or start from a ready-made bot.</b> Plain rules, no AI. You see every step before it starts.</div><div class="botcat">'+T.map(function(t){var on=BOT.tpl===t.id;return tplCard(t,on,L)+(on?'<div class="botwrap'+(BOT.anim?" drop":"")+'"><div class="botin">'+botForm()+'</div></div>':'')}).join("")+'</div>';
 BOT.anim=false;
 h+='<label class="botshare"><input type="checkbox" id="botshare"'+(S.bot_share?" checked":"")+' onchange="botShare(this.checked)"> Share my bots’ results with TOLLkit’s public bot board (anonymous: bot type, token, trade counts and result %, no addresses or amounts)</label><div class="sm mut" style="margin-top:6px">Solana bot trades are powered by Jupiter (Jupiter Ultra or Metis); Base and Ethereum trades are priced by 0x.</div>';
 return h}
@@ -1723,6 +1724,66 @@ function botTokPick(){var T=botToks(BOT.chain),inList=!BOT.paste&&T.some(functio
 // Nov 5: quick amounts under a bot's dollar field.
 function botQ(k,v){botRead();BOT.params[k]=v;BOT.pv=null;render()}
 function botRead(){var c=document.getElementById("bot_chain"),t=document.getElementById("bot_token"),k=document.getElementById("bot_tokpick");if(c)BOT.chain=c.value;if(k&&k.value!=="__paste")BOT.token=k.value;else if(t)BOT.token=t.value.trim();document.querySelectorAll("[data-bp]").forEach(function(el){BOT.params[el.getAttribute("data-bp")]=el.tagName==="SELECT"?el.value:Number(el.value)})}
+// Nov 11, 2026: Build a bot. One bot from five parts (src/botlogic.ts kind "custom"). The words on each row come from
+// the wallet itself (/bots/preview), so the screen and the rule always say the same thing.
+var CB={chain:"solana",token:"SOL",edit:null,bt:null,parts:null,asked:false,err:null,busy:false,rp:null,rpDays:90,rpBusy:false,rpErr:null,
+spec:{buy:{type:"levels",step_pct:1,levels:10},size:{usd:25,grow:"none"},sell:{steps:[{gain_pct:5,share_pct:50}],trail_pct:4},protect:{downtrend:{hours:240,gap_pct:3}},limits:{max_usd:300}}};
+var CBP=[["buy","When to buy",'<path d="M12 5v14M6 13l6 6 6-6"/>'],["size","How much",'<circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10h4a1.5 1.5 0 010 3h-3a1.5 1.5 0 000 3h4"/>'],["sell","When to sell",'<path d="M12 19V5M6 11l6-6 6 6"/>'],["protect","Protection",'<path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/>'],["limits","Limits",'<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/>']];
+function cbF(id,label,val){return '<label class="botf"><span>'+label+'</span><input id="'+id+'" type="number" step="any" min="0" inputmode="decimal" value="'+esc(String(val===undefined||val===null?"":val))+'"></label>'}
+function cbS(id,label,opts,val,chg){return '<label class="botf"><span>'+label+'</span><select id="'+id+'"'+(chg?' onchange="'+chg+'"':'')+'>'+opts.map(function(o){return '<option value="'+o[0]+'"'+(String(val)===o[0]?" selected":"")+'>'+o[1]+'</option>'}).join("")+'</select></label>'}
+function cbForm(k){var s=CB.spec,h='<div class="botgrid">';
+if(k==="buy"){var t=CB.bt||s.buy.type,b=s.buy.type===t?s.buy:{};
+h+=cbS("cb_bt","Buy",[["levels","At levels as it falls"],["drop","After a drop"],["schedule","On a schedule"],["price","At a price"],["rsi","When RSI is low"]],t,"cbType(this.value)");
+if(t==="levels")h+=cbF("cb_b1","Each step down (%)",b.step_pct||1)+cbF("cb_b2","Steps at most",b.levels||10);
+else if(t==="drop")h+=cbF("cb_b1","A drop of (%)",b.pct||5)+cbF("cb_b2","Within (hours)",b.hours||24);
+else if(t==="schedule")h+=cbF("cb_b1","Every (hours)",b.every_hours||24);
+else if(t==="price")h+=cbF("cb_b1","At or under ($)",b.at||"");
+else h+=cbF("cb_b1","Hourly RSI at or under",b.below||30)}
+else if(k==="size")h+=cbF("cb_s1","Dollars each buy",s.size.usd)+cbS("cb_sg","Then",[["none","The same every time"],["wins","25% bigger after each win"],["deeper","Bigger on each further buy"]],s.size.grow||"none")+cbF("cb_s2","Further buys × (if chosen)",s.size.factor||1.5);
+else if(k==="sell"){var st=(s.sell&&s.sell.steps)||[],a=st[0]||{},c=st[1]||{};
+h+=cbF("cb_l1","First sale at a gain of (%)",a.gain_pct||0)+cbF("cb_l2","…sells (% of what it holds)",a.share_pct||100)+cbF("cb_l3","Second sale at (%), 0 = none",c.gain_pct||0)+cbF("cb_l4","…sells (%)",c.share_pct||100)+cbF("cb_l5","Trail the rest under its high (%), 0 = off",(s.sell&&s.sell.trail_pct)||0)+cbF("cb_l6","Start trailing after a gain of (%), 0 = at once",(s.sell&&s.sell.trail_after_pct)||0)}
+else if(k==="protect"){var pr=s.protect||{},d=pr.downtrend;
+h+=cbS("cb_pd","In a downtrend",[["on","Sell to USDC, buy back when it lifts"],["off","Keep going"]],d?"on":"off")+cbF("cb_p2","Average over (days, 1 to 10)",d?d.hours/24:10)+cbF("cb_p3","Sell when this far under it (%)",d?d.gap_pct:3)+cbF("cb_p1","Stop under its cost (%), 0 = off",pr.stop_pct||0)}
+else h+=cbF("cb_m1","Most dollars in the coin",s.limits.max_usd)+cbF("cb_m2","Stop for good after losing ($), 0 = off",s.limits.max_loss_usd||0);
+return h+'</div><button class="b g" style="margin:10px 0 4px" onclick="cbDone()">Done</button>'}
+function cbN(id){var e=document.getElementById(id);return e?Number(e.value):NaN}
+function cbV(id){var e=document.getElementById(id);return e?e.value:""}
+function cbType(v){CB.bt=v;render()}
+function cbEdit(k){CB.edit=CB.edit===k?null:k;CB.bt=null;render()}
+function cbDone(){var k=CB.edit,s=CB.spec;
+if(k==="buy"){var t=cbV("cb_bt");s.buy=t==="schedule"?{type:t,every_hours:cbN("cb_b1")}:t==="drop"?{type:t,pct:cbN("cb_b1"),hours:cbN("cb_b2")||24}:t==="levels"?{type:t,step_pct:cbN("cb_b1"),levels:Math.round(cbN("cb_b2"))}:t==="price"?{type:t,at:cbN("cb_b1")}:{type:"rsi",below:cbN("cb_b1")}}
+else if(k==="size"){var g=cbV("cb_sg");s.size={usd:cbN("cb_s1"),grow:g};if(g==="deeper")s.size.factor=cbN("cb_s2")||1.5}
+else if(k==="sell"){var st=[],o={};if(cbN("cb_l1")>0)st.push({gain_pct:cbN("cb_l1"),share_pct:cbN("cb_l2")||100});if(cbN("cb_l3")>0)st.push({gain_pct:cbN("cb_l3"),share_pct:cbN("cb_l4")||100});if(st.length)o.steps=st;if(cbN("cb_l5")>0){o.trail_pct=cbN("cb_l5");if(cbN("cb_l6")>0)o.trail_after_pct=cbN("cb_l6")}s.sell=o}
+else if(k==="protect"){var pr={};if(cbN("cb_p1")>0)pr.stop_pct=cbN("cb_p1");if(cbV("cb_pd")==="on")pr.downtrend={hours:Math.round((cbN("cb_p2")||10)*24),gap_pct:cbN("cb_p3")||3};s.protect=pr}
+else if(k==="limits"){s.limits={max_usd:cbN("cb_m1")};if(cbN("cb_m2")>0)s.limits.max_loss_usd=cbN("cb_m2")}
+CB.edit=null;CB.bt=null;CB.rp=null;cbPreview()}
+function cbTok(){var c=cbV("cb_chain"),t=cbV("cb_tok");if(c&&c!==CB.chain){CB.chain=c;CB.token=NATIVE[c]||"ETH"}else if(t)CB.token=t;CB.rp=null;cbPreview()}
+function cbPreview(){CB.err=null;api("/bots/preview",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec}).then(function(r){CB.parts=r.parts;render()}).catch(function(e){CB.err=e.message;render()})}
+function cbRun(d){CB.rpDays=d;CB.rpBusy=true;CB.rpErr=null;render();api("/bots/replay",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec,days:d}).then(function(r){CB.rpBusy=false;CB.rp=r;render()}).catch(function(e){CB.rpBusy=false;CB.rp=null;CB.rpErr=e.message;render()})}
+function cbStart(){CB.busy=true;CB.err=null;render();api("/bots/start",{template:"custom",chain:CB.chain,token:CB.token,custom:CB.spec}).then(function(){CB.busy=false;CB.rp=null;BOT.tab="live";flash=[1,"Bot started. It shows under My bots."];refresh().then(function(){setPT("bots","mine")})}).catch(function(e){CB.busy=false;CB.err=e.message;render()})}
+function cbReplay(){var ok=/^(ETH|WETH|SOL|POL)$/i.test(CB.token||""),h='<div class="brp"><div class="brph"><b>How it did on past prices</b></div>';
+if(!ok)return h+'<div class="sm mut">Replays use Coinbase’s price history, which has ETH, SOL and POL.</div></div>';
+h+='<div class="chr" style="margin:8px 0 0">'+[[30,"30 days"],[90,"90 days"],[365,"1 year"]].map(function(d){return '<button class="chrb'+(CB.rp&&CB.rpDays===d[0]?" on":"")+'" onclick="cbRun('+d[0]+')"'+(CB.rpBusy?" disabled":"")+'>'+(CB.rpBusy&&CB.rpDays===d[0]?"Testing…":d[1])+'</button>'}).join("")+'</div>';
+if(CB.rpErr)h+='<div class="msg err">'+esc(CB.rpErr)+'</div>';
+var r=CB.rp;
+if(r)h+=bchart({key:"cb:"+r.token+r.from,series:r.prices,trades:r.trades.map(function(x){return {ts:x.ts,side:x.side,price:x.price}}),title:r.token+" replay",h:150})+
+'<div class="brpk"><div><small>With the bot</small><b>'+sgn(r.result_usd,fmtUsd(Math.abs(r.result_usd)))+'</b><span class="sm mut">'+r.trades.length+' trades</span></div>'+
+'<div><small>'+esc(r.baseline_label)+'</small><b>'+sgn(r.baseline_usd,fmtUsd(Math.abs(r.baseline_usd)))+'</b><span class="sm mut">doing nothing else</span></div>'+
+'<div><small>Worst drop</small><b>'+fmtUsd(r.worst_drop_usd)+'</b><span class="sm mut">along the way</span></div>'+
+'<div><small>Fees</small><b>'+fmtUsd(r.fees_usd)+'</b><span class="sm mut">0.1% a trade</span></div></div>'+
+'<div class="sm mut" style="margin-top:6px">'+(r.trades.length?'':'It never traded in this stretch. ')+esc(r.note)+'</div>';
+else if(!CB.rpBusy&&!CB.rpErr)h+='<div class="sm mut" style="margin-top:6px">Pick a stretch to see what these settings would have done.</div>';
+return h+'</div>'}
+function cbBox(){if(ALLCH.indexOf(CB.chain)<0){CB.chain=ALLCH[0];CB.token=NATIVE[CB.chain]||"ETH"}
+if(!CB.parts&&!CB.asked){CB.asked=true;setTimeout(cbPreview,0)}
+var P=CB.parts,mid=P?P.slice(3,P.length-1):[],txt={buy:P?P[0]:"…",size:P?P[1]:"…",sell:P?P[2]:"…",protect:P?(mid.length?mid.join(" · "):"None"):"…",limits:P?P[P.length-1]:"…"};
+var h='<div class="ap botform cbx" style="white-space:normal"><div class="cbh"><b>Build your own bot</b><span class="chip">Custom</span></div><div class="sm mut" style="margin:4px 0 8px">Five parts. Tap one to change it. Nothing trades until you press Start.</div>'+
+'<div class="botgrid"><label class="botf"><span>Network</span><select id="cb_chain" onchange="cbTok()">'+ALLCH.map(function(c){return '<option value="'+c+'"'+(CB.chain===c?" selected":"")+'>'+CHAIN_NAMES[c]+'</option>'}).join("")+'</select></label>'+
+'<label class="botf"><span>Token</span><select id="cb_tok" onchange="cbTok()">'+botToks(CB.chain).filter(function(x){return x.v!=="USDC"}).map(function(x){return '<option value="'+esc(x.v)+'"'+(CB.token===x.v?" selected":"")+'>'+esc(x.l)+'</option>'}).join("")+'</select></label></div><div class="cbrows">';
+CBP.forEach(function(p){var on=CB.edit===p[0];h+='<button class="setr" aria-expanded="'+on+'" onclick="cbEdit(\''+p[0]+'\')"><span class="cbi"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p[2]+'</svg></span><span class="setr-t"><b>'+p[1]+'</b><small>'+esc(txt[p[0]])+'</small></span><span class="setr-c">'+(on?"⌄":"›")+'</span></button>'+(on?'<div class="cbed">'+cbForm(p[0])+'</div>':'')});
+h+='</div>';
+if(CB.err)h+='<div class="msg err">'+esc(CB.err)+'</div>';
+return h+cbReplay()+'<div class="tplbtns" style="margin-top:12px"><button class="botcta" onclick="cbStart()"'+(CB.busy||CB.err?" disabled":"")+'>'+(CB.busy?"Starting…":"Start bot")+'</button></div></div>'}
 function botGo(what){botRead();BOT.busy=true;BOT.err=null;render();api("/bots/"+what,{template:BOT.tpl,chain:BOT.chain,token:BOT.token,params:BOT.params,from:BOT.tpl==="range"&&BOT.from==="autopilot"?"autopilot":undefined}).then(function(r){BOT.busy=false;if(what==="preview"){BOT.pv=r;render()}else{var wasBot=isBotTpl(BOT.tpl),ao247=wasBot&&BOT.ao!==false&&bot247(),ids=(r&&r.rules)||[];BOT.tpl=null;BOT.pv=null;BOT.rp=null;BOT.tab="live";flash=[1,wasBot?(ao247?"Bot started. Turning on Run 24/7…":"Bot started. It shows under Your bots."):"Order on. It shows under Your orders."];refresh().then(function(){if(ao247)ids.forEach(function(id){var rr=(S.rules||[]).filter(function(x){return x.id===id})[0];if(rr&&!aoWhyNot(rr))aoSet(id,true)});render()})}}).catch(function(e){BOT.busy=false;BOT.err=e.message;render()})}
 function botClose(){var w=document.querySelector(".botwrap");BOT.pv=null;BOT.err=null;BOT.rp=null;BOT.rpErr=null;var done=function(){BOT.tpl=null;render()};if(!w||(window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches)){done();return}w.classList.remove("drop");w.classList.add("closing");setTimeout(done,240)}
 function botShare(on){api("/bots/share",{on:on}).then(function(){refresh()}).catch(function(e){flash=[0,e.message];render()})}

@@ -118,6 +118,18 @@ check((await raw("/api/receive", { token: null })).status === 401, "receive: ref
   const none = await j("/api/bots/remove", { method: "POST", body: { finished: true } });
   check(none.status === 400, "bots: nothing left to clear says so", none);
 }
+// Nov 11, 2026: Build a bot. A custom bot is previewed in plain words, refused when its parts don't fit, and started as one rule.
+{
+  const custom = { buy: { type: "levels", step_pct: 1, levels: 10 }, size: { usd: 25 }, sell: { steps: [{ gain_pct: 5, share_pct: 50 }], trail_pct: 4 }, protect: { downtrend: { hours: 240, gap_pct: 3 } }, limits: { max_usd: 300 } };
+  const cpv = await j("/api/bots/preview", { method: "POST", body: { template: "custom", chain: "solana", token: "SOL", custom } });
+  check(cpv.status === 200 && cpv.name === "My SOL bot" && cpv.parts?.length === 5 && cpv.parts[0] === "Buys SOL every 1% down, up to 10 times" && cpv.parts[3] === "Sells to USDC in a downtrend", "custom bot preview: its five parts in plain words", cpv);
+  const cbad = await j("/api/bots/preview", { method: "POST", body: { template: "custom", chain: "solana", token: "SOL", custom: { ...custom, limits: { max_usd: 5 } } } });
+  check(cbad.status === 400 && /at least one buy/.test(cbad.error ?? ""), "custom bot preview: parts that don't fit are refused plainly", cbad);
+  const before = (await j("/api/state")).rules.length;
+  const cst = await j("/api/bots/start", { method: "POST", body: { template: "custom", chain: "solana", token: "SOL", custom } });
+  const after = (await j("/api/state")).rules, made = after.find((r: any) => r.id === cst.rules?.[0]);
+  check(cst.status === 200 && after.length === before + 1 && made?.kind === "custom" && made.status === "active" && made.created_by === "owner" && made.bot === cst.bot && made.bot_name === "My SOL bot" && made.custom?.limits?.max_usd === 300, "custom bot start: one active rule of the owner's, with its five parts kept", { cst, made });
+}
 await d.close();
 console.log(`\ndashboard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
