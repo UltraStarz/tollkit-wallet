@@ -62,7 +62,7 @@ await applyFills(store, fills, dir); await applyFills(store, fills, dir);
 // 0.9.12: each real server fill is also a receipt, once, so Activity and the CSV show what ran 24/7.
 { const rc = entries(dir).filter((e) => e.kind === "trade");
   const buy = rc.find((e) => e.tx === "0xaa"), sell = rc.find((e) => e.tx === "0xbb");
-  check(rc.length === 2 && buy?.by === "24/7" && buy.usd === 10 && buy.fee_usd === 0.01 && buy.detail === "10.00 USDC -> 0.004 ETH" && buy.chain === "base" && sell?.detail === "0.001 ETH -> 3.00 USDC", "server fills become receipts, once, with Tollkit's fee and who ran them", rc); }
+  check(rc.length === 2 && buy?.by === "24/7" && buy.usd === 10 && buy.fee_usd === 0.05 /* review, Nov 11: the fee the server reported for this fill, not a guess from the rate */ && sell?.fee_usd === 0.003 && buy.detail === "10.00 USDC -> 0.004 ETH" && buy.chain === "base" && sell?.detail === "0.001 ETH -> 3.00 USDC", "server fills become receipts, once, with Tollkit's fee and who ran them", rc); }
 const a = store.get(dca.id)!, b = store.get(sl.id)!, c = store.get(tp.id)!;
 check(a.state.runs === 1 && a.state.next_run === "2026-10-19T12:00:00.000Z" && a.state.spent_usd === 10, "a server buy is recorded once, and the next one is tomorrow", a.state);
 check(b.status === "done" && c.status === "cancelled", "a filled stop-loss cancels its take-profit partner", [b.status, c.status]);
