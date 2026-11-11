@@ -42,7 +42,7 @@ import { backupDone, backupKind, markBackedUp, revealBackup } from "./keystore.j
 import { budgetView, setBudget } from "./appbudget.js";
 import { Setups, showSetup, needsPassword, type SetupRequest } from "./setups.js";
 import { catalogView, refreshCatalog, setHidden } from "./tollkit-tools.js";
-import { SuperBot, type SuperBotDeps } from "./superbot.js";
+import { pastTest, SuperBot, type SuperBotDeps } from "./superbot.js";
 import { solRunnable } from "./alwayson-sol.js";
 const BOT_KINDS = ["grid", "smart_dca", "rebalance", "infinity_grid", "twap", "custom"];
 import { serverRunnable } from "./alwayson.js";
@@ -244,6 +244,8 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
     // 0.9.11: strategies are sized from the dollars on the network (USDC, USDT), not the AI's guess.
     // 0.9.12: hourly closes for Adaptive pace (the same Coinbase and DefiLlama history alerts and signals use).
     closes: async (chain, token) => hourlyCloses(chain, await resolveToken(chain, token), wf),
+    // Phase 3, step 4: every proposal is replayed on the last 90 days of prices before it starts.
+    backtest: pastTest,
     stableUsd: async (chain) => { const b = (await w.balances())[chain]; if (!Array.isArray(b)) return undefined; return b.filter((x) => /^(USDC|USDT|USDC\.e)$/i.test(x.token)).reduce((t, x) => t + (Number(x.amount) || 0), 0); },
     ...(o.ownAi?.decider ? { decide: o.ownAi.decider() } : {}),
   });

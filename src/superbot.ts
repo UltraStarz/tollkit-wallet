@@ -174,6 +174,8 @@ export interface AppliedAction { type: string; strategy_id?: string; template?: 
 export interface Decision { ts: string; snapshot_id: string | null; market_view: string; assessment: string; confidence: number; model: string | null; cost_usd: number; actions: AppliedAction[]; by: "strategist" | "rule" | "away" | "server" }
 export interface Report { date: string; text: string; live_result_usd: number | null; trades: number; decisions: number }
 interface State {
+  /** Phase 3, step 4: proposals the past-prices test refused (the last 8). */
+  refused?: { ts: string; template: string; chain: Chain; token: string; params: Record<string, unknown>; why: string }[];
   enabled: boolean; since: string | null; settings: SuperbotSettings; strategies: Strategy[]; decisions: Decision[]; reports: Report[];
   paper_rules: string[];
   moves_seen?: Record<string, MoveAlert>;
@@ -223,11 +225,25 @@ export interface SuperBotDeps {
   /** Nov 11, 2026: tests a custom bot on past prices before it starts (tests pass their own; by default the wallet's replay on Coinbase's hourly prices). Null: this coin has no price history to test on. */
   backtest?: (a: PastTestIn) => Promise<PastTest | null>;
 }
-export interface PastTestIn { chain: Chain; token: string; custom: CustomSpec; days: number }
+export interface PastTestIn { chain: Chain; token: string; template: string; params: Record<string, unknown>; custom?: CustomSpec; days: number }
 export interface PastTest { days: number; result_usd: number; baseline_usd: number; worst_drop_usd: number; trades: number }
-async function pastTest(a: PastTestIn): Promise<PastTest | null> {
+/** Phase 3, step 4: templates that only sell what the owner already holds. Their job is protection, so they are tested and shown, never refused for the result. */
+export const SELL_ONLY = (template: string, params: Record<string, unknown>) => ["protect", "trail", "ladder"].includes(template) || (template === "signal" && params.side === "sell");
+/**
+ * Phase 3, step 4 (trading brief, workstream I: "reject proposals without a passing backtest"). A proposal that buys
+ * must, on the last 90 days of prices, have traded, made money after fees, and made more than half of what holding
+ * the same money made: the same bar as the paper trial (trialBar). Returns the reason it fails, or null.
+ */
+export function pastFails(pt: PastTest, template: string, params: Record<string, unknown>): string | null {
+  if (pt.trades === 0) return `on the last ${pt.days} days of prices these settings would never have traded`;
+  if (SELL_ONLY(template, params)) return null;
+  const bar = trialBar(pt.baseline_usd);
+  return pt.result_usd > bar ? null : `on the last ${pt.days} days of prices these settings made ${signed(pt.result_usd)} after fees in ${pt.trades} trades; ${bar > 0 ? `holding made ${signed(pt.baseline_usd)}, so it needed more than half of that (${signed(bar)})` : "it needed to make money"}`;
+}
+/** The app's test: the wallet's replay on Coinbase's hourly prices (ETH, SOL, POL); null for a coin it can't test. */
+export async function pastTest(a: PastTestIn): Promise<PastTest | null> {
   if (!/^(ETH|WETH|SOL|POL)$/i.test(a.token)) return null;
-  const r = await replay({ template: "custom", chain: a.chain, token: a.token, params: {}, custom: a.custom, days: a.days });
+  const r = await replay({ template: a.template, chain: a.chain, token: a.token, params: a.params, custom: a.custom, days: a.days, ...(SELL_ONLY(a.template, a.params) ? { hold_usd: 100 } : {}) });
   return { days: r.days, result_usd: r.result_usd, baseline_usd: r.baseline_usd, worst_drop_usd: r.worst_drop_usd, trades: r.trades.length };
 }
 const signed = (n: number) => `${n < 0 ? "-" : "+"}$${Math.abs(n).toFixed(2)}`;
@@ -946,11 +962,17 @@ export class SuperBot {
     this.d.onRulesChanged?.();
   }
 
-  /** A custom bot's test on the last 90 days of prices: a refusal when it would never have traded, else the line kept with the strategy ("" when the coin has no history to test on). */
-  private async testCustom(chain: Chain, token: string, custom: CustomSpec): Promise<{ refuse?: string; tested: string }> {
-    const pt = await (this.d.backtest ?? pastTest)({ chain, token, custom, days: 90 }).catch(() => null);
-    if (pt && pt.trades === 0) return { refuse: `on the last ${pt.days} days of prices these settings would never have traded`, tested: "" };
+  /** Phase 3, step 4: any strategy's test on the last 90 days of prices: why it fails (see pastFails), and the line kept with it ("" when it couldn't be tested). No test hook: untested. */
+  private async testStrategy(chain: Chain, token: string, template: string, params: Record<string, unknown>, custom?: CustomSpec): Promise<{ refuse?: string; tested: string }> {
+    if (!this.d.backtest) return { tested: "" };
+    const pt = await this.d.backtest({ chain, token, template, params, ...(custom ? { custom } : {}), days: 90 }).catch(() => null);
+    const fails = pt ? pastFails(pt, template, params) : null;
+    if (pt && fails) return { refuse: fails, tested: "" };
     return { tested: pt ? `Tested on the last ${pt.days} days of prices: ${signed(pt.result_usd)} after fees in ${pt.trades} trades, against ${signed(pt.baseline_usd)} for holding; worst drop $${pt.worst_drop_usd.toFixed(2)}.` : "" };
+  }
+  /** Phase 3, step 4: proposals the past-prices test refused, kept for the AI so it doesn't propose them again. */
+  private async noteRefusal(template: string, chain: Chain, token: string, params: Record<string, unknown>, why: string) {
+    await this.update((x) => { x.refused = [...(x.refused ?? []), { ts: nowIso(this.now()), template, chain, token, params, why }].slice(-8); });
   }
   /** Rebuild a strategy's rules at today's price in a stage (same template and params). */
   /**
@@ -1307,6 +1329,7 @@ export class SuperBot {
       allowed: { chains: s.settings.chains, tokens: s.settings.tokens.map((x) => ({ ...x, price_usd: prices[`${x.chain}:${x.token}`] ?? null })) },
       templates: [...TEMPLATES.filter((x) => x.id !== "alert" && x.id !== "twap" && x.id !== "range"), AP_CUSTOM].map((x) => ({ id: x.id, fields: x.fields.map((f) => `${f.key}${f.min !== undefined || f.max !== undefined ? ` (${f.min ?? ""}-${f.max ?? ""})` : ""}${f.choices ? ` [${f.choices.map((c) => c[0]).join("|")}]` : ""}`) })),
       strategies: s.strategies.filter((x) => x.stage !== "retired").map((x) => { const sum = this.summaryOf(x, all); return { id: x.id, template: x.template, chain: x.chain, token: x.token, params: x.params, stage: x.stage, ...(x.canary ? { live_size: "small first test" } : {}), ...(x.tested ? { past_test: x.tested } : {}), days_in_stage: r2((t - Date.parse(x.stage_since)) / 86_400_000), trades: sum?.trades_ok ?? 0, result_pct: sum?.result_pct ?? null, result_usd: sum?.result_usd ?? null, status: sum?.status ?? "waiting", past: x.past ?? [] }; }),
+      refused_recently: (s.refused ?? []).filter((x) => this.now() - Date.parse(x.ts) < 7 * 86_400_000).slice(-5).map((x) => ({ template: x.template, token: x.token, params: x.params, why: x.why })),
       retired_recently: s.strategies.filter((x) => x.stage === "retired").slice(-3).map((x) => ({ template: x.template, token: x.token, why: x.history.at(-1)?.note ?? "" })),
       live_committed_usd: r2(s.strategies.filter((x) => x.stage === "live").reduce((a, x) => a + committedUsd(x.template, x.params), 0)),
       recent_decisions: s.decisions.filter((d) => d.by === "strategist").slice(-3).map((d) => ({ ts: d.ts, view: d.market_view, actions: d.actions.map((a) => `${a.type}${a.strategy_id ? ` ${a.strategy_id}` : ""}${a.applied ? "" : " (not applied)"}`) })),
@@ -1435,10 +1458,11 @@ export class SuperBot {
         if (this.holds(st, all)) return { applied: false, outcome: "not changed: it holds coins waiting on its sell" }; // Nov 10 (audit)
         // Review, Nov 11, 2026: changed settings are tested again; the old result never stays on a changed bot.
         let retest: string | undefined;
-        if (st.template === "custom") {
-          let b2; try { b2 = buildBot("custom", st.token, st.chain, params.params, undefined); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
-          const pt = await this.testCustom(st.chain, st.token, b2.rules[0]!.custom!);
-          if (pt.refuse) return { applied: false, outcome: `not changed: ${pt.refuse}` };
+        {
+          let custom: CustomSpec | undefined;
+          if (st.template === "custom") { try { custom = buildBot("custom", st.token, st.chain, params.params, undefined).rules[0]!.custom!; } catch (e) { return { applied: false, outcome: (e as Error).message }; } }
+          const pt = await this.testStrategy(st.chain, st.token, st.template, params.params, custom);
+          if (pt.refuse) { await this.noteRefusal(st.template, st.chain, st.token, params.params, pt.refuse); return { applied: false, outcome: `not changed: ${pt.refuse}` }; }
           retest = pt.tested;
         }
         const res = await this.restage(st, st.stage, `AI adjusted it: ${a.reason}`, all, params.params, true);
@@ -1489,12 +1513,11 @@ export class SuperBot {
         try { built = buildBot(a.template, tok.token, chain, params.params, price); } catch (e) { return { applied: false, outcome: (e as Error).message }; }
         // Nov 11, 2026: a custom bot is tested on the last 90 days of prices before it starts, even on paper. One that
         // would never have traded is refused; otherwise the result is kept with the strategy for the owner and the AI.
-        let tested = "";
-        if (a.template === "custom") {
-          const pt = await this.testCustom(chain, tok.token, built.rules[0]!.custom!);
-          if (pt.refuse) return { applied: false, outcome: `not started: ${pt.refuse}` };
-          tested = pt.tested;
-        }
+        // Phase 3, step 4: every proposal now, not only custom ones, and it must beat cash and half the coin there. The
+        // owner's own request is tested and shown but never refused for its result (their call).
+        const pt = await this.testStrategy(chain, tok.token, a.template, params.params, a.template === "custom" ? built.rules[0]!.custom! : undefined);
+        if (pt.refuse && !a.owner) { await this.noteRefusal(a.template, chain, tok.token, params.params, pt.refuse); return { applied: false, outcome: `not started: ${pt.refuse}` }; }
+        const tested = pt.tested;
         const id = randomUUID().slice(0, 8), t = nowIso(this.now());
         const made = await this.w.rules().addBot(built.rules.map((r) => ({ ...r, bot_name: `Autopilot · ${built.name}`, reason: String(a.reason).slice(0, 200), paper: true })), "agent", true, "superbot");
         await this.update((x) => {

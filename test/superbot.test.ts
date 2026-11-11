@@ -888,5 +888,44 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   check(cb.size.vol_target_pct === 3 && buildBot("custom", "ETH", "base", { amount_usd: 20, buy: "levels", buy_pct: 1, max_buys: 5, trail_pct: 3, vol_target_pct: 0 }, undefined).rules[0]!.custom!.size.vol_target_pct === undefined, "Autopilot's custom bots shrink each buy themselves (3% by default, 0 turns it off)", cb.size);
 }
 
+// ─── Phase 3, step 4: every proposal is replayed on 90 days of prices first, and must beat cash and half the coin ───
+{
+  const { pastFails } = await import("../src/superbot.js");
+  const pt = (result_usd: number, baseline_usd: number, trades = 12) => ({ days: 90, result_usd, baseline_usd, worst_drop_usd: 5, trades });
+  check(/never have traded/.test(pastFails(pt(0, 3, 0), "dip", {}) ?? "") && /needed to make money/.test(pastFails(pt(-1, -20), "grid", {}) ?? "") && /needed more than half of that \(\+\$10\.00\)/.test(pastFails(pt(8, 20), "grid", {}) ?? "")
+    && pastFails(pt(12, 20), "grid", {}) === null && pastFails(pt(0.5, -30), "dca", {}) === null && pastFails(pt(-40, -30), "trail", {}) === null && pastFails(pt(-5, 2), "signal", { side: "sell" }) === null,
+    "the bar: traded, made money, more than half of holding; sell-only templates are never refused for the result");
+  const dip = { assessment: "a", market_view: "neutral", confidence: 0.5, actions: [{ type: "propose", template: "dip", chain: "base", token: "ETH", params: { amount_usd: 20, drop_pct: 3, profit_pct: 3 }, reason: "Dip.", sources: [] }] };
+  const keep = { assessment: "q", market_view: "neutral", confidence: 0.5, actions: [{ type: "keep", reason: "q", sources: [] }] };
+  let n = 0; const seen: any[] = [];
+  const W = world({ decision: () => (n++ === 0 ? dip : keep) });
+  (W.bot as any).d.backtest = async (x: any) => { seen.push(x); return pt(-4.2, -15); };
+  await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  const v = W.bot.view();
+  check(v.strategies.length === 0 && seen[0]?.template === "dip" && seen[0]?.params?.drop_pct === 3 && seen[0]?.days === 90 && /not started: on the last 90 days of prices these settings made -\$4\.20 after fees in 12 trades; it needed to make money/.test(JSON.stringify(v.decisions[0])), "a dip that lost on the last 90 days is not started, and the reason is logged", v.decisions[0]);
+  W.advance(3 * 3_600_000); W.setSignals(() => ({ id: "s2", at: "x", changes: { moved: true, notes: ["n"] } })); await W.bot.tick();
+  const ctx = W.calls.at(-1)?.body?.context;
+  check(ctx?.refused_recently?.[0]?.template === "dip" && /made -\$4\.20/.test(ctx.refused_recently[0].why) && ctx.refused_recently[0].params.drop_pct === 3, "the AI is shown what was refused and why, so it doesn't propose it again", ctx?.refused_recently);
+  // The owner's own request is tested and shown, never refused for its result.
+  (W.bot as any).d.backtest = async () => pt(-4.2, -15);
+  await W.bot.ownerAsk({ template: "dip", chain: "base", token: "ETH", params: { amount_usd: 20, drop_pct: 4, profit_pct: 4 } });
+  const own = W.bot.view().strategies.find((x: any) => x.stage === "paper") as any;
+  check(!!own && own.owner_set === true, "a dip the owner asked for starts on paper even though the test lost", own?.history);
+  // A pass starts it, with its result shown; no test hook (or a coin with no history): starts untested.
+  let m = 0;
+  const W2 = world({ decision: () => (m++ === 0 ? dip : keep) });
+  (W2.bot as any).d.backtest = async () => pt(9.5, 12);
+  await W2.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  const s2 = W2.bot.view().strategies[0] as any;
+  check(s2?.stage === "paper" && /\+\$9\.50 after fees in 12 trades, against \+\$12\.00 for holding/.test(s2.tested ?? ""), "+$9.50 against +$12.00 for holding beats half of it: started, its result kept", s2?.tested);
+  let k = 0;
+  const W3 = world({ decision: () => (k++ === 0 ? dip : keep) });
+  await W3.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"], budget_usd: 200, per_trade_usd: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  check(W3.bot.view().strategies.length === 1 && !(W3.bot.view().strategies[0] as any).tested, "without a test hook it starts on paper untested");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
