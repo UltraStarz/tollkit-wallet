@@ -123,6 +123,7 @@ const ELIZA_NAMES: Record<string, { name: string; similes: string[] }> = {
   setup_request: { name: "TOLLKIT_SETUP_REQUEST", similes: ["ASK_OWNER", "CHANGE_LIMITS", "REQUEST_WITHDRAWAL", "REQUEST_MOVE", "REQUEST_STAKE"] },
   setup_requests: { name: "TOLLKIT_SETUP_REQUESTS", similes: ["MY_REQUESTS", "REQUEST_STATUS"] },
   setup_cancel: { name: "TOLLKIT_SETUP_CANCEL", similes: ["WITHDRAW_REQUEST", "CANCEL_REQUEST"] },
+  held_tokens: { name: "TOLLKIT_HELD_TOKENS", similes: ["MY_TOKENS", "PORTFOLIO", "WHAT_DO_I_HOLD"] },
 };
 
 function toElizaAction(a: WalletAction): Action {

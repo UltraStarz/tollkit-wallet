@@ -14,6 +14,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { TollkitWallet } from "./wallet.js";
 import { ACTIONS, SWAP_PROPOSE, type ActionCtx } from "./actions.js";
 import { appName, noteAiUse } from "./aiuse.js";
+import { z } from "zod";
 import { describeTool, offeredTools, refreshCatalog, zodShape, TOOL_PREFIX } from "./tollkit-tools.js";
 
 /** The `_meta` key Tollkit's relay uses to say which AI app sent a call that came in by the connector address. */
@@ -25,7 +26,7 @@ export const CLIENT_META = "dev.tollkit/client";
  */
 export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_status", "autopilot_note", "autopilot_propose", "swap_propose", "paper_status", "bot_test",
   "bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "buy_link",
-  "setup_request", "setup_requests", "setup_cancel"];
+  "setup_request", "setup_requests", "setup_cancel", "held_tokens"];
 
 export const VERSION = "0.8.5";
 
@@ -60,8 +61,36 @@ export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): Mc
       return json(await (a.run as any)(w, args ?? {}, ctx));
     });
   }
-  // 0.8.1: Tollkit's own paid tools, by name, for connected apps (src/tollkit-tools.ts). Not for the in-app chat:
-  // the owner talks to it about their money, not the web. The catalog refreshes in the background for next time.
+  // Nov 12 (Joe: "it needs to use any tollkit tool"): the in-app chat gets every Tollkit tool too, through two small
+  // tools instead of one per tool (the phone's AI has a tight token budget for tool definitions): tollkit_tools lists
+  // them with prices, tollkit_call runs one. Each call is an ordinary x402 payment by "Tollkit AI": the owner's
+  // payment limits, its weekly budget, the seller check and the receipt all apply; hidden tools are never offered.
+  if (o.advisor) {
+    void refreshCatalog(w.dir, (w as any).f);
+    s.registerTool("tollkit_tools", {
+      title: "Tollkit tools",
+      description: "List Tollkit's paid tools you can call with tollkit_call: token info, prices and safety checks for any token, wallet portfolios, transaction lookups, web pages and search, company and SEC data, weather, exchange rates and more. Each has a price in USD (usually $0.001 to $0.02), paid from this wallet inside the owner's limits.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    }, async () => json({ tools: offeredTools(w.dir).map((t) => ({ name: t.name, title: t.title, price_usd: t.price_usd, description: t.description.slice(0, 220), input_schema: t.input_schema })) }));
+    s.registerTool("tollkit_call", {
+      title: "Call a Tollkit tool",
+      description: "Run one of Tollkit's paid tools by name (see tollkit_tools) with its input. Pays the tool's price from this wallet, inside the owner's limits; a failed call is never charged. Tell the owner what it cost.",
+      inputSchema: { tool: z.string().describe("The tool's name from tollkit_tools, e.g. token_info"), input: z.record(z.string(), z.unknown()).optional().describe("The tool's input, matching its input_schema") },
+      annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: false },
+    }, async (args: any) => {
+      const name = String(args?.tool ?? "").replace(new RegExp("^" + TOOL_PREFIX), "");
+      const t = offeredTools(w.dir).find((x) => x.name === name);
+      if (!t) return json({ ok: false, refused: { code: "unknown_tool", reason: `No Tollkit tool called "${name}". Call tollkit_tools for the list.` } });
+      noteAiUse(w.dir, "Tollkit AI", TOOL_PREFIX + t.name);
+      const r = await w.pay(t.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args?.input ?? {}) }, { publicOnly: true, by: "Tollkit AI" });
+      let result: unknown;
+      if (r.response) { const text = await r.response.text(); try { result = JSON.parse(text); } catch { result = text.slice(0, 50_000); } }
+      return json({ tool: t.name, paid: r.paid, cost_usd: r.offer?.usd ?? (r.paid ? t.price_usd : 0), status: r.status, receipt_id: r.receipt_id, refused: r.refused, result });
+    });
+  }
+  // 0.8.1: Tollkit's own paid tools, by name, for connected apps (src/tollkit-tools.ts). The in-app chat reaches the same
+  // tools through tollkit_tools and tollkit_call above. The catalog refreshes in the background for next time.
   if (!o.advisor) {
     void refreshCatalog(w.dir, (w as any).f);
     for (const t of offeredTools(w.dir)) {

@@ -24,7 +24,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
 {
   const p = tollkitWalletActionProvider(w);
   const acts = p.getActions({} as any);
-  check(acts.length === 33 && acts.every((a) => a.name.startsWith("tollkit_")), "AgentKit: 33 actions, tollkit_ prefix", acts.map((a) => a.name));
+  check(acts.length === 34 && acts.every((a) => a.name.startsWith("tollkit_")), "AgentKit: 34 actions, tollkit_ prefix", acts.map((a) => a.name));
   check(p.supportsNetwork({ protocolFamily: "evm", networkId: "base-mainnet" } as any), "AgentKit: works on any network");
   const swap = acts.find((a) => a.name === "tollkit_swap")!;
   const r = JSON.parse(await swap.invoke({ chain: "base", sell: "USDC", buy: "WETH", amount: "10" }));
@@ -46,7 +46,7 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
   const replies: string[] = [];
   let modelReply = '```json\n{"chain":"base","sell":"USDC","buy":"WETH","amount":"5","slippage_bps":null}\n```';
   const rt = { getSetting: () => null, useModel: async (_t: string, _p: { prompt: string }) => modelReply };
-  check(tollkitWalletPlugin.actions!.length === 33 && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_SWAP") && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_AUTOPILOT_SET"), "Eliza: 33 actions incl. TOLLKIT_SWAP and TOLLKIT_AUTOPILOT_SET");
+  check(tollkitWalletPlugin.actions!.length === 34 && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_SWAP") && tollkitWalletPlugin.actions!.some((a) => a.name === "TOLLKIT_AUTOPILOT_SET"), "Eliza: 34 actions incl. TOLLKIT_SWAP and TOLLKIT_AUTOPILOT_SET");
   const swap = tollkitWalletPlugin.actions!.find((a) => a.name === "TOLLKIT_SWAP")!;
   check(!(await swap.validate(rt as any, {})), "Eliza: not offered when no wallet is configured");
   useWallet(rt as any, w);
@@ -67,10 +67,10 @@ const w = await TollkitWallet.open(PW, { dir, fetch: quotes, proxy: "https://p.e
   const s: any = buildServer(w);
   const names = Object.keys(s._registeredTools ?? {});
   const own = names.filter((n) => !n.startsWith("tollkit_")), paid = names.filter((n) => n.startsWith("tollkit_"));
-  check(own.length === 33 && own.includes("swap") && own.includes("bot_start") && own.includes("setup_request") && own.includes("autopilot_propose") && own.includes("price_history") && paid.length >= 25, "MCP: the same 33 tools, plus Tollkit's paid tools by name (0.8.1)", [own.length, paid.length]);
+  check(own.length === 34 && own.includes("swap") && own.includes("bot_start") && own.includes("setup_request") && own.includes("autopilot_propose") && own.includes("price_history") && paid.length >= 25, "MCP: the same 34 tools, plus Tollkit's paid tools by name (0.8.1)", [own.length, paid.length]);
   const adv: any = buildServer(w, { advisor: true });
   const an = Object.keys(adv._registeredTools ?? {});
-  check(an.length === ADVISOR_TOOLS.length && !an.some((n) => /^(swap|pay_fetch|autopilot_cancel|paper_swap|seller_check)$/.test(n)), "MCP advisor mode: read, prices and suggest only, no trading", an);
+  check(an.length === ADVISOR_TOOLS.length + 2 && an.includes("tollkit_tools") && an.includes("tollkit_call") && !an.some((n) => /^(swap|pay_fetch|autopilot_cancel|paper_swap|seller_check)$/.test(n)), "MCP advisor mode: read, prices and suggest only, no trading", an);
   // advisor suggestions wait for the owner even when agents may turn rules on
   w.policy.agent_rules = "auto";
   const res = JSON.parse((await adv._registeredTools.autopilot_propose.handler({ rules: [{ kind: "limit_buy", chain: "base", token: "ETH", amount_usd: 10, trigger_price: 1000, reason: "test" }] })).content[0].text);

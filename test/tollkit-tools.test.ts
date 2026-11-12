@@ -80,7 +80,9 @@ const claude = await connect("claude-ai");
 const names = (await claude.listTools()).tools.map((t) => t.name);
 check(names.includes("tollkit_read_page") && names.includes("tollkit_web_search") && names.includes("tollkit_sec_financials") && names.filter((n) => n.startsWith("tollkit_")).length >= 25, "a connected app sees Tollkit's tools by name", names.filter((n) => n.startsWith("tollkit_")).length);
 const adv = await connect("x", true);
-check(!(await adv.listTools()).tools.some((t) => t.name.startsWith("tollkit_")), "Tollkit AI (in-app chat) doesn't get the paid tools");
+// Nov 12 (Joe: "it needs to use any tollkit tool"): the in-app chat reaches every tool through two small tools.
+const advNames = (await adv.listTools()).tools.map((t) => t.name);
+check(advNames.includes("tollkit_tools") && advNames.includes("tollkit_call") && advNames.includes("held_tokens") && !advNames.includes("tollkit_read_page"), "Tollkit AI gets tollkit_tools, tollkit_call and held_tokens (not one tool per catalog entry)", advNames.filter((n) => /tollkit|held/.test(n)));
 const call = async (name: string, args: Record<string, unknown>) => JSON.parse(((await claude.callTool({ name, arguments: args })).content as any)[0].text);
 const miss = await claude.callTool({ name: "tollkit_read_page", arguments: {} }).catch((e) => ({ isError: true, content: [{ text: String(e.message) }] }));
 check(miss.isError === true, "a missing required field is refused before any call");
@@ -92,6 +94,21 @@ setBudget(dir, "Claude", 0.003);
 const r2 = await call("tollkit_read_page", { url: "https://example.com/b" });
 check(r2.paid === false && r2.refused?.code === "over_app_budget" && paidCalls === 1, "Claude's weekly budget stops the next call before it's paid", r2);
 setBudget(dir, "Claude", null);
+// The in-app chat: list, then call by name. Same payment path, by "Tollkit AI".
+const acall = async (name: string, args: Record<string, unknown>) => JSON.parse(((await adv.callTool({ name, arguments: args })).content as any)[0].text);
+const list = await acall("tollkit_tools", {});
+check(list.tools.some((t: any) => t.name === "read_page" && t.price_usd === 0.003 && t.input_schema), "tollkit_tools lists each tool with its price and input", list.tools.map((t: any) => t.name));
+const r3 = await acall("tollkit_call", { tool: "read_page", input: { url: "https://example.com/c" } });
+check(r3.paid === true && r3.cost_usd === 0.002 && r3.result?.title === "Hello" && paidCalls === 2 && lastBody?.url === "https://example.com/c", "tollkit_call pays from the wallet and returns the answer", r3);
+check(entries(dir).find((e) => e.id === r3.receipt_id)?.by === "Tollkit AI", "the receipt says by Tollkit AI");
+const r4 = await acall("tollkit_call", { tool: "tollkit_read_page", input: { url: "https://example.com/d" } });
+check(r4.paid === true && paidCalls === 3, "a name with the tollkit_ prefix works too");
+const r5 = await acall("tollkit_call", { tool: "nope", input: {} });
+check(r5.ok === false && r5.refused?.code === "unknown_tool" && paidCalls === 3, "an unknown tool is refused and never paid", r5);
+setBudget(dir, "Tollkit AI", 0.001);
+const r6 = await acall("tollkit_call", { tool: "read_page", input: { url: "https://example.com/e" } });
+check(r6.paid === false && r6.refused?.code === "over_app_budget" && paidCalls === 3, "Tollkit AI's weekly budget applies", r6);
+setBudget(dir, "Tollkit AI", null);
 
 console.log(`\ntollkit-tools: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

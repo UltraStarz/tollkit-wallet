@@ -18,7 +18,7 @@ import { parseStrategy } from "./parse.js";
 import { PriceFeed } from "./prices.js";
 import { proposeSwap } from "./ideas.js";
 import { TEMPLATES, buildBot, summarize } from "./bots.js";
-import { TokenList } from "./holdings.js";
+import { Holdings, TokenList } from "./holdings.js";
 import { KNOWN } from "./tokens.js";
 import { checkToken, isCoreToken, loadExtraLists, searchEvm, searchSolana } from "./tokenlist.js";
 import { serverRunnable } from "./alwayson.js";
@@ -119,6 +119,32 @@ const bad = (e: unknown) => ({ ok: false, refused: { code: "bad_request", reason
 
 const def = <S extends z.ZodTypeAny>(a: WalletAction<S>) => a;
 
+let HELD: { at: number; key: string; v: unknown } | null = null;
+/** held_tokens: balances (native coins and stables, priced) plus every other token Holdings finds, newest within a minute. */
+async function heldTokens(w: TollkitWallet) {
+  const key = w.addresses.evm + w.addresses.solana + w.policy.chains.join(",");
+  if (HELD && HELD.key === key && Date.now() - HELD.at < 60_000) return HELD.v;
+  const feed = new PriceFeed();
+  const [bal, , other] = await Promise.all([
+    w.balances().catch(() => ({}) as Record<string, unknown>),
+    feed.refresh().catch(() => undefined),
+    (async () => { const h = new Holdings({ evm: w.addresses.evm, solana: w.addresses.solana, chains: () => w.policy.chains as Chain[], dir: w.dir }); await h.refresh().catch(() => {}); return h.snapshot(); })(),
+  ]);
+  const px = feed.snapshot() as any, priceOf = (sym: string) => { const k = sym === "WETH" ? "ETH" : sym === "WSOL" ? "SOL" : sym; if (/^(USDC|USDT|USDC\.e)$/i.test(k)) return { usd: 1, change_24h: 0 }; const p = px?.prices?.[k] ?? px?.[k]; return p && typeof p.usd === "number" ? p : null; };
+  const out: any[] = [];
+  for (const [chain, list] of Object.entries(bal as Record<string, any>)) {
+    if (!Array.isArray(list)) continue;
+    for (const t of list) { const a = Number(t.amount); if (!(a > 0)) continue; const p = priceOf(String(t.token));
+      out.push({ chain, symbol: t.token, amount: a, price_usd: p?.usd ?? null, change_24h_pct: p && typeof p.change_24h === "number" ? Math.round(p.change_24h * 10000) / 100 : null, value_usd: p ? Math.round(a * p.usd * 100) / 100 : null, listed: true }); }
+  }
+  for (const t of other.tokens) { const a = Number(t.amount);
+    out.push({ chain: t.chain, symbol: t.symbol, name: t.name, address: t.address, amount: a, price_usd: t.price ?? null, change_24h_pct: typeof t.change_24h === "number" ? Math.round(t.change_24h * 10000) / 100 : null, value_usd: typeof t.usd === "number" ? Math.round(t.usd * 100) / 100 : null, listed: (t as any).trust !== "unlisted" }); }
+  out.sort((x, y) => (y.value_usd ?? -1) - (x.value_usd ?? -1));
+  const v = { tokens: out, total_usd: Math.round(out.reduce((s2, t) => s2 + (t.value_usd ?? 0), 0) * 100) / 100, unpriced: out.filter((t) => t.price_usd === null).map((t) => t.symbol || t.address), at: new Date().toISOString() };
+  HELD = { at: Date.now(), key, v };
+  return v;
+}
+
 export const ACTIONS = [
   def({ name: "wallet_status", spends: false, schema: NoArgs,
     description: "Wallet addresses, the owner's spending limits, what has been spent today, whether approvals are on, and suggested_size_usd: per network, the dollar size to use for a trade, rule or bot when the owner names no amount.",
@@ -147,6 +173,11 @@ export const ACTIONS = [
   def({ name: "receipts", spends: false, schema: ReceiptArgs,
     description: "Recent trades, payments and withdrawals with amounts, fees and transaction hashes.",
     run: async (w, a) => w.receipts(a.since).slice(-(a.limit ?? 50)) }),
+  // Nov 12 (Joe: "tollkit's ai needs to be able to access token data of anything inside the wallet"): every coin the
+  // wallet holds, on every network, with its price, 24-hour change and dollar value. Free: the same reads Home makes.
+  def({ name: "held_tokens", spends: false, schema: NoArgs,
+    description: "Every coin this wallet holds on every network (native coins, USDC/USDT and any other token, e.g. memes): symbol, name, network, contract address or mint, amount, USD price, 24-hour change and dollar value, and whether it's on the wallet's token list. Free.",
+    run: async (w) => heldTokens(w) }),
   def({ name: "market_prices", spends: false, schema: NoArgs,
     description: "Live USD prices and 24-hour change for ETH, SOL and USDT (Coinbase Exchange; USDC is $1).",
     run: async () => { const f = new PriceFeed(); await f.refresh(); return f.snapshot(); } }),
