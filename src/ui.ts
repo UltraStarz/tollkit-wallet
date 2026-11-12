@@ -826,7 +826,7 @@ body{background:var(--bg)}.card{background:var(--canvas)!important}
 .wtile i svg{width:26px;height:26px}
 /* balance hero and the bare chart under it */
 .hero2{position:relative;padding:8px 0 4px;min-height:150px}
-.hero2 .fh{position:absolute;right:-34px;top:-6px;width:190px;pointer-events:none;-webkit-mask-image:linear-gradient(180deg,#000 55%,transparent 92%);mask-image:linear-gradient(180deg,#000 55%,transparent 92%);filter:drop-shadow(0 16px 26px rgba(20,60,200,.40))}
+.hero2 .fh{position:absolute;right:-16px;top:-6px;width:190px;pointer-events:none;-webkit-mask-image:linear-gradient(180deg,#000 55%,transparent 92%);mask-image:linear-gradient(180deg,#000 55%,transparent 92%);filter:drop-shadow(0 16px 26px rgba(20,60,200,.40))}
 .hov{position:relative;display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--mut)}
 .hov::before{content:"";width:3px;height:14px;border-radius:2px;background:var(--acc);transform:skewX(-20deg)}
 .hbig{position:relative;font-size:40px;font-weight:800;letter-spacing:-.04em;line-height:1.08;margin-top:8px;font-variant-numeric:tabular-nums}
@@ -871,6 +871,7 @@ nav#nav .ind{background:linear-gradient(90deg,var(--acc),var(--frog))!important;
 .apsw{display:flex;height:46px;margin:14px 0 4px;padding:4px;border-radius:24px;background:var(--segBg);border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
 .apsw button{flex:1;border:0;background:none;border-radius:20px;font:inherit;font-size:15px;font-weight:700;color:var(--mut);cursor:pointer}
 .apsw button.on{background:linear-gradient(180deg,#2F80FF 0%,#1D58DB 100%);color:#fff;box-shadow:0 6px 14px rgba(29,88,219,.22)}
+/* Nov 12 (Joe: "left and right play on the app"): nothing may scroll the page sideways */#main{overflow-x:hidden!important;overscroll-behavior-x:none}html,body{overflow-x:hidden;overscroll-behavior-x:none}.hero2{overflow:hidden;margin-right:-16px;padding-right:16px}
 .psteps+.pp .pp-head{display:none}
 .botc.nu,.botc.nd,.botc.nf,.ap-c.nu,.ap-c.nd,.ap-c.nf{border-top-right-radius:0;-webkit-mask-image:linear-gradient(225deg,transparent 12.3px,#000 12.9px);mask-image:linear-gradient(225deg,transparent 12.3px,#000 12.9px)}
 .psteps{margin-top:12px;padding:14px 12px 12px;border-radius:18px;background:var(--cardBg);border:1px solid var(--line);box-shadow:var(--cardSh)}
