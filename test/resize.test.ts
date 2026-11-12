@@ -41,4 +41,18 @@ check(JSON.parse(readFileSync(f, "utf8")).sized === 3, "done once");
 // The AI tab's suggested size.
 const sz = await suggestedSizes(w);
 check(sz.solana === 76.41, "AI tab: suggested size on Solana = $76.41 ($152.82 over 2 live slots)", sz);
+// Nov 12 (Joe's wallet): Autopilot rules that no strategy lists (made by a device acting on its old copy) are stopped;
+// one made in the last 10 minutes is left alone (a rebuild may be writing its strategy), and current bots are untouched.
+const tmpl = store.list().find((r) => r.by === "superbot" && r.status === "active")!;
+const { id: _i, status: _s, state: _st, created_at: _c, created_by: _cb, activated_at: _a, ...input } = tmpl as any;
+const [stray] = await store.addBot([{ ...input, bot: "stray-old" }], "agent", true, "superbot");
+const [fresh] = await store.addBot([{ ...input, bot: "stray-new" }], "agent", true, "superbot");
+await store.mutate((rs) => { const x = rs.find((y) => y.id === stray.id)!; x.created_at = new Date(Date.now() - 3600_000).toISOString(); });
+const mine = () => store.list().filter((r) => r.by === "superbot" && ["active", "paused"].includes(r.status) && bot.view().strategies.some((s: any) => s.bot === r.bot)).length;
+const before = mine();
+await bot.cycle(true);
+const after = store.list();
+check(after.find((r) => r.id === stray.id)!.status === "cancelled", "an hour-old Autopilot rule no strategy lists is stopped", after.find((r) => r.id === stray.id)!.status);
+check(after.find((r) => r.id === fresh.id)!.status === "active", "one made in the last 10 minutes is left alone");
+check(before > 0 && mine() === before, "the strategies' own rules keep running", { before, now: mine() });
 console.log(`\nresize: ${pass} passed, ${fail} failed`); if (fail) process.exit(1);

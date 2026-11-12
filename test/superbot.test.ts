@@ -593,6 +593,8 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const fs = await import("node:fs");
   const old = buildBot("dip", "ETH", "base", { amount_usd: 15, drop_pct: 5, profit_pct: 4 }, 2500);
   await W.store.addBot(old.rules.map((r) => ({ ...r, bot_name: "Autopilot · Buy the dip · ETH" })), "agent", true, "superbot");
+  // Made "now" on the test's clock: Nov 12, an Autopilot bot no strategy lists is stopped once it's 10 minutes old.
+  await W.store.mutate((rs) => { for (const r of rs) if (r.bot === old.bot) r.created_at = "2026-10-20T08:00:00.000Z"; });
   await W.bot.enable({ tokens: [{ chain: "base", token: "ETH" }], chains: ["base"] });
   await new Promise((r) => setTimeout(r, 30));
   const d = W.bot.view().decisions.find((x: any) => x.actions?.some((a: any) => a.type === "propose"));

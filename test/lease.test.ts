@@ -48,6 +48,17 @@ down = true; clock += RUNNER_LEASE_MS + 1000;
 check(!A.mayTrade(), "a runner that can't confirm for 3 minutes stops trading (another device may have taken over)");
 down = false;
 
+// Nov 12 (Joe's wallet): a device that was asleep wakes still sure it runs the bots, and alone on its old list (the
+// others' last-seen times are hours old). It must not act on its old copy (trade, Autopilot, the AI) until it syncs.
+await A.sync(); await B.sync();
+check(A.runsHere() && A.synced() && A.mayTrade(), "the runner that just synced acts");
+clock += 12 * 3600_000; // a night asleep, no sync
+check(A.runsHere() && !A.synced() && !A.mayTrade(), "woken after a night, it still thinks it runs the bots but waits to catch up (Autopilot checks synced too)", { runs: A.runsHere(), synced: A.synced() });
+await A.sync();
+check(A.synced(), "after its sync it may act again");
+const off = dev("Mac");
+check(off.synced() && off.mayTrade(), "sync off: nothing changes");
+
 // ─── the conflict gate ──────────────────────────────────────────────────────
 const r = (x: any) => ({ id: "r", status: "active", created_by: "owner", created_at: "", state: { runs: 0, failures: 0, fills: [] }, chain: "solana", token: "SOL", ...x });
 check(strategyFlow("dca", { amount_usd: 5, every: "hour" }) === 120 && strategyFlow("grid", { amount_usd: 20 }) === 0 && strategyFlow("dip", { amount_usd: 25 }) === 25, "Δₐ: $5 an hour is $120 a day; a grid trades both ways (0)");

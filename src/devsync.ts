@@ -125,6 +125,7 @@ export class DeviceSync {
   mayTrade(): boolean {
     const l = this.load(), me = l.device.id, now = this.now();
     if (!l.on) return true;
+    if (!this.synced()) return false;
     if (l.runner && l.runner !== me) return false;
     if (!l.devices.some((d) => d.id !== me && now - Date.parse(d.seen) < 6 * 3600_000)) return true;
     if (l.claimed_at && now - Date.parse(l.claimed_at) < RUNNER_LEASE_MS) return false;
@@ -132,6 +133,13 @@ export class DeviceSync {
   }
   /** Bots, Autopilot and Run 24/7 act here unless sync is on and another device runs them. */
   runsHere(): boolean { const l = this.load(); return !l.on || !l.runner || l.runner === l.device.id; }
+  /**
+   * Nov 12 (Joe's wallet: 7 bots left trading outside Autopilot): with sync on, a device acts (trades, Autopilot,
+   * the AI) only after a sync in the last few minutes. A phone or Chrome waking from sleep still thought it ran the
+   * bots, rebuilt strategies from its day-old copy before catching up, and the sync then kept those new rules but
+   * the runner's Autopilot file, so nothing tracked them.
+   */
+  synced(): boolean { const l = this.load(); return !l.on || (!!l.last_sync && this.now() - Date.parse(l.last_sync) <= RUNNER_LEASE_MS); }
 
   async turnOn(): Promise<SyncView> {
     const l = this.load();

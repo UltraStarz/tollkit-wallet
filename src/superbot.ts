@@ -1310,13 +1310,12 @@ export class SuperBot {
    */
   private async stopLeftovers(all: Rule[]) {
     const s = this.load(), cur = new Set(s.strategies.filter((x) => x.stage !== "retired" && !x.removed && x.bot).map((x) => x.bot!));
-    for (const st of s.strategies) for (const b of st.prev_bots ?? []) cur.add(b); // same-stage copies already stopped; never touch the current set
-    const gone = new Set<string>();
-    for (const st of s.strategies) {
-      for (const b of st.old_bots ?? []) if (!cur.has(b)) gone.add(b);
-      if ((st.stage === "retired" || st.removed) && st.bot && !cur.has(st.bot)) gone.add(st.bot);
-    }
-    const left = all.filter((r) => r.by === "superbot" && r.bot && gone.has(r.bot) && ["active", "paused", "proposed"].includes(r.status));
+    // Nov 12 (Joe's wallet): any open Autopilot rule whose bot isn't a strategy's current one is a leftover, not only
+    // the copies it remembers replacing. A device acting on an old copy made rules no strategy lists (and kept earlier
+    // same-stage copies open), and they traded real money outside the budget. A rule under 10 minutes old is spared,
+    // so a rebuild in progress (rules made, strategy not yet written) is never touched.
+    const young = (r: Rule) => Math.abs(this.now() - Date.parse(r.created_at)) < 10 * 60_000; // either way: a device's clock may be off
+    const left = all.filter((r) => r.by === "superbot" && r.bot && !cur.has(r.bot) && !young(r) && ["active", "paused", "proposed"].includes(r.status));
     if (!left.length) return;
     await this.w.rules().mutate((rs) => { for (const r of rs) if (left.some((x) => x.id === r.id)) { r.status = "cancelled"; r.state.note = "Stopped: Autopilot replaced this bot with a newer copy."; } });
     for (const r of left) if (this.ao(r).isOn(r.id)) this.ao(r).set(r.id, false);
