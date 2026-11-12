@@ -871,6 +871,7 @@ nav#nav .ind{background:linear-gradient(90deg,var(--acc),var(--frog))!important;
 .apsw{display:flex;height:46px;margin:14px 0 4px;padding:4px;border-radius:24px;background:var(--segBg);border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
 .apsw button{flex:1;border:0;background:none;border-radius:20px;font:inherit;font-size:15px;font-weight:700;color:var(--mut);cursor:pointer}
 .apsw button.on{background:linear-gradient(180deg,#2F80FF 0%,#1D58DB 100%);color:#fff;box-shadow:0 6px 14px rgba(29,88,219,.22)}
+.hero2 .fh.fhf{opacity:.3;filter:none}
 .atlist{overflow-x:hidden!important;overscroll-behavior:contain}
 .rcstat-l{display:inline-flex;align-items:center;gap:6px}
 /* Nov 12 (Joe: "up and down play on running paused finished"): tab rows scroll sideways only */.btabs,.htabs{overflow-y:hidden!important;overscroll-behavior:contain;touch-action:pan-x pan-y}.btabs button,.htabs button{flex:none}
@@ -2188,7 +2189,10 @@ function themeApply(t){var root=document.documentElement;if(t==="system")root.re
  /* Nov 12: Darker is Dark with deeper blacks (its own data-theme), so every dark rule still applies */var tm=t==="darker"?"dark":t;THM.forEach(function(x){x[0].media.mediaText=t==="system"?x[1]:x[1].replace(/\(\s*prefers-color-scheme\s*:\s*(light|dark)\s*\)/g,function(m,k){return k===tm?"(min-width: 0px)":"(max-width: 0px)"})});
  document.documentElement.style.colorScheme=t==="system"?"":tm}
 function setTheme(t){THEME=t;try{localStorage.setItem("tk_theme",t)}catch(e){}themeApply(t);render()}
-function themeRow(){var o=[["system","Same as this device"],["light","Light"],["dark","Dark"],["darker","Darker"]];return '<div class="mut sm">How TOLLkit looks on this device.</div><div class="sbseg thseg" role="radiogroup" aria-label="Appearance">'+o.map(function(x){return '<button role="radio" aria-checked="'+(THEME===x[0])+'" class="'+(THEME===x[0]?"on":"")+'" onclick="setTheme(\''+x[0]+'\')">'+x[1]+'</button>'}).join("")+'</div>'}
+function themeRow(){var o=[["system","Same as this device"],["light","Light"],["dark","Dark"],["darker","Darker"]],fo=[["on","On"],["faded","Faded"],["off","Off"]];return '<div class="mut sm">How TOLLkit looks on this device.</div><div class="sbseg thseg" role="radiogroup" aria-label="Appearance">'+o.map(function(x){return '<button role="radio" aria-checked="'+(THEME===x[0])+'" class="'+(THEME===x[0]?"on":"")+'" onclick="setTheme(\''+x[0]+'\')">'+x[1]+'</button>'}).join("")+'</div>'+
+ /* Nov 12 (Joe): the big frog on Home: on, faded or off */'<div class="mut sm" style="margin-top:16px">The big frog on Home.</div><div class="sbseg thseg" role="radiogroup" aria-label="Home frog">'+fo.map(function(x){return '<button role="radio" aria-checked="'+(FROG===x[0])+'" class="'+(FROG===x[0]?"on":"")+'" onclick="setFrog(\''+x[0]+'\')">'+x[1]+'</button>'}).join("")+'</div>'}
+var FROG=(function(){try{var f=localStorage.getItem("tk_frog");return f==="faded"||f==="off"?f:"on"}catch(e){return "on"}})();
+function setFrog(f){FROG=f;try{localStorage.setItem("tk_frog",f)}catch(e){}render()}
 try{if(THEME!=="system")themeApply(THEME)}catch(e){}
 function sIco(k){return '<div class="ic"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+SICO[k]+'</svg></div>'}
 // Python bots (Settings, For developers) get the wallet's bot link (the same one AI apps use).
@@ -2422,7 +2426,7 @@ function heroLine(P,up){var W=360,H=120,pad=10,v=P.map(function(p){return p[1]})
  return '<svg class="hline" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="hlg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".26"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><g style="color:'+c+'"><path d="'+d+' L'+W+' '+H+' L0 '+H+'Z" fill="url(#hlg)"/><path class="hl" d="'+d+'" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></g></svg><span class="hdot" style="left:calc('+(e[0]/W*100).toFixed(2)+'% - 7px);top:'+(e[1]-7).toFixed(1)+'px;color:'+c+'"></span>'}
 // Nov 12 (the redesign): the balance hero. The frog peeks in at the right; the pill is what real bots and Autopilot have earned.
 function heroBal(tv,chg,chart){var earn=0,has=false;(S.bots||[]).forEach(function(b){if(!b.paper&&typeof b.earned_usd==="number"){earn+=b.earned_usd;has=true}});
- return '<div class="hero2"><img class="fh" src="'+FROGHEAD+'" alt=""><div class="hov">Wallet balance</div><div class="hbig">'+tv+'</div><div class="hchg '+(chg>=0?"ok":"bad")+'">'+(chg>=0?"▲ ":"▼ ")+tkS(chg)+' <span>today</span></div>'+(has&&Math.abs(earn)>=0.01?'<div class="hearn">Bots &amp; Autopilot earned<i></i><b class="'+(earn>=0?"ok":"bad")+'">'+tkS(earn)+'</b></div>':'')+'</div>'+chart}
+ return '<div class="hero2">'+(FROG==="off"?'':'<img class="fh'+(FROG==="faded"?" fhf":"")+'" src="'+FROGHEAD+'" alt="">')+'<div class="hov">Wallet balance</div><div class="hbig">'+tv+'</div><div class="hchg '+(chg>=0?"ok":"bad")+'">'+(chg>=0?"▲ ":"▼ ")+tkS(chg)+' <span>today</span></div>'+(has&&Math.abs(earn)>=0.01?'<div class="hearn">Bots &amp; Autopilot earned<i></i><b class="'+(earn>=0?"ok":"bad")+'">'+tkS(earn)+'</b></div>':'')+'</div>'+chart}
 // Position (Home, one per coin a bot holds): where the price sits between the stop, what it paid, and the sell.
 function tkPositions(){var by={},out="";(S.bots||[]).forEach(function(b){if(b.paper||!(b.units_held>0)||!(b.avg_cost>0)||(NETF&&b.chain!==NETF))return;var k=b.chain+":"+String(b.token).toLowerCase(),g=by[k]=by[k]||{chain:b.chain,token:b.token,u:0,c:0,short:false};g.u+=b.units_held;g.c+=b.units_held*b.avg_cost;if(b.held_short)g.short=true});
  /* Nov 8 (money audit): from each bot's full totals (spent over bought), not its last 50 fills; capped to what the wallet holds */
@@ -2659,7 +2663,7 @@ ai:["AI","ai",on?on+" app"+(on===1?"":"s")+" connected":"No AI apps connected",f
 sites:["Websites & extension","ext","Connected sites and the browser extension",function(){return window.TK_EXT&&TK_EXT.sitesHtml?TK_EXT.sitesHtml(ex):exr}],
 approvals:["Approvals on Telegram","tg",tgOn?"Linked":"Not set up",function(){return tg}],
 recovery:["Recovery","bk",bk?"Backed up":"Not backed up",function(){return bkr}],
-appearance:["Appearance","sun",THEME==="light"?"Light":THEME==="dark"?"Dark":THEME==="darker"?"Darker":"Same as this device",function(){return themeRow()}],
+appearance:["Appearance","sun",(THEME==="light"?"Light":THEME==="dark"?"Dark":THEME==="darker"?"Darker":"Same as this device")+" · frog "+FROG,function(){return themeRow()}],
 lock:["Lock & security","bk","Auto-lock, lock now, remove this wallet",function(){return window.TK_EXT&&TK_EXT.browserHtml?TK_EXT.browserHtml():""}],
 dev:["For developers","tools","Python bots",function(){return pyRow()+'<div class="sm mut" style="margin-top:8px">Charts: TradingView Lightweight Charts™, Copyright (c) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">tradingview.com</a> · Apache License 2.0</div>'}]};
 // Inside the phone app there's no browser to pair; the Chrome extension shows its own list of connected sites.
