@@ -1913,18 +1913,18 @@ export class SuperBot {
     if (s.stats.last_report === today) return;
     if (!s.stats.last_report) { await this.update((x) => { x.stats.last_report = today; }); return; }
     const yday = day(t - 86_400_000);
-    const live = s.strategies.filter((x) => x.stage === "live"), paper = s.strategies.filter((x) => x.stage === "paper");
+    const live = s.strategies.filter((x) => x.stage === "live");
     const liveResult = r2((s.live_banked?.result ?? 0) + live.reduce((a, x) => a + (this.summaryOf(x, all)?.result_usd ?? 0), 0));
     // Nov 8 (money audit): the day's change is against yesterday's report (the day mark has already moved by now).
     const prevRep = s.reports.at(-1), dayChange = r2(liveResult - (prevRep?.live_result_usd ?? s.marks?.day_start ?? liveResult));
     const fills = all.filter((r) => r.by === "superbot").flatMap((r) => r.state.fills.filter((f) => f.ts.startsWith(yday)));
-    const trades = fills.filter((f) => f.ok && !f.paper).length, paperTrades = fills.filter((f) => f.ok && f.paper).length;
+    const trades = fills.filter((f) => f.ok && !f.paper).length;
     const decisions = s.decisions.filter((d) => d.ts.startsWith(yday));
     const changes = decisions.flatMap((d) => d.actions.filter((a) => a.applied && a.type !== "keep").map((a) => `${a.type}${a.strategy_id ? ` ${s.strategies.find((x) => x.id === a.strategy_id)?.name ?? a.strategy_id}` : a.token ? ` ${a.template} on ${a.token}` : ""}: ${a.reason}`));
     const lines = [
       `Autopilot, ${yday}`,
       `Live: ${live.length} strateg${live.length === 1 ? "y" : "ies"}, ${trades} trade${trades === 1 ? "" : "s"}, result so far $${liveResult} (day change $${dayChange}).`,
-      `Paper: ${paper.length} strateg${paper.length === 1 ? "y" : "ies"}, ${paperTrades} pretend trade${paperTrades === 1 ? "" : "s"}.`,
+      // Nov 12 (Joe): practice results stay on each strategy's own card, not in the report.
       `AI: ${decisions.filter((d) => d.by === "strategist").length} decision${decisions.filter((d) => d.by === "strategist").length === 1 ? "" : "s"} ($${Math.round(decisions.reduce((a, d) => a + d.cost_usd, 0) * 1000) / 1000}).`,
       ...(changes.length ? ["Changes:", ...changes.slice(0, 8).map((c) => `- ${c}`)] : ["No changes."]),
       ...(s.halted ? [`Stopped: ${s.halted.reason}`] : []),
