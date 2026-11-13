@@ -38,7 +38,12 @@ writeFileSync(path.join(dir, "superbot.json"), JSON.stringify({
     budget_usd: 2500, per_trade_usd: 100, max_token_pct: 25, daily_loss_pct: 5, weekly_loss_pct: 15, slippage_bps: 100, paper_days: 7, paper_trades: 20,
     rethink_minutes: 30, max_strategies: 4, always_on: true, daily_share_pct: 50, pace: "steady", think_24_7: true, active_mode: false },
   strategies: [strat("s1", "Steady buyer · ETH", "dca", "base", "ETH", apLive, "live", 24 * 9), strat("s2", "Grid trader · SOL", "grid", "solana", "SOL", apPaper, "paper", 24 * 4)],
-  decisions: [], reports: [], paper_rules: w.rules().list().filter((r) => r.bot === apPaper).map((r) => r.id), halted: null, marks: null, sized: 1,
+  // Nov 13: a few of Autopilot's decisions, so the Pipeline's activity list has lines (example wording).
+  decisions: [
+    { ts: ago(0.2), by: "strategist", market_view: "neutral", confidence: 0.7, assessment: "SOL is steady and ETH is up 2.9%. Nothing changed enough to act.", actions: [{ type: "keep", reason: "No change", applied: true, outcome: "kept" }] },
+    { ts: ago(1.6), by: "strategist", market_view: "risk_on", confidence: 0.7, assessment: "SOL is moving sideways in a tight band.", actions: [{ type: "propose", template: "grid", chain: "solana", token: "SOL", reason: "SOL is moving sideways in a tight band, which is when a grid earns. It starts with pretend money first.", applied: true, outcome: "started on paper" }] },
+    { ts: ago(5), by: "strategist", market_view: "risk_on", confidence: 0.7, assessment: "The ETH buyer beat holding cash in practice.", actions: [{ type: "promote", strategy_id: "s1", reason: "It beat holding cash over 7 days and 20 trades, so it now trades real money at a quarter of its size.", applied: true, outcome: "live" }] },
+  ], reports: [], paper_rules: w.rules().list().filter((r) => r.bot === apPaper).map((r) => r.id), halted: null, marks: null, sized: 1,
   stats: { cycles: 412, steps: 36, step_usd: 0, last_cycle: ago(0.2), last_step: ago(1), last_snapshot: ago(0.2), last_error: null, last_report: ago(20) },
 }));
 const dash = await startDashboard(w, PW, { port: 17499, watch: false, autopilot: false, ai: false, connectApps: false });
@@ -70,6 +75,8 @@ await page.route("**/api/state", async (r) => {
   st.rules = st.rules.map((r: any) => (apIds.has(r.bot) ? { ...r, by: "superbot" } : r));
   st.always = { ...(st.always ?? {}), config: { ...(st.always?.config ?? {}), enabled: true }, running: liveIds, rules: liveIds };
   st.superbot.totals.committed_usd = 1400;
+  // Nov 13: a balance history, so Home's chart draws a line.
+  { const now = Date.now(); const tot = DEMO.prices.ETH.usd * 3.85 + 3180 + DEMO.prices.SOL.usd * 96.4 + 4200; let v = 1; const raw = Array.from({ length: 60 }, (_, i) => { v *= 1 + 0.0012 + Math.sin(i * 1.7) * 0.004; return [now - (60 - i) * 12 * 3600_000, v] as [number, number]; }); const k = tot * 0.985 / raw[raw.length - 1][1]; st.value_history = raw.map(([t, x]) => [t, Math.round(x * k * 100) / 100]); }
   // Autopilot's own bots show on its screen, not under My bots; the owner's ETH bot would flag "you have a rule on it".
   st.bots = st.bots.filter((b: any) => !apIds.has(b.id)).map((b: any) => { const [usd, n, today] = DEMO.bots[b.id]; return { ...b, status: "running", result_usd: usd, earned_usd: Math.round(usd * 0.7 * 100) / 100, trades_ok: n, trades_today: today, last_trade: new Date(Date.now() - 40 * 60_000).toISOString() }; });
   st.rules = st.rules.filter((r: any) => r.bot !== dipBot);
@@ -98,6 +105,8 @@ async function shot(name: string, setup: () => Promise<void>) {
 await page.goto(dash.url);
 await shot("home", async () => { await page.waitForSelector("#tot"); await page.evaluate(() => window.scrollTo(0, 0)); await page.waitForTimeout(300); });
 await shot("autopilot", async () => { await page.evaluate(() => (window as any).go("pilot")); });
+// Nov 13: the new Pipeline, scrolled so its tabs sit at the top.
+await shot("pipeline", async () => { await page.evaluate(`(function(){go("pilot");setAPV("real");setPT("pilot","pipe");var t=document.querySelector(".pnow");var tb=t&&t.previousElementSibling;(tb||t).scrollIntoView({block:"start"})})()`); await page.waitForTimeout(400); });
 await shot("bots", async () => { await page.evaluate(() => { (window as any).go("autopilot"); window.scrollTo(0, 0); }); await page.waitForTimeout(300); await page.evaluate(() => window.scrollTo(0, 0)); });
 // Token check: a made-up token with two warnings, the way the check shows a risky one.
 await shot("scamcheck", async () => {
