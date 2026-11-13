@@ -911,6 +911,7 @@ nav#nav .ind{background:linear-gradient(90deg,var(--acc),var(--frog))!important;
 .pmk-c{display:flex;align-items:center;gap:8px;background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:7px 10px;flex:1 0 auto}
 .pmk-c b{display:block;font-size:13px}.pmk-c small{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
 .pmk-s{font-size:10.5px;padding:2px 7px;border-radius:99px;background:color-mix(in srgb,var(--mut) 15%,transparent);color:var(--mut);margin-left:auto}.pmk-rising{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}.pmk-falling{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.pmeme{display:flex;justify-content:space-between;gap:10px;align-items:baseline;font-size:12px;margin:-2px 2px 10px;color:var(--mut)}.pmeme b{color:var(--tx);font-weight:600;flex:none}.pmeme span{text-align:right}
 .pst2{position:relative;padding:12px 2px;cursor:pointer}.pst2+.pst2{border-top:1px solid var(--line)}
 .pst2>.neoc{position:absolute;top:0;right:-14px;pointer-events:none}
 .pst2-h{display:flex;align-items:center;gap:8px;padding-right:30px}.pst2-h b{font-size:14.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2551,6 +2552,9 @@ h+='<div class="pfun">'+fz(tried,"Ideas","tried today","on")+ARR+fz(paper.length
 // the coins it watches, at live prices
 var mk=(b.market&&b.market.length?b.market:(st.tokens||[]).map(function(t){return {chain:t.chain,token:t.token}}));
 if(mk.length)h+='<div class="pmk">'+mk.map(function(m){var nm=tokName(m.chain,m.token),p=priceOf(nm),d=p&&p.change_24h!=null?p.change_24h*100:m.d1;return '<div class="pmk-c">'+tokIcon(nm,m.chain)+'<div style="min-width:0"><b>'+esc(nm)+'</b><small>'+(p?fmtUsd(p.usd):"")+(d!=null?' <span class="'+(d>=0?"ok":"bad")+'">'+(d>=0?"▲":"▼")+Math.abs(d).toFixed(1)+'%</span>':'')+'</small></div>'+(m.state?'<span class="pmk-s pmk-'+esc(m.state)+'">'+esc(m.state)+'</span>':'')+'</div>'}).join("")+'</div>';
+// Nov 13: what the latest X read found, so an empty meme list explains itself
+if(st.sources&&st.sources.x&&b.x&&b.x.x_at){var Xp=b.x,np=(Xp.trending||[]).length,nf=(Xp.flagged||[]).length,na=(Xp.no_address||[]).length,fd=Xp.found!=null?Xp.found:np+nf;
+ h+='<div class="pmeme"><b>Memes on X</b><span>'+(Xp.found==null?np+' passed the check':fd?fd+' named · '+(na?na+' no address · ':'')+np+' passed · '+nf+' flagged':'none named')+' · '+when(Xp.x_at)+'</span></div>'}
 // one card per strategy
 var card=function(x){var k=botOf(x),n=k&&k.next,r=x.result_usd,isL=x.stage==="live",pd=st.paper_days||1,ptr=st.paper_trades||1,dd=x.days_in_stage||0;
  var bar=function(lbl,v,of,txt){var f=Math.max(3,Math.min(100,v/of*100));return '<div class="pbar"><span>'+lbl+'</span><div><i style="width:'+f.toFixed(0)+'%"'+(v>=of?' class="done"':'')+'></i></div><small>'+txt+'</small></div>'};
@@ -2575,13 +2579,14 @@ function pipeCD(t){var s=Math.round((Date.parse(t)-Date.now())/1000);if(!(s>0))r
 var PIPESEEN=null;
 setInterval(function(){var q=document.querySelectorAll("[data-cd],[data-ago]");for(var i=0;i<q.length;i++){var el=q[i],c=el.getAttribute("data-cd"),g=el.getAttribute("data-ago");if(c)el.textContent=pipeCD(c);else if(g)el.textContent=pipeAgo(g)}},1000);
 // Nov 13: the detailed log (checked memes and every decision line), one tap away under the Pipeline's activity.
-function pipeLog(b){var st=b.settings||{},D=b.decisions||[],X=b.x||{},allMemes=X.trending||[],memes=allMemes.filter(function(c){return c.safe!==false}),hm=function(t){return t?pipeHM(t):"--:--"},h='<div>';
+function pipeLog(b){var st=b.settings||{},D=b.decisions||[],X=b.x||{},allMemes=(X.trending||[]).concat((X.flagged||[]).map(function(c){return Object.assign({},c,{safe:false})})),memes=allMemes.filter(function(c){return c.safe!==false}),hm=function(t){return t?pipeHM(t):"--:--"},h='<div>';
 // Nov 6: the checked-memes feed: every coin from X with TOLLkit's token check result, newest scan first.
+if(st.sources&&st.sources.x&&!allMemes.length&&X.x_at)h+='<div class="pp-lbl" style="margin-top:18px">CHECKED MEMES <span>'+hm(X.x_at)+'</span></div><div class="pp-log"><div class="pp-l"><span class="pp-x" style="grid-column:1/-1">'+(X.found==null?'None passed TOLLkit\u2019s token check in this read.':X.found?X.found+' named on X'+((X.no_address||[]).length?', '+X.no_address.length+' with no address ($'+X.no_address.map(esc).join(' · $')+')':'')+'; none could be checked.':'Grok named no meme coins on X in this read.')+'</span></div></div>';
 if(st.sources&&st.sources.x&&allMemes.length){var WN={mint_authority_active:"mint still open",freeze_authority_active:"can freeze",no_pool:"no pool",low_liquidity:"thin pool"};
  var depth=function(d){return d==null?"":d>=1e6?"$"+(d/1e6).toFixed(1)+"M pool":"$"+Math.round(d/1000)+"k pool"};
- h+='<div class="pp-lbl" style="margin-top:18px">CHECKED MEMES <span>'+allMemes.length+' checked · '+hm(X.at)+'</span></div><div class="pp-log">'+allMemes.slice(0,12).map(function(c){var ok=c.safe!==false,w=(c.warnings||[]).map(function(x){return WN[x]||String(x).replace(/_/g," ")});
+ h+='<div class="pp-lbl" style="margin-top:18px">CHECKED MEMES <span>'+allMemes.length+' checked · '+hm(X.x_at||X.at)+'</span></div><div class="pp-log">'+allMemes.slice(0,12).map(function(c){var ok=c.safe!==false,w=(c.warnings||[]).map(function(x){return WN[x]||String(x).replace(/_/g," ")});
   var why=ok?[depth(c.pool_depth_usd),"no mint","mood "+(c.mood||"—")].filter(Boolean).join(" · "):(w.length?w.join(" · "):"failed the check")+(c.pool_depth_usd!=null?" · "+depth(c.pool_depth_usd):"");
-  return '<div class="pp-l"><span class="pp-t">'+hm(X.at)+'</span><span class="pp-k pp-c-'+(ok?"ok":"bad")+'">'+(ok?"PASS":"FLAG")+'</span><span class="pp-x"><b style="color:#fff">$'+esc(c.symbol)+'</b> '+esc(why)+'</span></div>'}).join("")+'</div>'}
+  return '<div class="pp-l"><span class="pp-t">'+hm(X.x_at||X.at)+'</span><span class="pp-k pp-c-'+(ok?"ok":"bad")+'">'+(ok?"PASS":"FLAG")+'</span><span class="pp-x"><b style="color:#fff">$'+esc(c.symbol)+'</b> '+esc(why)+'</span></div>'}).join("")+'</div>'}
 // the log, terminal style: decisions + Autopilot's trades, newest first
 var lines=[];D.slice(0,30).forEach(function(d){(d.actions||[]).forEach(function(a){lines.push({t:d.ts,k:a.type==="keep"?"KEEP":String(a.type).toUpperCase(),c:a.type==="keep"?"q":a.type==="retire"||a.type==="pause"?"bad":"ok",x:(a.token?tokName(a.chain,a.token)+" · ":"")+(a.reason||a.outcome||"")})})});
 (S.receipts||[]).filter(function(e){return e.by==="superbot"}).slice(0,20).forEach(function(e){lines.push({t:e.ts,k:e.status==="failed"?"FAILED":"TRADE",c:e.status==="failed"?"bad":"acc",x:(e.detail||"")+(e.usd?" · "+usd(e.usd):"")})});

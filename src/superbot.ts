@@ -1486,7 +1486,9 @@ export class SuperBot {
   private lastSnap: any = null;
   /** What the Autopilot screen shows from X: the mood per coin and the trending memes, from the latest snapshot. */
   xView() { const sn = this.lastSnap; if (!sn) return null; const hid = new Set((this.load().x_hidden ?? []).map((a) => a.toLowerCase()));
-    return { at: sn.at ?? null, moods: sn.social?.x ?? null, trending: (sn.trending_x?.coins ?? []).filter((c: any) => !hid.has(String(c?.address ?? "").toLowerCase())), hidden: hid.size }; }
+    return { at: sn.at ?? null, moods: sn.social?.x ?? null, trending: (sn.trending_x?.coins ?? []).filter((c: any) => !hid.has(String(c?.address ?? "").toLowerCase())), hidden: hid.size,
+      // Nov 13: what the X read found that didn't pass, so the owner sees why no meme came through.
+      flagged: (sn.trending_x?.flagged ?? []).slice(0, 10), found: sn.trending_x?.found ?? null, no_address: (sn.trending_x?.no_address ?? []).slice(0, 10), x_at: sn.trending_x?.at ?? null }; }
   private async step(snap: any) {
     this.lastSnap = snap ?? this.lastSnap;
     const s = this.load(), all = this.w.rules().list();
