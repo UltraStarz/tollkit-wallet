@@ -943,7 +943,7 @@ export class SuperBot {
       }
       if (st.stage === "paper") {
         if (!enough) { if (st.ready) await this.update((x) => { const y = x.strategies.find((z) => z.id === st.id); if (y) y.ready = null; }); }
-        // 0.9.8: a strategy that passed waits for the owner's Go live; it keeps practising on paper meanwhile.
+        // 0.9.8: a strategy that passed waits for the owner's Go live; it keeps practicing on paper meanwhile.
         // A trending meme also needs the coin added on Home before it can go live (checked again on Go live).
         if (enough && beat && pct !== null) {
           // 0.9.10 Active mode: it goes live by itself when it fits the budget (never a Trending-on-X coin: those need the owner).
@@ -1850,7 +1850,7 @@ export class SuperBot {
   /**
    * Back from being away: what the server's Autopilot decided goes into the log (and its pause, resume and retire of
    * strategies here are applied here too), and each strategy it started is taken over under the same rule ids: paper
-   * ones keep practising here, live ones keep running 24/7. Returns the ids taken over (the server then lets go).
+   * ones keep practicing here, live ones keep running 24/7. Returns the ids taken over (the server then lets go).
    */
   async adoptServer(b: { strategies?: any[]; log?: any[] }): Promise<string[]> {
     const seen = new Set(this.load().server_seen ?? []);
