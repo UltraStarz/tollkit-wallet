@@ -38,6 +38,6 @@ export class PriceFeed {
     this.at = new Date().toISOString();
   }
 
-  start() { if (!this.timer) { void this.refresh(); this.timer = setInterval(() => void this.refresh(), this.o.intervalMs ?? 15_000); } }
+  start() { if (!this.timer) { void this.refresh(); this.timer = setInterval(() => void this.refresh(), this.o.intervalMs ?? 5_000); } }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 }

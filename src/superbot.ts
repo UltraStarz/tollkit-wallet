@@ -817,6 +817,8 @@ export class SuperBot {
     if (!s.enabled || this.d.active?.() === false) return;
     const due = !s.stats.last_cycle || this.now() - Date.parse(s.stats.last_cycle) >= s.settings.rethink_minutes * 60_000 - 5_000;
     if (due) await this.cycle();
+    // Nov 13: between AI checks, each coin's market is read again every minute (no AI, no cost), so the screen keeps up.
+    else if (!this.busy && (this.adaptive() || this.mv().on)) await this.readMarket(s).catch(() => {});
   }
 
   async cycle(force = false) {

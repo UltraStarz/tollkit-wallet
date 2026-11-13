@@ -54,6 +54,8 @@ export interface PriceSource { snapshot(): { prices: Record<string, Price> } }
 const GAS_RESERVE: Record<Chain, bigint> = { base: 50_000_000_000_000n /* 0.00005 ETH */, ethereum: 2_000_000_000_000_000n /* 0.002 ETH */, arbitrum: 100_000_000_000_000n /* 0.0001 ETH */, polygon: 100_000_000_000_000_000n /* 0.1 POL */, solana: 10_000_000n /* 0.01 SOL */ };
 const QUOTE_PRICE_TTL = 60_000;
 
+/** How long a device's hold on running the bots lasts without a check-in before another device may take over. */
+export const LEASE_MS = 45_000;
 export interface AutopilotOptions { dir?: string; intervalMs?: number; now?: () => number; leaseId?: string; resolve?: typeof resolveToken; onEvent?: (e: AutopilotEvent) => void;
   /** Rules Tollkit's server is running while the app is closed (src/alwayson.ts): the device leaves them alone. */
   skip?: (id: string) => boolean;
@@ -102,7 +104,9 @@ export class Autopilot {
   }
 
   private now() { return this.o.now?.() ?? Date.now(); }
-  private interval() { return this.o.intervalMs ?? 15_000; }
+  // Nov 13 (Joe: "Yes, 5 seconds"): bots check their prices every 5 seconds (was 15). The hand-over between devices still
+  // waits 45 seconds (LEASE_MS), so a phone pausing briefly in the background doesn't pass the bots back and forth.
+  private interval() { return this.o.intervalMs ?? 5_000; }
 
   start() { if (!this.timer) { void this.tick(); this.timer = setInterval(() => void this.tick(), this.interval()); } }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; this.releaseLease(); }
@@ -113,7 +117,7 @@ export class Autopilot {
     try {
       if (existsSync(this.leaseFile)) {
         const l = JSON.parse(readFileSync(this.leaseFile, "utf8"));
-        if (l.id !== this.leaseId && this.now() - l.ts < this.interval() * 3) return (this.holdsLease = false);
+        if (l.id !== this.leaseId && this.now() - l.ts < Math.max(LEASE_MS, this.interval() * 3)) return (this.holdsLease = false);
       }
       writeFileSync(this.leaseFile, JSON.stringify({ id: this.leaseId, pid: process.pid, mode: this.exec.mode, ts: this.now() }), { mode: 0o600 });
       return (this.holdsLease = true);
@@ -123,8 +127,8 @@ export class Autopilot {
     try { const l = JSON.parse(readFileSync(this.leaseFile, "utf8")); if (l.id === this.leaseId) writeFileSync(this.leaseFile, JSON.stringify({ ...l, ts: 0 })); } catch { /* none */ }
   }
   /** Who is running the autopilot, if anyone. */
-  static status(dir?: string, now = Date.now(), intervalMs = 15_000): { running: boolean; mode?: string; pid?: number } {
-    try { const l = JSON.parse(readFileSync(path.join(walletHome(dir), "autopilot.lease"), "utf8")); return now - l.ts < intervalMs * 3 ? { running: true, mode: l.mode, pid: l.pid } : { running: false }; }
+  static status(dir?: string, now = Date.now(), leaseMs = LEASE_MS): { running: boolean; mode?: string; pid?: number } {
+    try { const l = JSON.parse(readFileSync(path.join(walletHome(dir), "autopilot.lease"), "utf8")); return now - l.ts < leaseMs ? { running: true, mode: l.mode, pid: l.pid } : { running: false }; }
     catch { return { running: false }; }
   }
 
