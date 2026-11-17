@@ -574,13 +574,15 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
           if (from.address.toLowerCase() === to.address.toLowerCase()) throw new Error("Pick two different coins.");
           const amount = String(b.amount ?? "").trim();
           if (!/^\d+(\.\d+)?$/.test(amount) || !(Number(amount) > 0)) throw new Error("Enter an amount.");
-          const req = { chain, sell_token: from.address, buy_token: to.address, sell_amount: toAtomic(amount, from.decimals), slippage_bps: Math.min(100, w.policy.max_slippage_bps) };
+          const req = { chain, sell_token: from.address, buy_token: to.address, sell_amount: toAtomic(amount, from.decimals), slippage_bps: swapSlip(b.slippage_bps, w.policy.max_slippage_bps) };
           if (p === "/api/swap/quote") {
             const r = await w.quote(req);
             if (!r.ok || !r.quote) return send(res, 400, { error: r.refused?.reason ?? "No price right now." });
             const q = r.quote, h = (v: string, dec: number) => formatUnits(BigInt(v), dec);
             return send(res, 200, { from: from.symbol, to: to.symbol, pay: h(q.sell_amount, from.decimals), get: h(q.buy_amount, to.decimals), min: h(q.min_buy_amount, to.decimals),
-              usd: q.usd_value, fee_usd: q.fee_usd, fee_bps: q.fee_bps, ...(r.warning ? { warning: r.warning } : {}) });
+              usd: q.usd_value, fee_usd: q.fee_usd, fee_bps: q.fee_bps, ...(r.warning ? { warning: r.warning } : {}),
+              // Nov 17: the Swap screen's details (MetaMask-style): route, slippage, price impact and network fee when the route says.
+              slippage_bps: req.slippage_bps, max_slippage_bps: w.policy.max_slippage_bps, ...quoteExtras(q) });
           }
           const r = await w.swap(req, { ownerApproved: true });
           if (!r.ok) return send(res, 400, { error: r.refused?.reason ?? "The swap didn't go through." });
@@ -919,4 +921,25 @@ export async function serveDashboard(password: string, o: { port: number }): Pro
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
   try { spawn(opener, [d.url], { stdio: "ignore", detached: true }).on("error", () => {}).unref(); } catch { /* print only */ }
   await new Promise<void>((r) => process.once("SIGINT", () => { d.close().then(r); }));
+}
+
+/** Nov 17: the Swap screen's slippage: the owner's pick, never above their own limit (default 1%). */
+export function swapSlip(v: unknown, max: number): number {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 10 ? Math.min(n, max) : Math.min(100, max);
+}
+/** Nov 17: price impact (%) and network fee from whatever the route returned; missing when the route doesn't say. */
+export function quoteExtras(q: { route?: string; raw?: any; chain: string }): { route?: string; impact_pct?: number; net_fee?: { amount: number; symbol: string } } {
+  const j = q.raw ?? {}, o: { route?: string; impact_pct?: number; net_fee?: { amount: number; symbol: string } } = {};
+  if (q.route) o.route = q.route;
+  const pi = j.priceImpactPct ?? j.priceImpact;
+  const inU = Number(j.inUsdValue ?? j.swapUsdValue), outU = Number(j.outUsdValue);
+  if (pi !== undefined && pi !== null && Number.isFinite(Number(pi))) o.impact_pct = Math.abs(Number(pi)) * (j.priceImpactPct !== undefined ? 100 : 1);
+  else if (inU > 0 && outU > 0) o.impact_pct = Math.max(0, (inU - outU) / inU * 100);
+  if (o.impact_pct !== undefined) o.impact_pct = Math.round(o.impact_pct * 100) / 100;
+  if (q.chain === "solana") {
+    const lam = ["signatureFeeLamports", "prioritizationFeeLamports", "rentFeeLamports"].reduce((a, k) => a + (Number(j[k]) || 0), 0);
+    if (lam > 0) o.net_fee = { amount: lam / 1e9, symbol: "SOL" };
+  } else if (j.totalNetworkFee && Number(j.totalNetworkFee) > 0) o.net_fee = { amount: Number(j.totalNetworkFee) / 1e18, symbol: q.chain === "polygon" ? "POL" : "ETH" };
+  return o;
 }
