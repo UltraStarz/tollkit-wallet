@@ -11,10 +11,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createKeystore } from "../src/keystore.js";
 import { TollkitWallet } from "../src/wallet.js";
 import { buildServer } from "../src/mcp.js";
-import { setPaidTools, readCatalog, refreshCatalog, offeredTools, setHidden, catalogView, zodShape, describeTool, CATALOG_URL } from "../src/tollkit-tools.js";
+import { readCatalog, refreshCatalog, offeredTools, setHidden, catalogView, zodShape, describeTool, CATALOG_URL } from "../src/tollkit-tools.js";
 import { TOLLKIT_TOOLS_SNAPSHOT } from "../src/data/tollkit-tools.js";
 import { setBudget } from "../src/appbudget.js";
-import { SYSTEM, systemPrompt } from "../src/ai.js";
+import { SYSTEM } from "../src/ai.js";
+import * as none from "../src/paid-tools-none.js";
 import { entries } from "../src/ledger.js";
 
 let pass = 0, fail = 0;
@@ -111,13 +112,9 @@ const r6 = await acall("tollkit_call", { tool: "read_page", input: { url: "https
 check(r6.paid === false && r6.refused?.code === "over_app_budget" && paidCalls === 3, "Tollkit AI's weekly budget applies", r6);
 setBudget(dir, "Tollkit AI", null);
 
-// Nov 16: the iPhone app turns paid tools off; the chat then has no way to buy one and isn't told about them.
-check(systemPrompt() === SYSTEM && /tollkit_call/.test(SYSTEM), "paid tools on: the chat's instructions describe them");
-setPaidTools(false);
-const off = (await (await connect("TOLLkit AI (iPhone)", true)).listTools()).tools.map((x) => x.name);
-check(!off.includes("tollkit_tools") && !off.includes("tollkit_call") && off.includes("held_tokens"), "paid tools off: no tollkit_tools or tollkit_call, held_tokens stays", off.length);
-check(!/tollkit_tools|tollkit_call|Tollkit tool/.test(systemPrompt()) && /you make no payments/.test(systemPrompt()), "paid tools off: the chat's instructions don't mention them");
-setPaidTools(true);
+// Nov 16: the iPhone app is built with paid-tools-none.ts in place of paid-tools.ts: nothing to register, no wording.
+check(/tollkit_call/.test(SYSTEM) && /only payments you make are Tollkit tool calls/.test(SYSTEM), "the chat's instructions describe the paid tools here");
+check(none.PAID_PROMPT_LINE === "" && /no payments/.test(none.PAID_PROMPT_CLAUSE) && none.registerPaidTools(null, null) === undefined, "the stand-in registers nothing and says the chat makes no payments");
 
 console.log(`\ntollkit-tools: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

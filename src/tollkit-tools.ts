@@ -116,9 +116,3 @@ export function zodShape(schema: Record<string, unknown>): Record<string, z.ZodT
   }
   return out;
 }
-
-// Nov 16 (App Review, guideline 5.6): the iPhone app doesn't let the in-app chat buy Tollkit's paid tools. The App
-// Store build turns this off once at startup (tollkit-mobile/src/engine.ts); every other build leaves it on.
-let paidToolsOn = true;
-export function setPaidTools(on: boolean) { paidToolsOn = on; }
-export function paidTools(): boolean { return paidToolsOn; }

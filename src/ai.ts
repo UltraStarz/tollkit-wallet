@@ -27,7 +27,7 @@ import { notify, requestApproval } from "./telegram.js";
 import { launchConfig, which } from "./connect.js";
 import { passwordFile, walletHome } from "./paths.js";
 import { describeRule } from "./rules.js";
-import { paidTools } from "./tollkit-tools.js";
+import { PAID_PROMPT_LINE, PAID_PROMPT_CLAUSE } from "./paid-tools.js";
 
 /** A swap that would pay for the AI's steps: `usd` of the chain's own coin into USDC. */
 export interface FuelPlan { chain: "base" | "solana"; sell: "ETH" | "SOL"; usd: number }
@@ -77,12 +77,11 @@ What you can do, through the tollkit-wallet tools:
 - read their balances, limits and recent trades (wallet_balances, wallet_status, receipts)
 - check prices and price history (market_prices, price_history; ETH, SOL and POL)
 - see every coin the wallet holds on every network, memes included, with its price, 24-hour change and value (held_tokens, free): use it whenever the owner asks about a coin they hold or about their portfolio
-- use any Tollkit tool (tollkit_tools lists them with prices; tollkit_call runs one): token info, price and a safety check for any token by address, someone else's wallet, a transaction, a web page or search, company and SEC data, and more. Each call is paid from this wallet inside the owner's limits (usually $0.001 to $0.02); use held_tokens first for coins they hold, call a paid tool only when it adds something, and say what it cost
-- suggest one swap to do now (swap_propose), when they ask to buy, sell or swap something now
+${PAID_PROMPT_LINE}- suggest one swap to do now (swap_propose), when they ask to buy, sell or swap something now
 - see their rules (autopilot_rules) and suggest new ones (autopilot_propose)
 - set things up for them: ready-made bots (bot_templates, bot_preview, bot_start, bots_status, bot_control), tokens on their list (token_search, token_check, token_add, token_hide), "keep running when closed" for a rule (always_on), quotes and links they can use (move_quote, buy_link)
 - ask them to make a change only they can make (setup_request): limits, withdrawal addresses, withdrawing, moving between networks, staking, cashing out, connecting another AI app, a weekly budget for an AI app, the Always On budget. It shows as a card on their Approvals screen; they tap Apply and type their password where the wallet asks. setup_requests shows what they did with it.
-You cannot trade, withdraw or change limits yourself, and the only payments you make are Tollkit tool calls, and you can't turn rules or bots on. Every swap, rule or bot you suggest waits on a card: the owner taps "Approve" for a swap or "Turn on" for a rule or bot. Never say a swap happened, a rule is on, or that you placed a trade. When they ask you to set something up, do it with the tools (don't just describe it), then say in one line what's waiting for them and where.
+You cannot trade, withdraw or change limits yourself${PAID_PROMPT_CLAUSE} and you can't turn rules or bots on. Every swap, rule or bot you suggest waits on a card: the owner taps "Approve" for a swap or "Turn on" for a rule or bot. Never say a swap happened, a rule is on, or that you placed a trade. When they ask you to set something up, do it with the tools (don't just describe it), then say in one line what's waiting for them and where.
 
 Swaps: use swap_propose with the chain, the token sold, the token bought and the amount in the sold token's units (for "$20 of ETH", sell 20 USDC). Give a one- or two-sentence plain \`reason\`. If it's refused (limits, balance, unknown token), tell the owner why in plain words and offer what would work. One swap per request unless they ask for more.
 
@@ -227,8 +226,8 @@ export class AiAssistant {
       const said = t || (images.length === 1 ? "(sent a picture)" : "(sent pictures)");
       const prompt = kind === "chat" ? `Owner: ${said}` : t; // never starts with "-", so it can't be read as a flag
       const pics = images.length ? { images } : {};
-      try { r = await run(prompt, { sessionId: c.session_id, cwd, mcpConfig, system: systemPrompt(), ...pics }); }
-      catch (e) { if (!(e as any).resumeFailed) throw e; r = await run(prompt, { cwd, mcpConfig, system: systemPrompt(), ...pics }); }
+      try { r = await run(prompt, { sessionId: c.session_id, cwd, mcpConfig, system: SYSTEM, ...pics }); }
+      catch (e) { if (!(e as any).resumeFailed) throw e; r = await run(prompt, { cwd, mcpConfig, system: SYSTEM, ...pics }); }
       const fresh = this.load();
       if (r.sessionId) fresh.session_id = r.sessionId;
       const made = this.w.rules().list().filter((x) => !before.has(x.id) && x.created_by === "agent").map((x) => x.id);
@@ -311,10 +310,3 @@ export class AiAssistant {
   }
 }
 
-/** Nov 16: the chat's instructions for this build. Where paid tools are off (the iPhone app), the lines about them go. */
-export function systemPrompt(): string {
-  if (paidTools()) return SYSTEM;
-  const i = SYSTEM.indexOf("- use any Tollkit tool (tollkit_tools"), j = i < 0 ? -1 : SYSTEM.indexOf("\n", i);
-  const s = i < 0 || j < 0 ? SYSTEM : SYSTEM.slice(0, i) + SYSTEM.slice(j + 1);
-  return s.replace(", and the only payments you make are Tollkit tool calls,", ", you make no payments,");
-}
