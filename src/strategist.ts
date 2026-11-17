@@ -123,7 +123,7 @@ export function compactSnapshot(s: any, sourcesOn?: string[]) {
     farcaster: on("farcaster") && s.social?.farcaster ? Object.fromEntries(Object.entries(s.social.farcaster).map(([k, c]: [string, any]) => [k, { casts: c.casts, sample: c.sample.slice(0, 5).map((x: any) => `${x.author}${x.likes ? ` (${x.likes} likes)` : ""}: ${x.text.slice(0, 160)}`) }])) : null,
     // Only the summary fields, never post text: what reaches the strategist from X is Grok's structured read.
     x: on("x") && sx ? Object.fromEntries(Object.entries(sx).map(([k, m]: [string, any]) => [k, { mood: m.mood, score: m.score, posts_read: m.posts_read, themes: (m.themes ?? []).slice(0, 3).map((t: any) => String(t).slice(0, 60)), at: m.at }])) : null,
-    trending_on_x_paper_only: on("x") && tx?.coins?.length ? tx.coins.slice(0, 8).map((c: any) => ({ symbol: String(c.symbol).slice(0, 16), chain: c.chain, address: c.address, mood: c.mood, why: String(c.why ?? "").slice(0, 90), price_usd: c.price_usd ?? null, pool_depth_usd: c.pool_depth_usd ?? null })) : null,
+    trending_on_x_paper_only: on("x") && tx?.coins?.length ? tx.coins.slice(0, 8).map((c: any) => ({ symbol: String(c.symbol).slice(0, 16), chain: c.chain, address: c.address, mood: c.mood, why: String(c.why ?? "").slice(0, 90), price_usd: c.price_usd ?? null, pool_depth_usd: c.pool_depth_usd ?? null, change_24h_pct: c.change_24h_pct ?? null })) : null,
     since_last: s.changes,
   };
 }
