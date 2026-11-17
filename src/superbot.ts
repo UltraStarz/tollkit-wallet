@@ -523,24 +523,27 @@ export function autopilotReport(w: { dir: string; rules(): { list(): Rule[] } },
     const ids = new Set([x.bot, ...(x.prev_bots ?? [])].filter(Boolean) as string[]);
     const sum = summarize(all.filter((r) => r.bot && ids.has(r.bot) && !r.archived).map((r) => (r.bot === x.bot ? r : { ...r, bot: x.bot! })), (w as any).hooks?.livePrice)[0] ?? null;
     const rules = all.filter((r) => r.bot === x.bot && !r.archived).map((r) => ({ id: r.id, status: r.status, description: describeRule(r), ...(r.state.last_error ? { last_error: r.state.last_error } : {}) }));
-    return { id: x.id, name: x.name, template: x.template, chain: x.chain, token: x.token, stage: x.stage, since: x.stage_since, params: x.params, money: x.stage === "live" ? "real" : x.stage === "paper" ? "practice" : "none",
+    // Nov 17: why it exists (its first history note: who proposed it and the reason), kept even after recent drops it.
+    const origin = x.history?.[0] ? `${x.history[0].ts.slice(0, 16)} ${x.history[0].note}` : null;
+    return { id: x.id, name: x.name, template: x.template, chain: x.chain, token: x.token, stage: x.stage, since: x.stage_since, origin, params: x.params, money: x.stage === "live" ? "real" : x.stage === "paper" ? "practice" : "none",
       status: sum?.status ?? null, trades: sum?.trades_ok ?? 0, failed: sum?.trades_failed ?? 0, earned_usd: sum?.earned_usd ?? 0, result_usd: sum?.result_usd ?? null, result_pct: sum?.result_pct ?? null, last_trade: sum?.last_trade ?? null,
       ...(x.ready ? { passed_paper: x.ready } : {}), ...(x.owner_paused ? { paused_by_owner: true } : {}), ...(x.stopped_by_owner ? { stopped_by_owner: true } : {}),
       recent: (x.history ?? []).slice(-4).map((h) => `${h.ts.slice(0, 16)} ${h.note}`), rules };
   });
   const live = strategies.filter((x) => x.stage === "live");
   return {
+    // Nov 17: most-asked parts first (strategies and why, settings, then the latest decisions), so a chat that cuts long results keeps them.
     on: !!s.enabled, since: s.since ?? null, halted: s.halted ?? null, notes: st.notes ?? [],
-    big_moves: { ...DEFAULT_MOVES, ...(st.moves ?? {}), alerts: Object.entries(s.moves_seen ?? {}).map(([key, a]) => ({ key, ...a })).slice(-8) },
-    decisions_kept: (s.decisions ?? []).length,
-    settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_strategies: st.max_strategies, max_token_pct: st.max_token_pct, daily_loss_pct: st.daily_loss_pct, weekly_loss_pct: st.weekly_loss_pct,
-      pace: st.pace, active_mode: st.active_mode, run_24_7: st.always_on, think_24_7: st.think_24_7, rethink_minutes: st.rethink_minutes, chains: st.chains, tokens: st.tokens, sources: st.sources, paper_days: st.paper_days, paper_trades: st.paper_trades },
     totals: { live: live.length, practice: strategies.filter((x) => x.stage === "paper").length, earned_live_usd: Math.round(live.reduce((a, x) => a + (x.earned_usd ?? 0), 0) * 100) / 100, result_live_usd: Math.round(live.reduce((a, x) => a + (x.result_usd ?? 0), 0) * 100) / 100 },
     strategies: strategies.filter((x) => x.stage !== "retired"),
-    retired: strategies.filter((x) => x.stage === "retired").slice(-8).map((x) => ({ name: x.name, token: x.token, why: x.recent.at(-1) ?? null, earned_usd: x.earned_usd, result_usd: x.result_usd })),
+    settings: { budget_usd: st.budget_usd, per_trade_usd: st.per_trade_usd, max_strategies: st.max_strategies, max_token_pct: st.max_token_pct, daily_loss_pct: st.daily_loss_pct, weekly_loss_pct: st.weekly_loss_pct,
+      pace: st.pace, active_mode: st.active_mode, run_24_7: st.always_on, think_24_7: st.think_24_7, rethink_minutes: st.rethink_minutes, chains: st.chains, tokens: st.tokens, sources: st.sources, paper_days: st.paper_days, paper_trades: st.paper_trades },
     last_check: s.stats?.last_cycle ?? null,
     decisions: (s.decisions ?? []).slice().sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, o.decisions ?? 15).map((d) => ({ ts: d.ts, by: d.by, view: d.market_view, assessment: d.assessment,
       actions: (d.actions ?? []).map((a) => ({ type: a.type, ...(a.strategy_id ? { strategy: a.strategy_id } : {}), reason: a.reason, applied: a.applied, outcome: a.outcome })) })),
+    retired: strategies.filter((x) => x.stage === "retired").slice(-8).map((x) => ({ name: x.name, token: x.token, why: x.recent.at(-1) ?? null, earned_usd: x.earned_usd, result_usd: x.result_usd })),
+    big_moves: { ...DEFAULT_MOVES, ...(st.moves ?? {}), alerts: Object.entries(s.moves_seen ?? {}).map(([key, a]) => ({ key, ...a })).slice(-8) },
+    decisions_kept: (s.decisions ?? []).length,
     reports: (s.reports ?? []).slice(-3).reverse(),
   };
 }

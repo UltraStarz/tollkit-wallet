@@ -24,7 +24,7 @@ export const CLIENT_META = "dev.tollkit/client";
  * The tools the wallet's built-in AI chat gets: read, look at prices, suggest rules and one-off swaps for the owner
  * to approve, and (0.8.0) the same setup tools a connected app has. It never trades or pays on its own.
  */
-export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_status", "autopilot_note", "autopilot_propose", "swap_propose", "paper_status", "bot_test",
+export const ADVISOR_TOOLS = ["wallet_status", "wallet_balances", "swap_quote", "receipts", "market_prices", "price_history", "autopilot_rules", "autopilot_status", "autopilot_log", "autopilot_note", "autopilot_propose", "swap_propose", "paper_status", "bot_test",
   "bot_templates", "bot_preview", "bot_start", "bots_status", "bot_control", "token_search", "token_check", "token_add", "token_hide", "always_on", "move_quote", "buy_link",
   "setup_request", "setup_requests", "setup_cancel", "held_tokens"];
 
@@ -58,7 +58,9 @@ export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): Mc
       // The app's name travels with the call: receipts say "by Claude", and its weekly budget applies. In advisor
       // mode suggestions always wait for the owner, whatever agent_rules says.
       const ctx: ActionCtx = { app, advisor: !!o.advisor };
-      return json(await (a.run as any)(w, args ?? {}, ctx));
+      // Nov 17: the in-app chat gets compact JSON (it cuts long results; indents cost about a third).
+      const r = await (a.run as any)(w, args ?? {}, ctx);
+      return o.advisor ? { content: [{ type: "text" as const, text: JSON.stringify(r) }] } : json(r);
     });
   }
   // The in-app chat's paid tools (src/paid-tools.ts). The iPhone app is built without that file.

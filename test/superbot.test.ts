@@ -646,6 +646,9 @@ function world(o: { decision?: () => any; signals?: () => any; price?: number; c
   const st = r.strategies[0], d = r.decisions.find((x: any) => x.by === "strategist");
   check(r.on && r.settings.budget_usd === 100 && st && st.template === "dip" && st.money === "practice" && st.rules.length === 2 && /Buy/.test(st.rules[0].description), "0.9.13: the report has its settings and each strategy with its stage and rules", st);
   check(d && /dip buyer/.test(d.assessment) && d.actions[0].type === "propose" && d.actions[0].applied === true && /quiet week/.test(d.actions[0].reason), "0.9.13: and its decisions, with the reason and what happened", d);
+  check(/quiet week/.test(st.origin ?? ""), "Nov 17: each strategy carries why it was started (its origin), even after its recent notes move on", st.origin);
+  const keys = Object.keys(r);
+  check(keys.indexOf("strategies") < keys.indexOf("settings") && keys.indexOf("settings") < keys.indexOf("decisions") && keys.indexOf("decisions") < keys.indexOf("retired"), "Nov 17: strategies, then settings, then decisions come first, so a chat that cuts long results keeps them", keys);
 }
 
 // ─── 0.9.13: the chat steers Autopilot: a strategy it asked for, standing notes, settings through Approvals ───────
