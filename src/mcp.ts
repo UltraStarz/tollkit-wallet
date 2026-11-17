@@ -15,7 +15,7 @@ import { TollkitWallet } from "./wallet.js";
 import { ACTIONS, SWAP_PROPOSE, type ActionCtx } from "./actions.js";
 import { appName, noteAiUse } from "./aiuse.js";
 import { z } from "zod";
-import { describeTool, offeredTools, refreshCatalog, zodShape, TOOL_PREFIX } from "./tollkit-tools.js";
+import { describeTool, offeredTools, paidTools, refreshCatalog, zodShape, TOOL_PREFIX } from "./tollkit-tools.js";
 
 /** The `_meta` key Tollkit's relay uses to say which AI app sent a call that came in by the connector address. */
 export const CLIENT_META = "dev.tollkit/client";
@@ -65,7 +65,7 @@ export function buildServer(w: TollkitWallet, o: { advisor?: boolean } = {}): Mc
   // tools instead of one per tool (the phone's AI has a tight token budget for tool definitions): tollkit_tools lists
   // them with prices, tollkit_call runs one. Each call is an ordinary x402 payment by "Tollkit AI": the owner's
   // payment limits, its weekly budget, the seller check and the receipt all apply; hidden tools are never offered.
-  if (o.advisor) {
+  if (o.advisor && paidTools()) {
     void refreshCatalog(w.dir, (w as any).f);
     s.registerTool("tollkit_tools", {
       title: "Tollkit tools",

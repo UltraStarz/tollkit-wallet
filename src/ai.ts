@@ -27,6 +27,7 @@ import { notify, requestApproval } from "./telegram.js";
 import { launchConfig, which } from "./connect.js";
 import { passwordFile, walletHome } from "./paths.js";
 import { describeRule } from "./rules.js";
+import { paidTools } from "./tollkit-tools.js";
 
 /** A swap that would pay for the AI's steps: `usd` of the chain's own coin into USDC. */
 export interface FuelPlan { chain: "base" | "solana"; sell: "ETH" | "SOL"; usd: number }
@@ -226,8 +227,8 @@ export class AiAssistant {
       const said = t || (images.length === 1 ? "(sent a picture)" : "(sent pictures)");
       const prompt = kind === "chat" ? `Owner: ${said}` : t; // never starts with "-", so it can't be read as a flag
       const pics = images.length ? { images } : {};
-      try { r = await run(prompt, { sessionId: c.session_id, cwd, mcpConfig, system: SYSTEM, ...pics }); }
-      catch (e) { if (!(e as any).resumeFailed) throw e; r = await run(prompt, { cwd, mcpConfig, system: SYSTEM, ...pics }); }
+      try { r = await run(prompt, { sessionId: c.session_id, cwd, mcpConfig, system: systemPrompt(), ...pics }); }
+      catch (e) { if (!(e as any).resumeFailed) throw e; r = await run(prompt, { cwd, mcpConfig, system: systemPrompt(), ...pics }); }
       const fresh = this.load();
       if (r.sessionId) fresh.session_id = r.sessionId;
       const made = this.w.rules().list().filter((x) => !before.has(x.id) && x.created_by === "agent").map((x) => x.id);
@@ -308,4 +309,12 @@ export class AiAssistant {
       if (d === "approved") await notify(cfg, "Turned on.", this.o.fetch).catch(() => {});
     } catch { /* Telegram is optional; the dashboard still shows them */ } finally { this.approving = false; }
   }
+}
+
+/** Nov 16: the chat's instructions for this build. Where paid tools are off (the iPhone app), the lines about them go. */
+export function systemPrompt(): string {
+  if (paidTools()) return SYSTEM;
+  const i = SYSTEM.indexOf("- use any Tollkit tool (tollkit_tools"), j = i < 0 ? -1 : SYSTEM.indexOf("\n", i);
+  const s = i < 0 || j < 0 ? SYSTEM : SYSTEM.slice(0, i) + SYSTEM.slice(j + 1);
+  return s.replace(", and the only payments you make are Tollkit tool calls,", ", you make no payments,");
 }
