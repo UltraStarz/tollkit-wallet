@@ -2,7 +2,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { coinId, TokenList, priceChart, CHART_RANGES, toCandles } from "../src/holdings.js";
+import { coinId, TokenList, priceChart, CHART_RANGES, toCandles, Holdings } from "../src/holdings.js";
 import { NATIVE_EVM, WSOL } from "../src/chains.js";
 
 let pass = 0, fail = 0;
@@ -40,6 +40,24 @@ check(JSON.stringify(k3) === JSON.stringify([[0, 1, 3, 1, 3, 12]]), "candles: vo
 check(Object.values(CHART_RANGES).every((v) => ({ "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 } as any)[v.period] * v.span / v.candle >= 24), "chart ranges: at least 24 candles each");
 let e = ""; try { await priceChart("http://evil/x", "1D", fake); } catch (x) { e = (x as Error).message; }
 check(/Unknown coin/.test(e), "chart: refuses anything that isn't a coin id (no URL injection)");
+
+// New Solana coins DefiLlama doesn't price yet: Jupiter's price, only when the pool is deep.
+{
+  const DEEP = "9hjBLBrc7WZW2H8UQvBAvG5WiTZotXUv2Bdcn4f4pump", THIN = "GgyKtbWS99pzkvqaG7wvxdKCbRxuLDLRDm4TtfDdpump";
+  const jf = (async (u: string) => {
+    if (u.includes("coins.llama.fi")) return new Response(JSON.stringify({ coins: {} }));
+    if (u.includes("/tokens/v2/search")) return new Response(JSON.stringify([
+      { id: DEEP, symbol: "DCTY", name: "DacityCoin", decimals: 6, usdPrice: 0.0142, liquidity: 1_000_000 },
+      { id: THIN, symbol: "DCTY", name: "DacityCoin", decimals: 6, usdPrice: 0.00016, liquidity: 500 }]));
+    return new Response("[]");
+  }) as any;
+  const h = new Holdings({ evm: "0x0000000000000000000000000000000000000001", solana: "E5Z17Jxsr4cimRUpgcZV29PnX3SqBWH3TqzUsS3DBgkU", chains: () => ["solana"], dir: mkdtempSync(path.join(os.tmpdir(), "twhj-")), fetch: jf });
+  (h as any).solana = async () => [{ chain: "solana", address: DEEP, symbol: "", decimals: 6, amount: "19614.05" }, { chain: "solana", address: THIN, symbol: "", decimals: 6, amount: "100" }];
+  await h.refresh();
+  const toks = (h as any).snap.tokens as any[], d = toks.find((x) => x.address === DEEP);
+  check(!!d && d.price === 0.0142 && Math.abs(d.usd - 278.52) < 0.01, "holdings: a deep-pool Solana coin DefiLlama lacks gets Jupiter's price", toks);
+  check(!toks.some((x) => x.address === THIN), "holdings: a thin-pool coin gets no Jupiter price and stays hidden", toks);
+}
 
 console.log(`\nholdings: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

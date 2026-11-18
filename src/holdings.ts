@@ -69,6 +69,9 @@ export async function erc20Info(chain: Chain, address: string, rpc = DEFAULT_RPC
   return { symbol: String(symbol), decimals: Number(decimals), name: name ? String(name) : undefined };
 }
 
+/** Jupiter prices are used only for coins with at least this much pool liquidity (USD). */
+export const JUP_PRICE_MIN_LIQ = 10_000;
+
 export class Holdings {
   private snap: { tokens: Holding[]; hidden: number; at: string | null; errors: string[] } = { tokens: [], hidden: 0, at: null, errors: [] };
   private timer: NodeJS.Timeout | null = null;
@@ -135,6 +138,7 @@ export class Holdings {
   async refresh(): Promise<void> {
     const chains = this.o.chains(), errors: string[] = [];
     const found: Omit<Holding, "coin">[] = [];
+    let solInfo = new Map<string, any>();
     const add = (rows: Omit<Holding, "coin">[]) => { for (const r of rows) if (!found.some((x) => x.chain === r.chain && x.address.toLowerCase() === r.address.toLowerCase())) found.push(r); };
     await Promise.all(chains.map(async (c) => {
       try {
@@ -143,6 +147,7 @@ export class Holdings {
           const watched = (this.list.list().solana ?? []).filter((m) => !held.some((h) => h.address === m));
           const rows = [...held, ...watched.map((m) => ({ chain: "solana" as Chain, address: m, symbol: "", decimals: 0, amount: "0", watched: true }))];
           const info = await solanaInfo(rows.map((r) => r.address), this.f).catch(() => new Map());
+          solInfo = info;
           for (const r of rows) { const t = info.get(r.address); if (t) Object.assign(r, { symbol: r.symbol || t.symbol, name: t.name, icon: t.logo, trust: t.trust, ...(r.watched ? { decimals: t.decimals } : {}) }); }
           for (const r of rows) if ((this.list.list().solana ?? []).includes(r.address)) (r as any).watched = true;
           add(rows);
@@ -168,7 +173,9 @@ export class Holdings {
     }
     const tokens: Holding[] = found.map((h) => {
       const coin = coinId(h.chain, h.address), p = prices[coin];
-      const price = p?.price && p.price > 0 ? p.price : undefined;
+      // DefiLlama is slow to pick up new Solana coins; fall back to Jupiter's price when the pool is deep enough to mean it.
+      const j = h.chain === "solana" ? solInfo.get(h.address)?.jupiter : undefined;
+      const price = p?.price && p.price > 0 ? p.price : j?.price && (j.liquidity ?? 0) >= JUP_PRICE_MIN_LIQ ? j.price : undefined;
       return { ...h, coin, symbol: h.symbol || (p?.symbol ? String(p.symbol).toUpperCase() : `${h.address.slice(0, 4)}…`), price, usd: price !== undefined ? price * Number(h.amount) : undefined, ...(typeof pct[coin] === "number" ? { change_24h: pct[coin] / 100 } : {}) };
     });
     for (const t of tokens) if (!t.trust) t.trust = findListed(t.chain, t.address) ? "listed" : "unlisted";

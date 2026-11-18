@@ -28,7 +28,7 @@ export interface ListedToken {
   /** Base/Ethereum: which list it's on. */
   source?: "superchain" | "uniswap";
   /** Solana, from Jupiter: its own signals. */
-  jupiter?: { verified: boolean; strict: boolean; organic?: number; organicLabel?: string; suspicious?: boolean; mintAuthorityDisabled?: boolean; freezeAuthorityDisabled?: boolean; topHoldersPct?: number; liquidity?: number };
+  jupiter?: { verified: boolean; strict: boolean; organic?: number; organicLabel?: string; suspicious?: boolean; mintAuthorityDisabled?: boolean; freezeAuthorityDisabled?: boolean; topHoldersPct?: number; liquidity?: number; price?: number };
 }
 
 const CHAIN_ID: Record<number, Chain> = CHAIN_BY_ID;
@@ -115,6 +115,7 @@ function fromJupiter(x: any): ListedToken | null {
       suspicious: x.audit?.isSus === true, mintAuthorityDisabled: x.audit?.mintAuthorityDisabled, freezeAuthorityDisabled: x.audit?.freezeAuthorityDisabled,
       topHoldersPct: typeof x.audit?.topHoldersPercentage === "number" ? Math.round(x.audit.topHoldersPercentage * 10) / 10 : undefined,
       liquidity: typeof x.liquidity === "number" ? Math.round(x.liquidity) : undefined,
+      price: typeof x.usdPrice === "number" && x.usdPrice > 0 ? x.usdPrice : undefined,
     },
   };
 }
