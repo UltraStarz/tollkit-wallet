@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createKeystore } from "../src/keystore.js";
 import { TollkitWallet } from "../src/wallet.js";
-import { assembleBuilt, executeSwap, feeTokenFor, getQuote, jupiterFeeInRoute, solFeeLamports, type SwapQuote } from "../src/swap.js";
+import { LOW_SOL, assembleBuilt, executeSwap, feeTokenFor, getQuote, jupiterFeeInRoute, solFeeLamports, type SwapQuote } from "../src/swap.js";
 import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { Wallet as EvmWallet } from "ethers";
 import { entries } from "../src/ledger.js";
@@ -153,6 +153,10 @@ async function wallet(o: { feeBps: number; balance: bigint; sendFails?: boolean 
     getSignatureStatuses: async () => ({ value: [{ confirmationStatus: "confirmed", err: null }] }),
     getBlockHeight: async () => 1,
   };
+  // 0.9.37: out of SOL for the coin's new account (seen live Nov 20): a plain reason, not "try again".
+  let lowMsg = "";
+  try { await assembleBuilt(built, me.publicKey, { ...conn, simulateTransaction: async () => ({ value: { err: { InstructionError: [2, { Custom: 1 }] }, logs: ["Transfer: insufficient lamports 857463, need 1513840"] } }) }); } catch (e: any) { lowMsg = e.message; }
+  check(lowMsg === LOW_SOL, "not enough SOL for network costs: says so plainly", lowMsg);
   const { tx, feeLamports } = await assembleBuilt(built, me.publicKey, conn);
   const keys = tx.message.staticAccountKeys, ins = tx.message.compiledInstructions;
   const progs = ins.map((i) => keys[i.programIdIndex]!.toBase58());

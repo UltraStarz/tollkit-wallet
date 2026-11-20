@@ -265,6 +265,7 @@ export async function verifySwapTx(q: SwapQuote, me: { evm: string; solana: Publ
   let sim: any;
   try { sim = await conn.simulateTransaction(vtx, { sigVerify: false, replaceRecentBlockhash: true, accounts: { encoding: "base64", addresses } }); } catch { throw fail(); }
   const accs = sim?.value?.accounts;
+  if (sim?.value?.err && (sim.value.logs ?? []).some((l: string) => /insufficient lamports/i.test(l))) throw new Error(LOW_SOL);
   if (sim?.value?.err || !accs?.[0]) throw fail();
   const before = await conn.getBalance(me.solana);
   if (accs[0].owner && accs[0].owner !== "11111111111111111111111111111111") throw new Error("This swap would hand your wallet account to another program. Not signing it.");
@@ -312,6 +313,8 @@ export interface ExecDeps { rpc?: Partial<Record<Chain, string>>; fetch?: Fetch;
 
 const toIx = (i: any) => new TransactionInstruction({ programId: new PublicKey(i.programId), keys: (i.accounts ?? []).map((a: any) => ({ pubkey: new PublicKey(a.pubkey), isSigner: !!a.isSigner, isWritable: !!a.isWritable })), data: Buffer.from(String(i.data ?? ""), "base64") });
 const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
+/** A Solana swap the wallet can't pay network costs for. Retrying won't help, so it isn't retried. */
+export const LOW_SOL = "Not enough SOL for this swap's network costs. Solana charges about 0.002 SOL (about $0.15) to open an account for a coin you haven't held, plus small fees. Add about $1 of SOL (or swap a little USDC to SOL first) and try again.";
 
 /**
  * Jupiter's router instructions (Swap API v2 /build) plus Tollkit's fee as a plain SOL transfer, in one v0
@@ -331,7 +334,11 @@ export async function assembleBuilt(q: SwapQuote, payer: PublicKey, conn: Pick<C
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   const compile = (units: number) => new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units }), ...price, ...body] }).compileToV0Message(luts));
   const sim = await conn.simulateTransaction(compile(1_400_000), { sigVerify: false, replaceRecentBlockhash: true });
-  if (sim.value.err) throw new Error(`This swap would fail right now (${JSON.stringify(sim.value.err)}). Try again in a moment.`);
+  if (sim.value.err) {
+    // 0.9.37: out of SOL for network costs (opening the coin's account, fees): say so instead of "try again".
+    if ((sim.value.logs ?? []).some((l: string) => /insufficient lamports/i.test(l))) throw new Error(LOW_SOL);
+    throw new Error(`This swap would fail right now (${JSON.stringify(sim.value.err)}). Try again in a moment.`);
+  }
   const units = Math.min(1_400_000, Math.ceil((sim.value.unitsConsumed ?? 1_200_000) * 1.2));
   return { tx: compile(units), lastValidBlockHeight, feeLamports, tipLamports: JITO_TIP_LAMPORTS };
 }
