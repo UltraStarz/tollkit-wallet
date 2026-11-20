@@ -111,5 +111,17 @@ async function fresh(over: any = {}) {
   await w3.swap({ chain: "solana", sell_token: SOL_USDC, buy_token: WSOL, sell_amount: "5000000", slippage_bps: 50 });
   check(k === 1, "any other failure isn't retried");
 }
+// 0.9.29: a swap whose check failed before signing (never signed or sent) gets up to two more tries with fresh quotes.
+{
+  const SIM = "This swap would fail right now ({\"InstructionError\":[4,{\"Custom\":6038}]}). Try again in a moment.";
+  let n = 0;
+  const { w } = await fresh({ retryMs: 1, execute: async () => { if (n++ < 2) throw new Error(SIM); return "SIGOK"; } });
+  const r = await w.swap({ chain: "solana", sell_token: SOL_USDC, buy_token: WSOL, sell_amount: "5000000", slippage_bps: 50 });
+  check(r.ok && r.tx === "SIGOK" && n === 3, "pre-sign check failed twice: third try goes through", { ok: r.ok, n, why: r.refused?.reason });
+  let m = 0;
+  const { w: w2 } = await fresh({ retryMs: 1, execute: async () => { m++; throw new Error("Couldn't check this swap before signing. Try again in a moment."); } });
+  const r2 = await w2.swap({ chain: "solana", sell_token: SOL_USDC, buy_token: WSOL, sell_amount: "5000000", slippage_bps: 50 });
+  check(!r2.ok && m === 3 && /Couldn't check/.test(r2.refused?.reason ?? ""), "pre-sign check fails every time: stops after three tries", { m, why: r2.refused?.reason });
+}
 console.log(`\nwallet: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

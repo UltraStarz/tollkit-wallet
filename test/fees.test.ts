@@ -135,6 +135,12 @@ async function wallet(o: { feeBps: number; balance: bigint; sendFails?: boolean 
   const noBuild = (async (u: string) => new URL(u).pathname.endsWith("/build") ? Response.json({ error: "x" }, { status: 503 }) : fq(u)) as unknown as typeof fetch;
   const q2 = await getQuote({ chain: "solana", sell_token: BONK, buy_token: JUP, sell_amount: "1000000000", slippage_bps: 50 }, me.publicKey.toBase58(), { fetch: noBuild });
   check(q2.fee_separate === true && !q2.fee_inline, "router path unavailable: falls back to the order with the fee sent after");
+  // 0.9.29: Ultra has no quote ("Failed to get quotes", seen live Nov 20 for a wallet low on SOL): the router path still quotes.
+  const noOrder = (async (u: string) => new URL(u).pathname.endsWith("/order") ? Response.json({ requestId: "x", error: "Failed to get quotes" }, { status: 400 }) : fq(u)) as unknown as typeof fetch;
+  const q3 = await getQuote({ chain: "solana", sell_token: BONK, buy_token: JUP, sell_amount: "1000000000", slippage_bps: 50 }, me.publicKey.toBase58(), { fetch: noOrder });
+  check(q3.fee_inline === true && q3.raw.build && q3.min_buy_amount === "49750000", "no Ultra quote: the router path quotes instead");
+  let m3 = ""; try { await getQuote({ chain: "solana", sell_token: BONK, buy_token: JUP, sell_amount: "1000000000", slippage_bps: 50 }, me.publicKey.toBase58(), { fetch: (async () => Response.json({ error: "Failed to get quotes" }, { status: 400 })) as unknown as typeof fetch }); } catch (e: any) { m3 = e.message; }
+  check(m3 === "Failed to get quotes", "neither route quotes: Ultra's reason is shown");
 
   const built: SwapQuote = { ...q, usd_value: 31.2, fee_usd: 0.156, raw: { ...q.raw, fee: { lamports: "1560000", to: FEE_TO } } };
   let simTx: any = null;

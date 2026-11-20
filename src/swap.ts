@@ -98,8 +98,12 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
   if (req.chain === "solana") {
     const u = new URL(`${proxy}/swap/solana/order`);
     u.search = new URLSearchParams({ inputMint: req.sell_token, outputMint: req.buy_token, amount: req.sell_amount, taker, slippageBps: String(req.slippage_bps) }).toString();
-    const j = await getJson(f, u.toString());
-    const inRoute = jupiterFeeInRoute(j);
+    // 0.9.29: when Jupiter Ultra has no quote (it can refuse a wallet low on SOL, or a coin minutes old), the router
+    // path below may still have one, so that is tried before giving up.
+    let j: any = null, orderErr: unknown = null;
+    try { j = await getJson(f, u.toString()); } catch (e) { orderErr = e; }
+    if (orderErr && opts.build === false) throw orderErr;
+    const inRoute = j ? jupiterFeeInRoute(j) : false;
     // 0.9.6: a bot trade always takes the router path, where Tollkit's fee is the wallet's own transfer and can be
     // the bot rate (Jupiter's referral fee on /order can't go below 0.5%).
     if ((!inRoute || req.bot) && opts.build !== false) {
@@ -115,11 +119,12 @@ export async function getQuote(req: SwapRequest, taker: string, opts: { fetch?: 
             chain: "solana", venue: "jupiter", sell_token: req.sell_token, buy_token: req.buy_token,
             sell_amount: String(b.inAmount ?? req.sell_amount), buy_amount: String(b.outAmount), min_buy_amount: String(b.otherAmountThreshold ?? b.outAmount),
             fee_bps: inlineFeeBps(b.tollkit_fee.bps), venue_fee_bps: 0, usd_value: null, fee_usd: null,
-            raw: { build: b, swapUsdValue: j.swapUsdValue, inUsdValue: j.inUsdValue }, fee_inline: true, route: "Metis",
+            raw: { build: b, swapUsdValue: j?.swapUsdValue, inUsdValue: j?.inUsdValue }, fee_inline: true, route: "Metis",
           });
         }
       } catch { /* the order below, with the fee sent separately */ }
     }
+    if (orderErr) throw orderErr;
     const q: SwapQuote = {
       chain: "solana", venue: "jupiter", sell_token: req.sell_token, buy_token: req.buy_token,
       sell_amount: String(j.inAmount ?? req.sell_amount), buy_amount: String(j.outAmount), min_buy_amount: String(j.otherAmountThreshold ?? j.outAmount),

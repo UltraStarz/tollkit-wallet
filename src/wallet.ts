@@ -59,6 +59,8 @@ export interface WalletOptions {
   send?: (r: SendRequest, keys: Keys) => Promise<string>;
   /** Override for tests: sign + send a vetted quote. */
   execute?: (q: SwapQuote, keys: Keys) => Promise<string>;
+  /** tests: wait between retries of a swap whose pre-sign check failed (default 1.5 s) */
+  retryMs?: number;
   /** Override for tests: the Solana connection and sender used for staking. */
   staking?: Pick<StakingOptions, "conn" | "send">;
   /** Override for tests: chain calls used when moving between networks. */
@@ -85,6 +87,8 @@ export interface SwapResult {
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 const strip = ({ raw: _raw, ...q }: SwapQuote) => q;
+/** Solana swap failures from the check before signing: nothing was signed or sent, so a fresh try is safe. */
+const UNSIGNED_FAIL = /would fail right now|Couldn't check this swap before signing/;
 
 export function loadTelegram(dir?: string): TelegramConfig | null {
   const f = files(walletHome(dir)).telegram;
@@ -358,15 +362,26 @@ export class TollkitWallet {
     catch (e) { if (e instanceof LimitError) return { ok: false, quote: strip(q), refused: { code: e.code, reason: e.message } }; throw e; }
     try {
       const run = (qq: SwapQuote) => (this.o.execute ?? ((x, k) => executeSwap(x, k, { fetch: this.f, proxy: this.o.proxy, rpc: this.o.rpc })))(qq, this.keys);
-      let tx: string;
+      let tx: string | undefined;
       try { tx = await run(q); }
       catch (e) {
         // 0.9.12: the network dropped it (its blockhash expired, nothing happened): one more try right away with a fresh
         // quote and blockhash, when the price is still within 2% and no separate SOL fee rides along.
-        if (q.chain !== "solana" || fee || q.fee_inline || !/network dropped this swap/.test((e as Error).message)) throw e;
-        const again = await this.priced(req);
-        if (!("q" in again) || again.q.usd_value! > usd * 1.02 || again.q.usd_value! > p.per_trade_usd || again.q.fee_inline || again.q.fee_separate) throw e; // Nov 10 (audit): still inside the per-trade limit
-        tx = await run(again.q);
+        // 0.9.29: a swap whose check failed before signing (the price moved, or the check timed out) was never signed or
+        // sent, so it gets up to two more tries with a fresh quote, a moment apart, on the same terms.
+        const msg = (e as Error).message, unsigned = UNSIGNED_FAIL.test(msg), dropped = /network dropped this swap/.test(msg);
+        if (q.chain !== "solana" || fee || !(unsigned || (dropped && !q.fee_inline))) throw e;
+        let last: unknown = e;
+        for (let i = 0; i < (unsigned ? 2 : 1) && tx === undefined; i++) {
+          if (unsigned) await new Promise((res) => setTimeout(res, this.o.retryMs ?? 1500));
+          const again = await this.priced(req);
+          // Nov 10 (audit): still inside the per-trade limit
+          if (!("q" in again) || again.q.usd_value! > usd * 1.02 || again.q.usd_value! > p.per_trade_usd || again.q.fee_separate || !!again.q.fee_inline !== !!q.fee_inline) throw last;
+          if (again.q.fee_inline && again.q.fee_bps > 0) { const f2 = await this.separateFee(again.q); again.q.raw.fee = { lamports: f2.lamports.toString(), to: f2.to }; }
+          try { tx = await run(again.q); }
+          catch (e2) { last = e2; if (!UNSIGNED_FAIL.test((e2 as Error).message)) throw e2; }
+        }
+        if (tx === undefined) throw last;
       }
       let feeNote: { fee_tx?: string; reason?: string } = {};
       if (fee) {
