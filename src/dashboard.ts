@@ -765,7 +765,7 @@ export async function startDashboard(w: TollkitWallet, password: string, o: { po
         if (!CHAINS.includes(chain)) return send(res, 400, { error: "Pick a network." });
         if (chain === "solana" ? !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr) : !/^0x[0-9a-fA-F]{40}$/.test(addr)) return send(res, 400, { error: chain === "solana" ? "Paste the token's mint address." : "Paste the token's contract address (0x…)." });
         if (!holdings) return send(res, 400, { error: "Token list is off here." });
-        if (p === "/api/tokens/hide") { holdings.list.remove(chain, addr); void holdings.refresh(); return send(res, 200, { ok: true }); }
+        if (p === "/api/tokens/hide") { holdings.list.hide(chain, addr); void holdings.refresh(); return send(res, 200, { ok: true }); }
         let check;
         try { check = await checkToken(chain, addr, { fetch: (w as any).f ?? fetch, proxy: (w as any).o?.proxy }); }
         catch (e) { return send(res, 400, { error: (e as Error).message }); }

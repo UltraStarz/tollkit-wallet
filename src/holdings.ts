@@ -52,6 +52,7 @@ export class TokenList {
   add(chain: Chain, address: string) {
     if (isCore(chain, address)) return; // core tokens are always shown
     const l = this.list(), a = chain === "solana" ? address : getAddress(address);
+    this.unhide(chain, a); // adding it again brings it back
     if ((l[chain] ?? []).some((x) => x.toLowerCase() === a.toLowerCase())) return;
     l[chain] = [...(l[chain] ?? []), a];
     const t = `${this.file}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify(l, null, 2)); renameSync(t, this.file);
@@ -59,6 +60,20 @@ export class TokenList {
   remove(chain: Chain, address: string) {
     const l = this.list(); l[chain] = (l[chain] ?? []).filter((x) => x.toLowerCase() !== address.toLowerCase());
     const t = `${this.file}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify(l, null, 2)); renameSync(t, this.file);
+  }
+  /** 0.9.36: coins the owner removed from Home. Kept apart from tokens.json, so the list's shape doesn't change. */
+  private get hiddenFile() { return this.file.replace(/tokens\.json$/, "hidden-tokens.json"); }
+  hidden(): Set<string> { try { return new Set(existsSync(this.hiddenFile) ? (JSON.parse(readFileSync(this.hiddenFile, "utf8")) as string[]) : []); } catch { return new Set(); } }
+  isHidden(chain: Chain, address: string) { return this.hidden().has(`${chain}:${address.toLowerCase()}`); }
+  private saveHidden(h: Set<string>) { const t = `${this.hiddenFile}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify([...h], null, 2)); renameSync(t, this.hiddenFile); }
+  /** Off the list and off Home, even while the wallet still holds some (display only; nothing is sold). */
+  hide(chain: Chain, address: string) {
+    if (isCore(chain, address)) return;
+    this.remove(chain, address);
+    const h = this.hidden(); h.add(`${chain}:${address.toLowerCase()}`); this.saveHidden(h);
+  }
+  unhide(chain: Chain, address: string) {
+    const h = this.hidden(); if (h.delete(`${chain}:${address.toLowerCase()}`)) this.saveHidden(h);
   }
 }
 
@@ -181,7 +196,8 @@ export class Holdings {
     for (const t of tokens) if (!t.trust) t.trust = findListed(t.chain, t.address) ? "listed" : "unlisted";
     for (const t of tokens) if (!t.icon) t.icon = findListed(t.chain, t.address)?.logo;
     // Shown: anything with a price, and tokens the owner added. Unpriced tokens nobody added (often airdropped spam) stay hidden.
-    const shown = tokens.filter((t) => t.price !== undefined || t.watched).sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
+    const off = this.list.hidden();
+    const shown = tokens.filter((t) => !off.has(`${t.chain}:${String(t.address).toLowerCase()}`) && (t.price !== undefined || t.watched)).sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
     this.snap = { tokens: shown, hidden: tokens.length - shown.length, at: new Date().toISOString(), errors };
   }
 

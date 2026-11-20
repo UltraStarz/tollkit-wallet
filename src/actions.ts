@@ -291,8 +291,8 @@ export const ACTIONS = [
       } catch (e) { return bad(e); }
     } }),
   def({ name: "token_hide", spends: false, sets: true, schema: TokenArgs,
-    description: "Take a token off the owner's wallet list (display only; nothing is sold).",
-    run: async (w, a) => { new TokenList(w.dir).remove(a.chain, a.address); return { ok: true }; } }),
+    description: "Take a token off the owner's wallet list and off Home, even if some is still held (display only; nothing is sold). Adding it again brings it back.",
+    run: async (w, a) => { new TokenList(w.dir).hide(a.chain, a.address); return { ok: true }; } }),
   def({ name: "always_on", spends: false, sets: true, schema: z.object({
       action: z.enum(["status", "on", "off", "off_all"]).describe("status: what runs on Tollkit's server; on/off: one rule; off_all: retire every permission"),
       rule: z.string().min(4).max(40).optional().describe("Rule id (autopilot_rules or bots_status), for on/off"),

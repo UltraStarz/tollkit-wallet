@@ -59,5 +59,17 @@ check(/Unknown coin/.test(e), "chart: refuses anything that isn't a coin id (no 
   check(!toks.some((x) => x.address === THIN), "holdings: a thin-pool coin gets no Jupiter price and stays hidden", toks);
 }
 
+// 0.9.36: Remove from Home hides a coin even while some is held; adding it again brings it back.
+{
+  const d2 = mkdtempSync(path.join(os.tmpdir(), "tw-hide-")), l2 = new TokenList(d2), M = "9hjBLBrc7WZW2H8UQvBAvG5WiTZotXUv2Bdcn4f4pump";
+  l2.add("solana", M);
+  l2.hide("solana", M);
+  check(!(l2.list().solana ?? []).includes(M) && l2.isHidden("solana", M), "hide: off the list and marked hidden");
+  l2.hide("solana", WSOL);
+  check(!l2.isHidden("solana", WSOL), "hide: a core coin can't be hidden");
+  l2.add("solana", M);
+  check((l2.list().solana ?? []).includes(M) && !l2.isHidden("solana", M), "add again: back on the list, no longer hidden");
+}
+
 console.log(`\nholdings: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
