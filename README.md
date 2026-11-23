@@ -1,6 +1,8 @@
-# Tollkit Wallet
+# TOLLkit Wallet
 
-A wallet for AI trading agents. It holds its keys on your computer, encrypted with your password, and lets an agent:
+A self-custody wallet where Autopilot, bots or your AI do the trading, inside a budget, a cap per trade and a loss stop that only you can change. Get it for [Chrome](https://chromewebstore.google.com/detail/tollkit-wallet/benfiblmdipfooognnelmflpoleaanpb) or [Android](https://play.google.com/store/apps/details?id=dev.tollkit.wallet); iPhone is coming soon.
+
+This package is the command-line version. It holds its keys on your computer, encrypted with your password, and lets an agent:
 
 - swap tokens on Base, Ethereum, Arbitrum and Polygon (via 0x) and Solana (via Jupiter)
 - pay for APIs that charge per call (x402 and MPP, in USDC or USDT)
@@ -12,13 +14,13 @@ All of it happens inside limits that you set and the agent can't change.
 - **Limits:** per trade, per day, per payment, and per seller per day. These are counted under a lock, so parallel calls can't overspend.
 - **Approval:** anything over your threshold waits for you to tap Approve in Telegram. No answer means no.
 - **Sanctions:** every payment recipient is screened against the OFAC list.
-- **Seller check:** the seller's price and pay-to address are compared with its public listing (Tollkit Weigh Station).
+- **Seller check:** the seller's price and pay-to address are compared with its public listing (TOLLkit Weigh Station).
 - **Swap safety:** the fee must be no more than 0.5%, the only contract ever approved is 0x AllowanceHolder (for exact amounts), and a minimum output is always set.
 - **Receipts:** every trade and payment is logged, and you can export them as CSV.
 
 ## Fees
 
-Swaps cost a flat 0.5%, shown before every trade. On some Base and Ethereum pairs, 0x charges its own 0.15% on top, and this is shown separately. Payments for APIs carry no Tollkit fee.
+Swaps cost a flat 0.5%, shown before every trade. On some Base and Ethereum pairs, 0x charges its own 0.15% on top, and this is shown separately. Payments for APIs carry no TOLLkit fee.
 
 ## Setup
 
@@ -70,14 +72,14 @@ The app needs to unlock the wallet on its own, so adding an app saves your passw
 
 ```ts
 import { AgentKit } from "@coinbase/agentkit";
-import { TollkitWallet } from "tollkit-wallet";
+import { TOLLkitWallet } from "tollkit-wallet";
 import { tollkitWalletActionProvider } from "tollkit-wallet/agentkit";
 
-const wallet = await TollkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
+const wallet = await TOLLkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
 const agentkit = await AgentKit.from({ walletProvider, actionProviders: [tollkitWalletActionProvider(wallet)] });
 ```
 
-This adds the same 14 tools as the MCP server, with a `tollkit_` prefix (`tollkit_swap`, `tollkit_pay_fetch`, `tollkit_autopilot_propose`, …). They use the Tollkit wallet's own keys and limits, whatever AgentKit wallet provider you use.
+This adds the same 14 tools as the MCP server, with a `tollkit_` prefix (`tollkit_swap`, `tollkit_pay_fetch`, `tollkit_autopilot_propose`, …). They use the TOLLkit wallet's own keys and limits, whatever AgentKit wallet provider you use.
 
 ## Use with ElizaOS
 
@@ -90,17 +92,17 @@ Set `TOLLKIT_WALLET_PASSWORD` (or `TOLLKIT_WALLET_PASSWORD_FILE`) in the agent's
 
 ## Use with websites (browser extension)
 
-The Tollkit extension for Chrome, Brave and Edge lets websites connect to this wallet the way they connect to MetaMask or Phantom: Base, Ethereum, Arbitrum and Polygon apps through the standard Ethereum provider (EIP-1193/EIP-6963), Solana apps through the Wallet Standard.
+The TOLLkit extension for Chrome, Brave and Edge lets websites connect to this wallet the way they connect to MetaMask or Phantom: Base, Ethereum, Arbitrum and Polygon apps through the standard Ethereum provider (EIP-1193/EIP-6963), Solana apps through the Wallet Standard.
 
-Keys stay in Tollkit. When a site asks to connect, sign or send, the request shows up in the dashboard's Approvals tab with the site's name and the details. Transactions are checked against the network first. Nothing happens until you approve. Read-only calls go straight through.
+Keys stay in TOLLkit. When a site asks to connect, sign or send, the request shows up in the dashboard's Approvals tab with the site's name and the details. Transactions are checked against the network first. Nothing happens until you approve. Read-only calls go straight through.
 
 To add it: run `tollkit-wallet extension` for the folder and steps (Developer mode, then Load unpacked), then pair it from **Settings → Pair a browser**. Connected sites are listed in Settings, where you can disconnect them. The dashboard has to be open for sites to use the wallet.
 
 ## Use from code
 
 ```ts
-import { TollkitWallet } from "tollkit-wallet";
-const w = await TollkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
+import { TOLLkitWallet } from "tollkit-wallet";
+const w = await TOLLkitWallet.open(process.env.TOLLKIT_WALLET_PASSWORD!);
 const r = await w.pay("https://api.example.com/paid-endpoint");
 ```
 
@@ -125,11 +127,11 @@ Tokens with no price (most airdropped spam) are hidden and counted below the lis
 
 ## Buy crypto with a card
 
-**Buy** on the Home tab opens Coinbase's checkout to buy USDC or ETH on Base or Ethereum, or USDC or SOL on Solana, sent straight to this wallet's address. The wallet asks Tollkit's server for a single-use Coinbase Onramp link; only your public address, the network, the coin and the amount are sent. Coinbase handles the payment and any ID checks, and its own fees and limits apply.
+**Buy** on the Home tab opens Coinbase's checkout to buy USDC or ETH on Base or Ethereum, or USDC or SOL on Solana, sent straight to this wallet's address. The wallet asks TOLLkit's server for a single-use Coinbase Onramp link; only your public address, the network, the coin and the amount are sent. Coinbase handles the payment and any ID checks, and its own fees and limits apply.
 
 ## Cash out to your bank
 
-**Sell** on the Home tab sells USDC, ETH or SOL through Coinbase to your bank or PayPal. You need a Coinbase account. The wallet opens Coinbase's sell page; you choose where the money goes and click **Cash out now**. Coinbase then gives an address to send the crypto to, and the dashboard shows it with the amount, Coinbase's fee and what you'll receive. Nothing is sent until you confirm with your password. Coinbase allows 30 minutes for the send. Only your public address, the network, the coin and the amount go to Tollkit's server.
+**Sell** on the Home tab sells USDC, ETH or SOL through Coinbase to your bank or PayPal. You need a Coinbase account. The wallet opens Coinbase's sell page; you choose where the money goes and click **Cash out now**. Coinbase then gives an address to send the crypto to, and the dashboard shows it with the amount, Coinbase's fee and what you'll receive. Nothing is sent until you confirm with your password. Coinbase allows 30 minutes for the send. Only your public address, the network, the coin and the amount go to TOLLkit's server.
 
 ## Move between networks
 
@@ -137,7 +139,7 @@ Tokens with no price (most airdropped spam) are hidden and counted below the lis
 
 - USDC uses Circle's own transfer (CCTP): it's burned on one network and minted on the other by Circle, usually in 8 to 20 seconds. Circle's forwarding service pays the network fee on arrival, so you don't need gas there.
 - ETH goes through Across, usually in under a minute.
-- Tollkit's fee is 0.25%. Circle's or Across's fee, and the amount you'll receive at least, are shown before you confirm. Moves need your password and don't count against your spending limits.
+- TOLLkit's fee is 0.25%. Circle's or Across's fee, and the amount you'll receive at least, are shown before you confirm. Moves need your password and don't count against your spending limits.
 
 ## Stake SOL
 
